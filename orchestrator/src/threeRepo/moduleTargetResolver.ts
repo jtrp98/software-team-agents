@@ -30,6 +30,8 @@ export interface ModuleTargetResolution {
 export interface ResolveModuleTargetsOptions {
   /** Framework root used by the canonical local-mapping loader's overlap checks. */
   frameworkRoot?: string;
+  /** Pre-plan intake/dispatch only: the frozen requirement bounds Targets until SA supplies design. */
+  preparation?: boolean;
 }
 
 /**
@@ -43,7 +45,9 @@ export function resolveModuleTargets(
   docsRoot: string,
   options: ResolveModuleTargetsOptions = {},
 ): ModuleTargetResolution {
-  const designPath = path.join(docsRoot, "_docs", "module", moduleName, "design.md");
+  const design = readModuleDoc(docsRoot, moduleName, "design.md");
+  const documentName = options.preparation && design === null ? "requirement.md" : "design.md";
+  const designPath = path.join(docsRoot, "_docs", "module", moduleName, documentName);
   const result: ModuleTargetResolution = {
     module: moduleName,
     designPath,
@@ -61,16 +65,16 @@ export function resolveModuleTargets(
     return result;
   }
 
-  const design = readModuleDoc(docsRoot, moduleName, "design.md");
-  if (design === null) {
+  const declarationSource = documentName === "design.md" ? design : readModuleDoc(docsRoot, moduleName, "requirement.md");
+  if (declarationSource === null) {
     result.problems.push({
       severity: "note",
-      message: `module "${moduleName}" has no design.md at ${designPath}; it has no declared Targets to resolve`,
+      message: `module "${moduleName}" has no ${documentName} at ${designPath}; it has no declared Targets to resolve`,
     });
     return result;
   }
 
-  const declaration = parseModuleTargets(design);
+  const declaration = parseModuleTargets(declarationSource);
   result.declaredTargetIds = declaration.ids;
   for (const grammarProblem of declaration.problems) {
     result.problems.push({ severity: "error", message: `${designPath}: ${grammarProblem}` });

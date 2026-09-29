@@ -51,6 +51,7 @@ function verification(status: DeterministicVerification["status"] = "passed"): D
     failures: ran.filter((item) => item.status === "FAIL"),
     skipped: status === "skipped" ? ids : [],
     missingRequired: status === "skipped" ? ids : [],
+    runnerless: [],
     status,
     enforcement: "enforce",
     passed: status === "passed",

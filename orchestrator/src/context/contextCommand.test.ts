@@ -93,7 +93,8 @@ describe("sta context command (T-V3TOK-040/041/043)", () => {
     }
     expect(rendered).toContain(path.join(root, "_docs", "module", "sales", "plan.md"));
     expect(rendered).toContain("slicing_saved=");
-    expect(result.composition.direct_file_reads).toBe(5);
+    // plan, design, requirement, test-plan, review (V13 TASK-006) and qa are each looked up once.
+    expect(result.composition.direct_file_reads).toBe(6);
     expect(contextCommandJson(result)).toMatchObject({ composition: { doc_chars_before: expect.any(Number), saved_pct: expect.any(Number) } });
   });
 

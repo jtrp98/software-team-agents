@@ -3,9 +3,10 @@ import { sectionMap } from "../context/sections.js";
 import { parseSecurityReport } from "../agents/moduleDocs.js";
 import { routeByCategory, type FailureCategory } from "../routing/failureRouting.js";
 import type { StructuredFailure } from "./failure.js";
+import type { ReviewReportArtifact } from "../artifacts/schemas.js";
 
 /**
- * Turns a real `review.md` / `security.md` into the structured failure
+ * Turns a real `qa.md` / `security.md` into the structured failure
  * `failure.ts` routes on.
  *
  * Without this, a schema gap owned by `system-analyst` and a genuine backend
@@ -139,8 +140,8 @@ function isBlocking(line: string): boolean {
  * — a header or separator does neither. The category-only case carries a real
  * routing answer, just not one phrased as a role.
  */
-export function parseOpenIssues(reviewMd: string): OpenIssueRow[] {
-  const section = sectionText(reviewMd, OPEN_ISSUES);
+export function parseOpenIssues(qaMd: string): OpenIssueRow[] {
+  const section = sectionText(qaMd, OPEN_ISSUES);
   if (section === null) return [];
 
   const rows: OpenIssueRow[] = [];
@@ -195,17 +196,17 @@ export interface QaClassificationOptions {
  * issues is not a failure this can describe, and inventing one would send a task
  * backwards for no reason.
  */
-export function classifyQaFailure(reviewMd: string, opts: QaClassificationOptions = {}): StructuredFailure | null {
+export function classifyQaFailure(qaMd: string, opts: QaClassificationOptions = {}): StructuredFailure | null {
   const ceiling = opts.ceiling ?? REROUTE_CEILING;
-  const rows = parseOpenIssues(reviewMd);
+  const rows = parseOpenIssues(qaMd);
 
   if (rows.length === 0) {
     // The doc failed, but nothing in it says who owns what. That is exactly the
     // case where guessing is most tempting and most expensive.
-    const hasFailureMarker = /❌|⚠️/.test(reviewMd);
+    const hasFailureMarker = /❌|⚠️/.test(qaMd);
     if (!hasFailureMarker) return null;
     return unknownFailure(
-      "review.md reports a failed round but `## Open Issues — all phases` names no agent to route it to — " +
+      "qa.md reports a failed round but `## Open Issues — all phases` names no agent to route it to — " +
         "the owner is a human decision, not something to infer from the prose",
     );
   }
@@ -310,6 +311,51 @@ function finishClassification(params: {
     // escalates when there is none, rather than this pre-empting the question.
     retryable: true,
     reason,
+    affected,
+    requiresHuman: false,
+  };
+}
+
+/**
+ * Classifies a failed review round (V13 TASK-006) from the reviewer's parsed
+ * `review.md` — the owner is the one the reviewer named on each open blocking
+ * finding, never inferred.
+ *
+ * The same asymmetry as `classifyQaFailure`: blocking findings owned by more
+ * than one role, or by no role this pipeline can route to, stop for a person
+ * rather than guessing which to send back first.
+ */
+export function classifyReviewFailure(report: ReviewReportArtifact): StructuredFailure {
+  const blocking = report.findings.filter((f) => f.status === "OPEN" && f.severity === "BLOCKING");
+  const affected = blocking.map((f) => f.id);
+  if (blocking.length === 0) {
+    return unknownFailure(
+      "review.md reports a failed round with no open blocking finding — there is nothing for any owner to fix, so a person decides",
+    );
+  }
+  const owners = [...new Set(blocking.map((f) => f.owner))];
+  if (owners.length > 1) {
+    return unknownFailure(
+      `open blocking review findings route to more than one owner (${owners.join(", ")}) — the orchestrator drives one stage at a time, ` +
+        "so which to send back first is a human decision",
+      affected,
+    );
+  }
+  const owner = owners[0];
+  const category = CATEGORY_BY_OWNER[owner];
+  if (owner === AgentStage.HUMAN || owner === AgentStage.REVIEWER || !category) {
+    return unknownFailure(
+      `open blocking review findings name ${owner} as owner, which no automatic round can send work back to — a person decides`,
+      affected,
+    );
+  }
+  const first = blocking[0];
+  return {
+    category,
+    owner,
+    severity: "high",
+    retryable: true,
+    reason: `${first.id} at ${first.location}: ${first.description}`.replace(/\s+/g, " ").slice(0, 300),
     affected,
     requiresHuman: false,
   };

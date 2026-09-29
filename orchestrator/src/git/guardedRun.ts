@@ -47,7 +47,24 @@ function canonical(value: string): string {
   return path.resolve(value).toLocaleLowerCase("en-US");
 }
 
-function assertTargetAttempt(run: LedgerRun, attempt: LedgerAttempt): void {
+/**
+ * The attempts of this run that hold the one-writer slot: RUNNING in the
+ * ledger. Crash reconciliation keys on this (V13 TASK-007) - an attempt, not a
+ * task status, is what a Target mutation belongs to.
+ */
+export function runningAttempts(ledger: RunLedger, runId: string): LedgerAttempt[] {
+  return ledger.readTasks(runId).flatMap((task) =>
+    ledger.attemptsForTask(runId, task.task_id).filter((attempt) => attempt.status === "RUNNING"),
+  );
+}
+
+/** Whether this run ever opened its Target mutation boundary (its run branch is the run's own). */
+function hasBeenIsolated(ledger: RunLedger, run: LedgerRun): boolean {
+  return run.status === "RUNNING" ||
+    ledger.eventsForRun(run.run_id).some((event) => event.kind === "RUN_STATUS" && event.to === "RUNNING");
+}
+
+function assertTargetAttempt(run: LedgerRun, attempt: LedgerAttempt, ledger: RunLedger): void {
   const failures: string[] = [];
   if (attempt.run_id !== run.run_id) failures.push(`attempt belongs to run ${attempt.run_id}`);
   if (!TARGET_WRITERS.has(attempt.stage)) failures.push(`stage ${attempt.stage} is analysis/proposal-only and may not open a Git mutation boundary`);
@@ -58,7 +75,10 @@ function assertTargetAttempt(run: LedgerRun, attempt: LedgerAttempt): void {
     failures.push(`attempt writable root does not equal frozen Target root ${run.target_root}`);
   }
   if (attempt.plan_hash !== run.plan_hash) failures.push("attempt plan hash differs from the frozen run");
-  if (attempt.base_revision !== run.base_sha) failures.push("attempt base revision differs from the frozen run");
+  // An attempt starts from the run branch as the ledger knows it: the frozen
+  // base, or a checkpoint this run recorded on top of it.
+  const known = new Set([run.base_sha, ...ledger.checkpointsForRun(run.run_id).map((item) => item.sha)]);
+  if (!known.has(attempt.base_revision)) failures.push("attempt base revision is neither the frozen run base nor a checkpoint this run recorded");
   if (failures.length > 0) throw new GuardedRunError("UNGUARDED_ATTEMPT", `Target mutation refused:\n- ${failures.join("\n- ")}`);
 }
 
@@ -74,14 +94,11 @@ async function assertCleanExactBranch(git: GitCommandLayer, run: LedgerRun, ledg
   }
   const known = new Set([run.base_sha, ...ledger.checkpointsForRun(run.run_id).map((item) => item.sha)]);
   if (known.has(sha)) return null;
-  const verifying = ledger.readTasks(run.run_id).filter((task) => task.status === "VERIFYING");
-  const candidates = verifying.flatMap((task) =>
-    ledger.attemptsForTask(run.run_id, task.task_id).filter((attempt) => attempt.status === "RUNNING"),
-  );
+  const candidates = runningAttempts(ledger, run.run_id);
   if (candidates.length === 1) return candidates[0]!.attempt_id;
   throw new GuardedRunError(
     "RESUME_MISMATCH",
-    `clean run-branch HEAD ${sha} is neither the frozen base nor a recorded checkpoint, and no single interrupted VERIFYING attempt can own it`,
+    `clean run-branch HEAD ${sha} is neither the frozen base nor a recorded checkpoint, and no single interrupted RUNNING attempt can own it`,
   );
 }
 
@@ -95,8 +112,14 @@ function activeRunConflicts(ledger: RunLedger, run: LedgerRun): LedgerRun[] {
 
 /**
  * The only V8 Target mutation session. It holds one workspace lock from branch
- * isolation through the selected boundary and writes every task/checkpoint
+ * isolation through the selected boundary and writes every attempt/checkpoint
  * transition through the same RunLedger.
+ *
+ * V13 TASK-007: it records attempts, checkpoints and the run's isolation -
+ * never a ledger *task* status (a projection of the engine's persisted state,
+ * `ledger/adapters.ts`) and never a halt (a stop is the engine's decision,
+ * which the bounded run projects). The one-writer invariant is kept on
+ * attempts: at most one RUNNING attempt per run.
  */
 export class GuardedRunSession {
   private activeAttemptId: string | null = null;
@@ -115,7 +138,7 @@ export class GuardedRunSession {
   static async open(input: OpenGuardedRunInput): Promise<GuardedRunSession> {
     const run = input.ledger.readRun(input.runId);
     if (!run) throw new GuardedRunError("RUN_NOT_FOUND", `run ${input.runId} does not exist`);
-    assertTargetAttempt(run, input.firstAttempt);
+    assertTargetAttempt(run, input.firstAttempt, input.ledger);
     const persistedAttempt = input.ledger.readAttempt(input.firstAttempt.attempt_id);
     if (!persistedAttempt || JSON.stringify(persistedAttempt) !== JSON.stringify(input.firstAttempt)) {
       throw new GuardedRunError(
@@ -133,7 +156,7 @@ export class GuardedRunSession {
         `Target ${run.target_root} already has unfinished run(s) ${conflicts.map((item) => item.run_id).join(", ")}; reconcile them before any branch mutation.`,
       );
     }
-    if (TERMINAL_RUN_STATUSES.has(run.status) || !["REGISTERED", "RUNNING", "HALTED"].includes(run.status)) {
+    if (TERMINAL_RUN_STATUSES.has(run.status) || !["REGISTERED", "RUNNING", "HALTED", "AWAITING_HUMAN"].includes(run.status)) {
       throw new GuardedRunError("RUN_STATE", `run ${run.run_id} in state ${run.status} cannot open a Target mutation boundary`);
     }
 
@@ -147,11 +170,12 @@ export class GuardedRunSession {
       const currentBranch = await git.symbolicRefHead().then((result) => result.stdout.trim()).catch(() => "");
       const currentSha = await git.revParseHead().then((result) => result.stdout.trim()).catch(() => "");
       let pendingReconciliationAttemptId: string | null = null;
-      if (run.status === "REGISTERED" && currentBranch === run.run_branch && currentSha === run.base_sha) {
+      const isolated = hasBeenIsolated(input.ledger, run);
+      if (!isolated && currentBranch === run.run_branch && currentSha === run.base_sha) {
         // Crash after `switch -c` but before the ledger status write. Exact run
         // identity makes this safe to adopt; no new branch command is issued.
         if ((await git.statusPorcelainNull()).stdout) throw new GuardedRunError("RESUME_MISMATCH", "new run branch is dirty after interrupted isolation");
-      } else if (run.status === "REGISTERED") {
+      } else if (!isolated) {
         const preflight = await inspectRepositoryPreflight(git, run.module, run.run_id);
         const mismatch = [
           preflight.baseBranch === run.base_branch ? null : `base branch ${preflight.baseBranch} != ${run.base_branch}`,
@@ -186,21 +210,20 @@ export class GuardedRunSession {
         `interrupted attempt ${this.pendingReconciliationAttemptId} must be reconciled before another task can start`,
       );
     }
-    assertTargetAttempt(this.run, attempt);
+    assertTargetAttempt(this.run, attempt, this.ledger);
     if (attempt.status !== "FROZEN") throw new GuardedRunError("ATTEMPT_STATE", `attempt ${attempt.attempt_id} is ${attempt.status}, expected FROZEN`);
     const task = this.ledger.readTask(this.run.run_id, attempt.task_id);
     if (!task) throw new GuardedRunError("TASK_NOT_FOUND", `task ${attempt.task_id} is not registered in run ${this.run.run_id}`);
     if (task.owner !== attempt.stage) throw new GuardedRunError("OWNER_MISMATCH", `task owner ${task.owner} differs from frozen attempt stage ${attempt.stage}`);
-    if (task.status !== "READY") throw new GuardedRunError("TASK_STATE", `task ${task.task_id} is ${task.status}, expected READY`);
-    const inFlight = this.ledger.readTasks(this.run.run_id).filter((item) => ["RUNNING", "VERIFYING"].includes(item.status));
+    const inFlight = runningAttempts(this.ledger, this.run.run_id);
     if (inFlight.length > 0 || this.activeAttemptId !== null) {
-      throw new GuardedRunError("MULTIPLE_WRITERS", `one-writer invariant: in-flight task(s) ${inFlight.map((item) => item.task_id).join(", ") || "none"}`);
+      throw new GuardedRunError(
+        "MULTIPLE_WRITERS",
+        `one-writer invariant: in-flight attempt(s) ${inFlight.map((item) => item.attempt_id).join(", ") || this.activeAttemptId || "none"}`,
+      );
     }
     refreshWorkspaceRunLock(this.runtimeStateRoot, this.run.target_root, this.run.run_id);
-    this.ledger.transaction(() => {
-      this.ledger.setTaskStatus(this.run.run_id, task.task_id, "RUNNING", { reason: `attempt ${attempt.attempt_id} started` });
-      this.ledger.updateAttempt(attempt.attempt_id, { status: "RUNNING" });
-    });
+    this.ledger.updateAttempt(attempt.attempt_id, { status: "RUNNING" });
     this.activeAttemptId = attempt.attempt_id;
   }
 
@@ -211,7 +234,6 @@ export class GuardedRunSession {
     }
     const current = this.ledger.readAttempt(input.attempt.attempt_id);
     if (!current || current.status !== "RUNNING") throw new GuardedRunError("ATTEMPT_STATE", `attempt ${input.attempt.attempt_id} is not RUNNING`);
-    this.ledger.setTaskStatus(this.run.run_id, input.attempt.task_id, "VERIFYING", { reason: "runtime returned; deterministic and checkpoint guards running" });
     let result: CheckpointResult;
     try {
       result = await checkpointTask({
@@ -231,14 +253,8 @@ export class GuardedRunSession {
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      this.ledger.transaction(() => {
-        const attempt = this.ledger.readAttempt(current.attempt_id);
-        if (attempt?.status === "RUNNING") this.ledger.updateAttempt(current.attempt_id, { status: "FAILED", ended_at: this.now(), outcome_reason: reason });
-        const task = this.ledger.readTask(this.run.run_id, current.task_id);
-        if (task && ["RUNNING", "VERIFYING"].includes(task.status)) this.ledger.setTaskStatus(this.run.run_id, current.task_id, "FAILED", { reason });
-        const run = this.ledger.readRun(this.run.run_id);
-        if (run?.status === "RUNNING") this.ledger.setRunStatus(this.run.run_id, "HALTED", { reason });
-      });
+      const attempt = this.ledger.readAttempt(current.attempt_id);
+      if (attempt?.status === "RUNNING") this.ledger.updateAttempt(current.attempt_id, { status: "FAILED", ended_at: this.now(), outcome_reason: reason });
       this.activeAttemptId = null;
       throw error;
     }
@@ -259,7 +275,6 @@ export class GuardedRunSession {
           outcome_reason: "runtime and deterministic verification passed; exact local checkpoint created",
           usage: input.usage,
         });
-        this.ledger.setTaskStatus(this.run.run_id, current.task_id, "CHECKPOINTED", { reason: `checkpoint ${result.sha}` });
       });
       this.activeAttemptId = null;
       return result;
@@ -277,24 +292,70 @@ export class GuardedRunSession {
     if (this.activeAttemptId !== attempt.attempt_id) {
       throw new GuardedRunError("ATTEMPT_STATE", `attempt ${attempt.attempt_id} does not own the one-writer slot`);
     }
-    this.ledger.transaction(() => {
-      const current = this.ledger.readAttempt(attempt.attempt_id);
-      if (current?.status === "RUNNING") this.ledger.updateAttempt(attempt.attempt_id, { status, ended_at: this.now(), outcome_reason: reason });
-      const task = this.ledger.readTask(this.run.run_id, attempt.task_id);
-      if (task && ["RUNNING", "VERIFYING"].includes(task.status)) this.ledger.setTaskStatus(this.run.run_id, task.task_id, "FAILED", { reason });
-      const run = this.ledger.readRun(this.run.run_id);
-      if (run?.status === "RUNNING") this.ledger.setRunStatus(this.run.run_id, "HALTED", { reason });
+    const current = this.ledger.readAttempt(attempt.attempt_id);
+    if (current?.status === "RUNNING") this.ledger.updateAttempt(attempt.attempt_id, { status, ended_at: this.now(), outcome_reason: reason });
+    this.activeAttemptId = null;
+  }
+
+  /** The interrupted RUNNING attempt whose unrecorded HEAD commit must be re-attributed before any new attempt, if any. */
+  get pendingReconciliation(): string | null {
+    return this.pendingReconciliationAttemptId;
+  }
+
+  /**
+   * Succeeds the active attempt without a second commit: its rerun changed
+   * nothing, and the run branch's HEAD is already a checkpoint this run
+   * recorded for the same task (the work an interrupted attempt committed and
+   * resume re-attributed). Anything else - a dirty tree, another HEAD, a
+   * checkpoint of another task - refuses.
+   */
+  async completeWithoutChange(attempt: LedgerAttempt, checkpointSha: string, usage?: LedgerAttempt["usage"]): Promise<void> {
+    this.assertOpen();
+    if (this.activeAttemptId !== attempt.attempt_id) {
+      throw new GuardedRunError("ATTEMPT_STATE", `attempt ${attempt.attempt_id} does not own the one-writer slot`);
+    }
+    const recorded = this.ledger.checkpointsForRun(this.run.run_id).find((item) => item.sha === checkpointSha);
+    if (!recorded || recorded.task_id !== attempt.task_id) {
+      throw new GuardedRunError("CHECKPOINT_STATE", `${checkpointSha} is not a checkpoint this run recorded for task ${attempt.task_id}`);
+    }
+    const sha = (await this.git.revParseHead()).stdout.trim();
+    const status = (await this.git.statusPorcelainNull()).stdout;
+    if (sha !== checkpointSha || status) {
+      throw new GuardedRunError("CHECKPOINT_STATE", `run branch moved or is dirty (HEAD ${sha}, dirty=${status ? "yes" : "no"}); a no-change attempt must leave checkpoint ${checkpointSha} exactly as recorded`);
+    }
+    this.ledger.updateAttempt(attempt.attempt_id, {
+      status: "SUCCEEDED",
+      ended_at: this.now(),
+      outcome_reason: `rerun changed nothing; checkpoint ${checkpointSha} already carries this task's work (no second commit)`,
+      usage,
     });
     this.activeAttemptId = null;
+  }
+
+  /**
+   * Closes an attempt a crash left RUNNING whose Target shows nothing to
+   * re-attribute: the run branch is clean and HEAD is the frozen base or a
+   * recorded checkpoint, so the attempt never committed and left no partial
+   * work. A dirty branch never reaches here - `open` already refused it.
+   */
+  async abandonInterruptedAttempt(attempt: LedgerAttempt, reason: string): Promise<void> {
+    this.assertOpen();
+    const current = this.ledger.readAttempt(attempt.attempt_id);
+    if (!current || current.status !== "RUNNING") {
+      throw new GuardedRunError("RECONCILE_STATE", "only a RUNNING attempt may be abandoned after an interruption");
+    }
+    if ((await assertCleanExactBranch(this.git, this.run, this.ledger)) !== null) {
+      throw new GuardedRunError("RECONCILE_STATE", `attempt ${attempt.attempt_id} owns an unrecorded HEAD commit; re-attribute it instead`);
+    }
+    this.ledger.updateAttempt(attempt.attempt_id, { status: "ABANDONED", ended_at: this.now(), outcome_reason: reason });
   }
 
   /** Re-attributes a clean HEAD commit when the process died after commit but before the ledger transaction. */
   async reconcileHeadCheckpoint(attempt: LedgerAttempt): Promise<string> {
     this.assertOpen();
-    const task = this.ledger.readTask(this.run.run_id, attempt.task_id);
     const currentAttempt = this.ledger.readAttempt(attempt.attempt_id);
-    if (!task || task.status !== "VERIFYING" || !currentAttempt || currentAttempt.status !== "RUNNING") {
-      throw new GuardedRunError("RECONCILE_STATE", `only a RUNNING attempt with a VERIFYING task may re-attribute a checkpoint`);
+    if (!currentAttempt || currentAttempt.status !== "RUNNING") {
+      throw new GuardedRunError("RECONCILE_STATE", "only a RUNNING attempt may re-attribute a checkpoint");
     }
     await assertCleanExactBranch(this.git, this.run, this.ledger);
     const log = await this.git.log({ maxCount: 1, revision: "HEAD", includeBody: true });
@@ -311,7 +372,6 @@ export class GuardedRunSession {
     this.ledger.transaction(() => {
       this.ledger.recordCheckpoint({ run_id: this.run.run_id, task_id: attempt.task_id, attempt_id: attempt.attempt_id, sha, packet_hash: attempt.packet_hash, at: this.now() });
       this.ledger.updateAttempt(attempt.attempt_id, { status: "SUCCEEDED", ended_at: this.now(), outcome_reason: "checkpoint re-attributed from exact HEAD trailers after interruption" });
-      this.ledger.setTaskStatus(this.run.run_id, attempt.task_id, "CHECKPOINTED", { reason: `reconciled checkpoint ${sha}` });
     });
     this.activeAttemptId = null;
     this.pendingReconciliationAttemptId = null;

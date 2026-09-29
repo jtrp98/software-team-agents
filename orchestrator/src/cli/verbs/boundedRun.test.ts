@@ -4,20 +4,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CliUsageError, runCli } from "../../cli.js";
 import { parseBoundedRunArgs, renderAwaitingHuman, BOUNDED_RUN_USAGE } from "./boundedRun.js";
-import { createProductionBoundedRunServices } from "../../run/boundedRunServices.js";
-
-// T-V10 TASK-005/006 — the acceptance seam is the factory call itself: parse
-// output alone cannot prove the flags survive the trip to the services.
-vi.mock("../../run/boundedRunServices.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../run/boundedRunServices.js")>();
-  return { ...actual, createProductionBoundedRunServices: vi.fn(actual.createProductionBoundedRunServices) };
-});
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
-import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
-import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
+import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
+import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
@@ -26,10 +18,10 @@ import { AgentStage } from "../../types.js";
 /**
  * T-V8-021 — CLI-level coverage for the explicit bounded-run command:
  * parsing/refusal, the ambiguity gate, dry-run preview, an eligible run to
- * COMPLETED, a gated run, and `--resume`. `boundedRunServices.test.ts` already
- * proves the production services in isolation; this file proves the CLI
- * surface (`sta bounded-run`) that composes them, exactly as a caller
- * (or `sta status`/`sta report`'s "next required action" reader) would use it.
+ * COMPLETED, a gated run, and `--resume`. Since V13 TASK-007 every execution
+ * case here drives the one task engine through the real CLI wiring - the
+ * production executor composition `sta run` uses, the ledger-attempt
+ * boundary and a real Target - with only the runtime adapter mocked.
  */
 
 function git(root: string, ...args: string[]): string {
@@ -142,48 +134,44 @@ describe("parseBoundedRunArgs", () => {
   });
 });
 
-import { boundedRunProject as project } from "./boundedRunFixture.testSupport.js";
+import { BoundedRunCodexFixture, boundedRunProject as project, playPlanTaskStage, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
+import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 
 declareInstallationConfigOverrideChannelForTest();
 
-export function completingAdapter(targetRoot: string): MockRuntimeAdapter {
-  let self: MockRuntimeAdapter;
-  const adapter = new MockRuntimeAdapter({
-    id: "claude-code",
-    models: ["sonnet"],
-    respond: (req) => {
-      if (req.role === "qa-engineer") {
-        self.workspace.files.set(
-          "_docs/module/orders/review.md",
-          "# review.md — orders\n\n## Round 1 — verify\n\n**Status:** ✅ Verified (FULL)\n\n" +
-            "## Per-Task Results\n\n" +
-            "- BE-004: ✅ Verified — the empty-order response stays stable.\n" +
-            "- AC-007.2: ✅ Verified — zero-total response confirmed by inspection.\n" +
-            "- DES-011: ✅ Verified — serializer boundary preserved.\n",
-        );
-        return okResult({
-          guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
-        });
-      }
-      fs.writeFileSync(path.join(targetRoot, "README.md"), "# orders\n\nReviewed the empty-order summary path.\n");
-      return okResult({
-        guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
-      });
-    },
-    files: {
-      ".mock/guards.json": JSON.stringify({
-        hooks: {
-          PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
-          Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
-        },
-      }),
-    },
+/** A mock runtime playing every plan-task stage (see `playPlanTaskStage`). */
+function planTaskAdapter(
+  targetRoot: string,
+  options: { module?: string; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},
+): BoundedRunCodexFixture {
+  let engineerCalls = 0;
+  return new BoundedRunCodexFixture(targetRoot, (req, files) => {
+    if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
+    return playPlanTaskStage(req, files, targetRoot, { ...options, engineerCall: engineerCalls });
   });
-  self = adapter;
-  return adapter;
 }
 
+/** Plays every stage of the plan-task workflow (engineer, reviewer, QA) to a verified pass. */
+export function completingAdapter(targetRoot: string): BoundedRunCodexFixture {
+  return planTaskAdapter(targetRoot);
+}
+
+/** A single-repo project whose BA -> SA -> DEV handoffs a person has signed off and acknowledged. */
+async function signedProject() {
+  const fixture = project(roots, git);
+  await writeSignedOffHandoffs(fixture.root, "orders");
+  return fixture;
+}
+
+function stageSequence(root: string, taskId: string): string[] {
+  const store = new SqliteTaskStore(defaultStateDbPath(root));
+  try {
+    return store.eventsForTask(taskId).filter((e) => e.type === "STAGE_COMPLETED").map((e) => String(e.payload.stage));
+  } finally {
+    store.close();
+  }
+}
 
 describe("sta bounded-run (CLI)", () => {
   it("dry-run preview matches what a real freeze would register, and mutates nothing", async () => {
@@ -290,9 +278,12 @@ describe("sta bounded-run (CLI)", () => {
     expect(errors.some((l) => l.includes("does not match any registered Knowledge root"))).toBe(true);
   });
 
-  it("runs an eligible task to COMPLETED through the real CLI dispatch", async () => {
-    const { root, targetRoot } = project(roots, git);
-    const adapter = completingAdapter(targetRoot);
+  it("(a) runs an eligible task to COMPLETED through the real CLI dispatch: the engine's stages, evidence and verified completion", async () => {
+    // V13 TASK-011: dispatch requires an explicit binding, so the CLI dispatch
+    // test runs the three-repo fixture (the single-repo freeze still exists
+    // for TASK-023 to cut over, but a dispatching run resolves real roots).
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
+    const adapter = completingAdapter(targetApi);
     const registry = new RuntimeRegistry([adapter]);
     const logs: string[] = [];
     const spy = console.log;
@@ -300,7 +291,7 @@ describe("sta bounded-run (CLI)", () => {
     let code: number;
     try {
       code = await runCli(
-        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
         root,
         { createRuntimeRegistry: () => registry },
       );
@@ -311,19 +302,27 @@ describe("sta bounded-run (CLI)", () => {
     expect(logs.some((l) => l.includes("froze run"))).toBe(true);
     expect(logs.some((l) => l.includes("COMPLETED"))).toBe(true);
 
+    expect(stageSequence(root, "BE-004")).toEqual([AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER]);
     const store = new SqliteTaskStore(defaultStateDbPath(root));
     const ledger = new SqliteRunLedger(store, { projectRoot: root });
     try {
       const runs = ledger.listRuns();
       expect(runs).toHaveLength(1);
       expect(runs[0]!.status).toBe("COMPLETED");
+      // COMPLETED because the engine's completion verifies, and the ledger task is its projection.
+      const row = store.loadTask("BE-004")!;
+      expect(row.machine.current).toBe("DEPLOYED");
+      expect(row.completionEvidenceId).not.toBeNull();
+      expect(ledger.readTasks(runs[0]!.run_id).map((task) => task.status)).toEqual(["DONE"]);
+      expect(ledger.attemptsForTask(runs[0]!.run_id, "BE-004").map((attempt) => attempt.status)).toEqual(["SUCCEEDED"]);
+      expect(ledger.checkpointsForRun(runs[0]!.run_id)).toHaveLength(1);
     } finally {
       ledger.close();
     }
   }, 30_000);
 
-  it("gates a run with no runtime route, and names the exact resume command", async () => {
-    const { root, targetRoot } = project(roots, git);
+  it("halts a run with no runtime to compose, and names the exact resume command", async () => {
+    const { root, targetRoot } = await signedProject();
     const registry = new RuntimeRegistry([]); // nothing registered
     const logs: string[] = [];
     const spy = console.log;
@@ -338,28 +337,25 @@ describe("sta bounded-run (CLI)", () => {
     } finally {
       console.log = spy;
     }
-    expect(code).toBe(4);
-    expect(logs.some((l) => l.includes("GATE"))).toBe(true);
+    // V13 TASK-007: the same composition `sta run` uses refuses to start with no
+    // registered runtime; the run halts (exit 1), it is not a human gate.
+    expect(code).toBe(1);
+    expect(logs.some((l) => l.includes("HALTED") && l.includes("not registered"))).toBe(true);
     expect(logs.some((l) => l.includes("sta bounded-run --resume"))).toBe(true);
-  });
+  }, 30_000);
 
   /**
-   * T-V8-029 — the human/approval boundary is enforced by the production
-   * `prepareTask` now, not only by a stubbed service in the fault matrix.
+   * V13 TASK-007 (d) — the role-lane prerequisites are a stage-entry guard of
+   * the engine, fail-closed on missing/empty Knowledge, and a bounded run meets
+   * it before anything is frozen or dispatched.
    *
-   * Before this, `renderPreview` *printed* `gates=schema` and the run went
-   * ahead and launched the task anyway: the wave runner's
-   * `evaluateAutoEligibility` was the only thing that had ever refused on a
-   * classification gate, and it was not on this path.
-   *
-   * Control: "runs an eligible task to COMPLETED through the real CLI
-   * dispatch" above is this same fixture, same `completingAdapter`, same
-   * registry, without `--schema` — and it completes. So the stop below is the
-   * gate, not an unavailable runtime or a broken fixture.
+   * Control: "(a) runs an eligible task to COMPLETED" above is this same
+   * fixture and adapter with the BA -> SA -> DEV handoffs signed off, and it
+   * completes - so the stop below is the guard, not the runtime or fixture.
    */
-  it("stops a classification-gated task before any attempt", async () => {
-    const { root, targetRoot } = project(roots, git);
-    const adapter = completingAdapter(targetRoot);
+  it("(d) with no Knowledge, the role-lane guard stops the engineer before any freeze or dispatch", async () => {
+    const { root, targetApi, knowledgeRoot } = threeRepoBoundedRunProject(roots, git);
+    const adapter = completingAdapter(targetApi);
     const registry = new RuntimeRegistry([adapter]);
 
     const gatedLogs: string[] = [];
@@ -368,7 +364,7 @@ describe("sta bounded-run (CLI)", () => {
     let gatedCode: number;
     try {
       gatedCode = await runCli(
-        ["bounded-run", "--module", "orders", "--all", "--schema", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
         root,
         { createRuntimeRegistry: () => registry },
       );
@@ -378,22 +374,24 @@ describe("sta bounded-run (CLI)", () => {
     expect(gatedCode).toBe(4);
     const gatedOutput = gatedLogs.join("\n");
     expect(gatedOutput).toContain("GATE");
-    expect(gatedOutput).toContain("not eligible for unattended execution");
-    // Which signals appear is `classifyTask`'s answer, not this gate's: a `--schema`
-    // task classifies LARGE_CRITICAL and carries both the approval and security gate.
-    expect(gatedOutput).toContain("classification sets requiresHumanApproval, sensitiveGate, level=LARGE_CRITICAL");
-    // Nothing launched, so nothing could have written the Target.
-    expect(adapter.requests).toEqual([]);
-    expect(gatedOutput).toContain("(attempts=0, qa_rounds=0)");
-    // V10 TASK-031 — the closing lines name the task and the command that clears it,
-    // not just the one reason that ended the run.
     expect(gatedOutput).toContain("[bounded-run] awaiting a human decision (1):");
-    expect(gatedOutput).toMatch(/\[bounded-run] {3}BE-\d+: .+ — `sta approve BE-\d+`/);
-    expect(git(targetRoot, "branch", "--list", "sta/run/*")).toBe("");
-
-    // The gate is durable, not just printed: a resume reports the recorded
-    // AWAITING_HUMAN state and the blocked task rather than starting work.
+    expect(gatedOutput).toMatch(/\[bounded-run] {3}BE-004: cannot start backend-engineer: no knowledge\/ directory/);
+    // Nothing launched, nothing frozen, no branch.
+    expect(adapter.requests).toEqual([]);
+    expect(git(targetApi, "branch", "--list", "sta/run/*")).toBe("");
     const runId = gatedLogs.find((line) => line.includes("froze run"))!.match(/froze run (\S+):/)![1]!;
+    {
+      const store = new SqliteTaskStore(defaultStateDbPath(root));
+      const ledger = new SqliteRunLedger(store, { projectRoot: root });
+      try {
+        expect(ledger.attemptsForTask(runId, "BE-004")).toEqual([]);
+        expect(ledger.readRun(runId)?.status).toBe("AWAITING_HUMAN");
+      } finally {
+        ledger.close();
+      }
+    }
+
+    // The stop is durable: a resume reports the engine's projection rather than starting work.
     const resumeLogs: string[] = [];
     const resumeSpy = console.log;
     console.log = (line: string) => resumeLogs.push(line);
@@ -413,8 +411,7 @@ describe("sta bounded-run (CLI)", () => {
     expect(resumeOutput).toContain("blocked=BE-004");
     expect(adapter.requests).toEqual([]);
 
-    // V10 TASK-031 — `sta status` reads the same ledger, so the blocked task and
-    // its gate reason are visible without knowing the run id.
+    // `sta status` reads the same engine projection, so the stop and its reason are visible without the run id.
     const statusLogs: string[] = [];
     const statusSpy = console.log;
     console.log = (line: string) => statusLogs.push(line);
@@ -424,11 +421,27 @@ describe("sta bounded-run (CLI)", () => {
       console.log = statusSpy;
     }
     const statusOutput = statusLogs.join("\n");
-    expect(statusOutput).toContain(`bounded run ${runId} (AWAITING_HUMAN) module=orders: 1 task(s) awaiting a human decision`);
-    expect(statusOutput).toContain("BE-004: ");
-    expect(statusOutput).toContain("not eligible for unattended execution");
-    expect(statusOutput).toContain("unblock with `sta approve BE-004`");
-  }, 30_000);
+    expect(statusOutput).toContain(`bounded run ${runId} (AWAITING_HUMAN) module=orders: 0/1 task(s) verified done by the engine, 1 awaiting a human decision`);
+    expect(statusOutput).toContain("BE-004: cannot start backend-engineer: no knowledge/ directory");
+    expect(statusOutput).toContain("see `sta status BE-004` for what a person must do");
+
+    // A person records the handoffs; the same frozen run now completes.
+    await writeSignedOffHandoffs(knowledgeRoot, "orders", defaultStateDbPath(root));
+    const resumedLogs: string[] = [];
+    const resumedSpy = console.log;
+    console.log = (line: string) => resumedLogs.push(line);
+    try {
+      resumeCode = await runCli(
+        ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => registry },
+      );
+    } finally {
+      console.log = resumedSpy;
+    }
+    expect(resumeCode, resumedLogs.join("\n")).toBe(0);
+    expect(resumedLogs.join("\n")).toContain("COMPLETED");
+  }, 60_000);
 
   it("--resume reports current readiness without mutating state under --dry-run", async () => {
     const { root, targetRoot } = project(roots, git);
@@ -470,324 +483,9 @@ describe("sta bounded-run (CLI)", () => {
 });
 
 
-interface ThreeRepoFixture {
-  root: string;
-  knowledgeRoot: string;
-  targetApi: string;
-  targetWeb: string;
-  installationConfig: string;
-}
-
-function threeRepoBoundedRunProject(
-  rootsList: string[],
-  gitRunner: (root: string, ...args: string[]) => string,
-  options: {
-    multiTask?: boolean;
-    omitPlanTargets?: boolean;
-    retiredApi?: boolean;
-    originMismatch?: boolean;
-  } = {},
-): ThreeRepoFixture {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-cli-"));
-  rootsList.push(root);
-
-  const knowledgeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-kn-"));
-  rootsList.push(knowledgeRoot);
-  gitRunner(knowledgeRoot, "init", "-b", "main");
-  gitRunner(knowledgeRoot, "config", "user.name", "Fixture");
-  gitRunner(knowledgeRoot, "config", "user.email", "fixture@example.invalid");
-
-  const targetApi = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-api-"));
-  rootsList.push(targetApi);
-  gitRunner(targetApi, "init", "-b", "main");
-  gitRunner(targetApi, "config", "user.name", "Fixture");
-  gitRunner(targetApi, "config", "user.email", "fixture@example.invalid");
-  gitRunner(targetApi, "config", "remote.origin.url", options.originMismatch ? "https://github.com/acme/wrong.git" : "https://github.com/acme/api.git");
-  fs.mkdirSync(path.join(targetApi, "src"), { recursive: true });
-  const orderSource = "export function orderSummary(): number { return 0; }\n";
-  fs.writeFileSync(path.join(targetApi, "src", "orders.ts"), orderSource);
-  fs.writeFileSync(path.join(targetApi, "package.json"), JSON.stringify({ name: "orders-api", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
-  fs.mkdirSync(path.join(targetApi, ".claude", "scripts"), { recursive: true });
-  fs.writeFileSync(
-    path.join(targetApi, ".claude", "scripts", "static-analysis-gate.js"),
-    "process.stdout.write(JSON.stringify({ ok: true, problems: [] }));\nprocess.exit(0);\n",
-  );
-  gitRunner(targetApi, "add", "--", "src/orders.ts", "package.json", ".claude/scripts/static-analysis-gate.js");
-  gitRunner(targetApi, "commit", "-m", "initial", "--");
-  const headSha = gitRunner(targetApi, "rev-parse", "HEAD");
-  const orderHash = sha256(orderSource);
-
-  const targetWeb = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-web-"));
-  rootsList.push(targetWeb);
-  gitRunner(targetWeb, "init", "-b", "main");
-  gitRunner(targetWeb, "config", "user.name", "Fixture");
-  gitRunner(targetWeb, "config", "user.email", "fixture@example.invalid");
-  gitRunner(targetWeb, "config", "remote.origin.url", "https://github.com/acme/web.git");
-  fs.mkdirSync(path.join(targetWeb, "src"), { recursive: true });
-  fs.writeFileSync(path.join(targetWeb, "src", "App.tsx"), "export function App() { return null; }\n");
-  fs.writeFileSync(path.join(targetWeb, "package.json"), JSON.stringify({ name: "orders-web", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
-  fs.mkdirSync(path.join(targetWeb, ".claude", "scripts"), { recursive: true });
-  fs.writeFileSync(
-    path.join(targetWeb, ".claude", "scripts", "static-analysis-gate.js"),
-    "process.stdout.write(JSON.stringify({ ok: true, problems: [] }));\nprocess.exit(0);\n",
-  );
-  gitRunner(targetWeb, "add", "--", "src/App.tsx", "package.json", ".claude/scripts/static-analysis-gate.js");
-  gitRunner(targetWeb, "commit", "-m", "initial", "--");
-
-  fs.writeFileSync(
-    path.join(knowledgeRoot, "targets.yaml"),
-    `schema_version: 1\ntargets:\n  - target_id: api\n    name: Orders API\n    remote_url: https://github.com/acme/api.git\n    status: ${options.retiredApi ? "retired" : "active"}\n    type: backend\n  - target_id: web\n    name: Orders Web\n    remote_url: https://github.com/acme/web.git\n    status: active\n    type: frontend\n`,
-  );
-  fs.mkdirSync(path.join(knowledgeRoot, ".workflow"), { recursive: true });
-  fs.writeFileSync(
-    path.join(knowledgeRoot, ".workflow", "targets.local.yaml"),
-    `schema_version: 1\ntargets:\n  api:\n    path: ${JSON.stringify(targetApi)}\n  web:\n    path: ${JSON.stringify(targetWeb)}\n`,
-  );
-  gitRunner(knowledgeRoot, "add", "--", "targets.yaml");
-  gitRunner(knowledgeRoot, "commit", "-m", "initial", "--");
-
-  const installationConfig = path.join(root, "installation.yaml");
-  fs.writeFileSync(
-    installationConfig,
-    `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`,
-  );
-  process.env.STA_INSTALLATION_CONFIG = installationConfig;
-
-  const requirement = "# Requirement\n\n- REQ-007: Order summary responses stay stable when no line item exists.\n- AC-007.2: Zero-total responses for orders with no line items must stay serializable.\n";
-  const design = `# Design
-
-Design evidence format: 1
-
-## Feasibility Summary
-
-Independently implementable.
-
-## Feature-by-Feature Feasibility
-
-One declaration below defines the selected behavior.
-
-## Data Model
-
-No schema changes.
-
-## DES-011 \u2014 Order summary response
-Contract:OrderSummary.v2 \u2014 the empty-order response shape.
-Contract:OrderWeb.v1 \u2014 the web UI contract shape.
-DEC-011 \u2014 keep summary construction behind one serializer boundary.
-Evidence EVD-011: claim=DES-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
-Evidence EVD-012: claim=Contract:OrderSummary.v2 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
-Evidence EVD-013: claim=DEC-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
-Evidence EVD-014: claim=Contract:OrderWeb.v1 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
-Compatibility: unchanged
-Data/schema: unchanged
-Migration/backfill: none
-Security: none
-Fallback: retain the current empty-order handler.
-Material ambiguity: none
-
-## Modules
-
-Orders service.
-
-## Targets
-
-- api
-- web
-
-## Risks & Dependencies
-
-The per-section decision records are authoritative.
-
-## Unresolved Open Questions
-
-\u2014
-
-## Change Log
-
-- Undated fixture; no human sign-off is implied.
-`;
-
-  const singlePlan = `# Plan
-
-PlanTask format: 1
-
-## Plan Summary
-Deliver one independently verifiable contract-preserving task.
-
-## Phase 1: Orders
-
-### Task BE-004 \u2014 Preserve the order summary
-
-Objective: Return the existing order summary for an empty order.
-Why: Clients need a stable empty-order response.
-Owner: backend-engineer
-Tier: T4
-Depends on: none
-Traceability: REQ-007, AC-007.2, DES-011
-Produces: Contract:OrderSummary.v2
-Consumes: none
-Risk: shared-contract
-Human gate: none
-Status: pending
-${options.omitPlanTargets ? "" : "Targets: api\n"}
-#### Scope and constraints
-
-Preserve the response contract while handling empty line items.
-
-#### Retrieval hints
-
-Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.
-Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
-Provenance: DES-011, Contract:OrderSummary.v2
-
-#### Do not modify
-
-Authentication, database schema and unrelated response fields.
-
-#### Acceptance criteria
-
-AC-007.2: An empty order returns the documented zero total without an exception.
-
-#### Required validation and expected evidence
-
-Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
-
-#### Rollback/compatibility notes
-
-Preserve existing nonempty-order serialization. The patch can be removed independently.
-
-## Sequencing Notes
-No preceding implementation is required.
-
-## Unresolved Open Questions
-None.
-
-## Change Log
-Undated canonical fixture; no human sign-off is implied.
-`;
-
-  const multiPlan = `# Plan
-
-PlanTask format: 1
-
-## Plan Summary
-Deliver two tasks across two targets.
-
-## Phase 1: Orders
-
-### Task BE-004 \u2014 Preserve the order summary
-
-Objective: Return the existing order summary for an empty order.
-Why: Clients need a stable empty-order response.
-Owner: backend-engineer
-Tier: T4
-Depends on: none
-Traceability: REQ-007, AC-007.2, DES-011
-Produces: Contract:OrderSummary.v2
-Consumes: none
-Risk: shared-contract
-Human gate: none
-Status: pending
-Targets: api
-
-#### Scope and constraints
-
-Preserve the response contract while handling empty line items.
-
-#### Retrieval hints
-
-Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.
-Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
-Provenance: DES-011, Contract:OrderSummary.v2
-
-#### Do not modify
-
-Authentication, database schema and unrelated response fields.
-
-#### Acceptance criteria
-
-AC-007.2: An empty order returns the documented zero total without an exception.
-
-#### Required validation and expected evidence
-
-Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
-
-#### Rollback/compatibility notes
-
-Preserve existing nonempty-order serialization. The patch can be removed independently.
-
-### Task FE-005 \u2014 Render the order summary
-
-Objective: Render the order summary on web.
-Why: Users need to view order summaries.
-Owner: frontend-engineer
-Tier: T4
-Depends on: BE-004
-Traceability: REQ-007, AC-007.2, DES-011
-Produces: Contract:OrderWeb.v1
-Consumes: Contract:OrderSummary.v2
-Risk: shared-contract
-Human gate: none
-Status: pending
-Targets: web
-
-#### Scope and constraints
-
-Render order summary in web interface.
-
-#### Retrieval hints
-
-Hypothesis: App component renders order summary.
-Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
-Provenance: DES-011, Contract:OrderSummary.v2, Contract:OrderWeb.v1
-
-#### Do not modify
-
-Authentication, database schema and unrelated response fields.
-
-#### Acceptance criteria
-
-AC-007.2: An empty order returns the documented zero total without an exception.
-
-#### Required validation and expected evidence
-
-Verify AC-007.2 with unit tests. Record commands, exit codes and response assertions.
-
-#### Rollback/compatibility notes
-
-Preserve existing nonempty-order serialization. The patch can be removed independently.
-
-## Sequencing Notes
-No preceding implementation is required.
-
-## Unresolved Open Questions
-None.
-
-## Change Log
-Undated canonical fixture; no human sign-off is implied.
-`;
-
-  const plan = options.multiTask ? multiPlan : singlePlan;
-
-  const docs = path.join(knowledgeRoot, "_docs", "module", "orders");
-  fs.mkdirSync(docs, { recursive: true });
-  fs.writeFileSync(path.join(docs, "plan.md"), plan);
-  fs.writeFileSync(path.join(docs, "requirement.md"), requirement);
-  fs.writeFileSync(path.join(docs, "design.md"), design);
-
-  const templateContracts = path.join(fileURLToPath(new URL("../../../../templates/contracts", import.meta.url)));
-  const contracts = path.join(root, "contracts");
-  fs.mkdirSync(contracts, { recursive: true });
-  for (const role of ["backend-engineer", "frontend-engineer", "qa-engineer"]) {
-    fs.copyFileSync(path.join(templateContracts, `${role}.yaml`), path.join(contracts, `${role}.yaml`));
-  }
-
-  return { root, knowledgeRoot, targetApi, targetWeb, installationConfig };
-}
-
 describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
   it("three-repo bounded run populates registry-validated targetBindings and preflight-derived targetWorkRoots", async () => {
-    const { root, targetApi } = threeRepoBoundedRunProject(roots, git);
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const registry = new RuntimeRegistry([adapter]);
     const logs: string[] = [];
@@ -803,9 +501,10 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
     } finally {
       console.log = spy;
     }
-    expect(code).toBe(0);
+    expect(code, logs.join("\n")).toBe(0);
     expect(logs.some((l) => l.includes("froze run"))).toBe(true);
     expect(logs.some((l) => l.includes("COMPLETED"))).toBe(true);
+    expect(stageSequence(root, "BE-004")).toEqual([AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER]);
 
     const store = new SqliteTaskStore(defaultStateDbPath(root));
     try {
@@ -824,6 +523,46 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
     } finally {
       store.close();
     }
+  }, 30_000);
+
+  it("V13 TASK-007 — the three-repo reviewer reads the Target and may write only its Knowledge-side review docs", async () => {
+    const { root, knowledgeRoot, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
+    const adapter = completingAdapter(targetApi);
+    const code = await runCli(
+      ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
+      root,
+      { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+    );
+    expect(code).toBe(0);
+    const canonicalApi = fs.realpathSync.native(targetApi);
+    const REVIEW_WRITES = ["_docs/module/*/review.md", "_docs/module/*/review/**"];
+
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    let runtimeTask;
+    try {
+      runtimeTask = store.loadTask("BE-004")!.runtimeTask!;
+    } finally {
+      store.close();
+    }
+    if (!("version" in runtimeTask) || runtimeTask.version !== 2) throw new Error("expected a canonical RuntimeTask");
+    const reviewerRoots = runtimeTask.scope.work_roots.filter((r) => r.stage === AgentStage.REVIEWER);
+    const qaRoots = runtimeTask.scope.work_roots.filter((r) => r.stage === AgentStage.QA_ENGINEER);
+    // Exactly the read-only Target access QA gets.
+    expect(reviewerRoots.map((r) => [r.target_id, r.root, r.access])).toEqual([["api", canonicalApi, "read"]]);
+    expect(qaRoots.map((r) => [r.target_id, r.root, r.access])).toEqual([["api", canonicalApi, "read"]]);
+    // Its write scope is its contract's review docs - no Target code.
+    expect(reviewerRoots[0]!.allow.map((a) => a.contract_glob).sort()).toEqual(REVIEW_WRITES);
+    expect(reviewerRoots[0]!.allow.some((a) => /^(src|app|server|components|prisma)\//.test(a.contract_glob))).toBe(false);
+
+    // The dispatched packet says the same.
+    const packetDir = path.join(knowledgeRoot, ".workflow", "packets", "BE-004");
+    const reviewerPackets = fs.readdirSync(packetDir).filter((name) => name.startsWith("reviewer-"));
+    expect(reviewerPackets.length).toBeGreaterThan(0);
+    const packet = JSON.parse(fs.readFileSync(path.join(packetDir, reviewerPackets[0]!), "utf8")) as { scope: { roots: string[]; allow: string[]; deny: string[] } };
+    expect(packet.scope.roots.map((r) => path.resolve(r))).toEqual([canonicalApi]);
+    expect([...packet.scope.allow].sort()).toEqual(REVIEW_WRITES);
+    expect(packet.scope.deny).toEqual(expect.arrayContaining(["src/**", "app/**", "server/**"]));
+    expect(adapter.requests.some((request) => request.role === "reviewer")).toBe(true);
   }, 30_000);
 
   it("bounded run against a retired Target is refused before any attempt starts", async () => {
@@ -938,7 +677,7 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
 
 describe("V10 TASK-025 — runtime state has one home: the Knowledge root", () => {
   it("a three-repo run persists every packet under the Knowledge root, and the invoking cwd gains none", async () => {
-    const { root, knowledgeRoot, targetApi } = threeRepoBoundedRunProject(roots, git);
+    const { root, knowledgeRoot, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;
@@ -955,6 +694,7 @@ describe("V10 TASK-025 — runtime state has one home: the Knowledge root", () =
     }
     expect(code, logs.join("\n")).toBe(0);
     expect(logs.some((l) => l.includes("COMPLETED"))).toBe(true);
+    expect(stageSequence(root, "BE-004")).toEqual([AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER]);
 
     // The prepare-time packet and the per-stage executor packet all land in
     // the Knowledge root's .workflow — the executor's (attempt 2) used to
@@ -969,20 +709,16 @@ describe("V10 TASK-025 — runtime state has one home: the Knowledge root", () =
 });
 
 describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () => {
-  beforeEach(() => {
-    vi.mocked(createProductionBoundedRunServices).mockClear();
-  });
-
-  it("TASK-005 — `--autonomy edit` reaches the service factory and the adapter request, not just the parser", async () => {
-    const { root, targetRoot } = project(roots, git);
-    const adapter = completingAdapter(targetRoot);
+  it("TASK-005 — `--autonomy edit` reaches every adapter request the engine dispatches, not just the parser", async () => {
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
+    const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;
     console.log = (line: string) => logs.push(line);
     let code: number;
     try {
       code = await runCli(
-        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
         root,
         { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
       );
@@ -990,13 +726,13 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
       console.log = spy;
     }
     expect(code, logs.join("\n")).toBe(0);
-    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
-    expect(options.autonomy).toBe("edit");
-    expect(adapter.requests[0]?.autonomy).toBe("edit");
+    expect(adapter.requests.length).toBeGreaterThanOrEqual(3);
+    expect(adapter.requests.every((request) => request.autonomy === "edit")).toBe(true);
   }, 30_000);
 
-  it("TASK-005 — a --dry-run still needs no autonomy and never composes the services at all", async () => {
-    const { root, targetRoot } = project(roots, git);
+  it("TASK-005 — a --dry-run still needs no autonomy and dispatches nothing at all", async () => {
+    const { root, targetRoot } = await signedProject();
+    const adapter = completingAdapter(targetRoot);
     const logs: string[] = [];
     const spy = console.log;
     console.log = (line: string) => logs.push(line);
@@ -1005,39 +741,38 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
       code = await runCli(
         ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--dry-run"],
         root,
-        { createRuntimeRegistry: () => new RuntimeRegistry([completingAdapter(targetRoot)]) },
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
       );
     } finally {
       console.log = spy;
     }
     expect(code).toBe(0);
-    expect(vi.mocked(createProductionBoundedRunServices).mock.calls).toHaveLength(0);
+    expect(adapter.requests).toEqual([]);
+    expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
   });
 
-  it("TASK-006 — `--model`/`--effort` reach the factory as routingFlags, and an explicit model stays fail-closed at the freeze gate", async () => {
-    const { root, targetRoot } = project(roots, git);
-    const adapter = completingAdapter(targetRoot);
+  it("TASK-006 — `--model` reaches the attempt freeze, and an explicit model stays fail-closed there", async () => {
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
+    const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;
     console.log = (line: string) => logs.push(line);
     let code: number;
     try {
       code = await runCli(
-        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit", "--model", "not-declared", "--effort", "high"],
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit", "--model", "not-declared", "--effort", "high"],
         root,
         { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
       );
     } finally {
       console.log = spy;
     }
-    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
-    expect(options.routingFlags).toEqual({ model: "not-declared", effort: "high" });
     // attemptFreeze's shipped boundary: a route naming an explicit model may not
-    // start unless the runtime's model-selection is verified — the flag cannot
-    // silently carry the run to that model (T-V10 TASK-006 "policy wins").
-    expect(code).toBe(4);
-    expect(logs.join("\n")).toContain("GATE");
-    expect(logs.join("\n")).toContain("no verified model-selection capability");
+    // start unless the runtime's model-selection is verified - the flag cannot
+    // silently carry the run to that model (T-V10 TASK-006 "policy wins"). The
+    // refusal is a failed engineer role-run, so the run halts (V13 TASK-007).
+    expect(code).toBe(1);
+    expect(logs.join("\n")).toContain("HALTED");
     expect(adapter.requests).toEqual([]);
 
     const store = new SqliteTaskStore(defaultStateDbPath(root));
@@ -1045,21 +780,22 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
     try {
       const run = ledger.listRuns()[0]!;
       expect(ledger.attemptsForTask(run.run_id, "BE-004")).toHaveLength(0);
+      expect(store.runsForTask("BE-004").at(-1)?.failure_reason ?? "").toContain("no verified model-selection capability");
     } finally {
       ledger.close();
     }
   }, 30_000);
 
   it("TASK-006 — `--effort` rides the flag lane end-to-end into the attempt's frozen requested route", async () => {
-    const { root, targetRoot } = project(roots, git);
-    const adapter = completingAdapter(targetRoot);
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
+    const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;
     console.log = (line: string) => logs.push(line);
     let code: number;
     try {
       code = await runCli(
-        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit", "--effort", "high"],
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit", "--effort", "high"],
         root,
         { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
       );
@@ -1067,8 +803,6 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
       console.log = spy;
     }
     expect(code, logs.join("\n")).toBe(0);
-    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
-    expect(options.routingFlags).toEqual({ model: undefined, effort: "high" });
 
     const store = new SqliteTaskStore(defaultStateDbPath(root));
     const ledger = new SqliteRunLedger(store, { projectRoot: root });
@@ -1076,7 +810,12 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
       const run = ledger.listRuns()[0]!;
       const attempts = ledger.attemptsForTask(run.run_id, "BE-004");
       expect(attempts).toHaveLength(1);
-      expect(attempts[0]!.requested).toEqual({ runtime: "claude-code", model: null, effort: "high" });
+      // The three-repo freeze resolves the model-tiers role default (the
+      // single-repo freeze had no policy reachable and froze null); the
+      // explicit --effort rides through beside it.
+      // The legacy frontmatter still supplies the requested model label;
+      // Codex uses its runtime default because this was not an explicit model selection.
+      expect(attempts[0]!.requested).toEqual({ runtime: "codex", model: "sonnet", effort: "high" });
       expect(attempts[0]!.route_basis).toBe("level-1");
     } finally {
       ledger.close();

@@ -2,9 +2,11 @@ import { AgentStage } from "../types.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { RuntimeTaskV2Schema, assertRuntimeTaskFresh, type RuntimeTaskV2 } from "../orchestrator/runtimeTask.js";
-import { planTaskHash } from "../docs/planTask.js";
-import { PacketFieldsSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import { RuntimeTaskV2Schema, assertRuntimeTaskFresh, PRE_PLAN_STAGES, type RuntimeTaskV2 } from "../orchestrator/runtimeTask.js";
+import { z } from "zod";
+import { PacketFieldsSchema, RoleContractDigestSchema, ExpectedOutputSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, taskContractHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import type { AgentContract } from "../agents/agentContract.js";
+import { pathRulesFor } from "../agents/pathPermissions.js";
 import { verifyDesignEvidence } from "../docs/designEvidence.js";
 import {
   ArtifactType,
@@ -14,7 +16,7 @@ import {
 } from "../artifacts/schemas.js";
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
-import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
+import { parseQaReport, parseReviewReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
 import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
 import {
   ContextManager,
@@ -22,7 +24,8 @@ import {
   type SelectedContext,
 } from "../context/contextManager.js";
 import { ContextLeakageError, type ContextItem } from "../context/contextSelection.js";
-import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
+import { classifyQaFailure, classifyReviewFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
+import type { StructuredFailure } from "../orchestrator/failure.js";
 import { codeIntelContext } from "./codeIntelAssembly.js";
 import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
@@ -33,7 +36,7 @@ import { buildTaskRetrievalQuery, type TaskRetrievalQuery } from "../context/ret
  * This module is the deterministic Task Compiler: everything about running a
  * stage that is *this framework's* business rather than any runtime's.
  * Assembling a prompt, slicing module docs to the sections a stage may read,
- * reading `review.md` back into a QA artifact, and routing a failed round by
+ * reading `qa.md` back into a QA artifact, and routing a failed round by
  * the owner the document names are all rules from `policies/` — they would be
  * identical whichever runtime process the stage actually spawns.
  *
@@ -99,6 +102,33 @@ export interface RunMetrics {
    * instead of collapsing it into a single field.
    */
   requested_effort?: string;
+  /**
+   * V13 TASK-005 — sha256 of the exact `contracts/<stage>.yaml` bytes that
+   * `resolveAuthoritativeContract` resolved and enforced *before* this attempt
+   * was allowed to start. Absent only when the attempt never got that far
+   * (the contract itself could not be resolved) — a discrepancy in its own
+   * right, not a value to fabricate.
+   */
+  contract_digest?: string;
+  /**
+   * V13 TASK-014 — the executor attempt id the port minted for this run,
+   * bound to task/stage before any spawn. Absent when the run was refused
+   * before an attempt existed, or came from a probe/execute-only adapter
+   * lifted onto the port, which mints no persistent attempt record.
+   */
+  attempt_id?: string;
+  /**
+   * V13 TASK-014 — the runtime's native session reference for this attempt,
+   * lifted from the runtime's own output by the adapter (never self-reported
+   * by the agent). Absent when the runtime echoes no session id.
+   */
+  session_ref?: string;
+  /**
+   * V13 TASK-016 — the executor version pinned to this attempt: what the
+   * availability probe reported for the selected runtime before dispatch.
+   * Absent when the probe named no version.
+   */
+  runtime_version?: string;
 }
 
 /**
@@ -517,6 +547,17 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+export const STAGE_DOCUMENT: Partial<Record<AgentStage, string>> = {
+  [AgentStage.BUSINESS_ANALYST]: "requirement.md",
+  [AgentStage.SYSTEM_ANALYST]: "design.md",
+  [AgentStage.PROJECT_MANAGER]: "plan.md",
+  [AgentStage.TEST_PLANNER]: "test-plan.md",
+  [AgentStage.UXUI_DESIGNER]: "uxui/design.md",
+  [AgentStage.REVIEWER]: "review.md",
+  [AgentStage.QA_ENGINEER]: "qa.md",
+  [AgentStage.SECURITY]: "security.md",
+};
+
 export const renderExecutionPacketSections = renderPacketSections;
 
 export interface CompileExecutionPacketInput {
@@ -535,6 +576,18 @@ export interface CompileExecutionPacketInput {
   extra?: string;
   /** Legacy context input is deliberately not rendered; v2 selects exact records. */
   sources?: Omit<PromptSources, "task">;
+  /** V13 TASK-020: Authoritative contract resolved for this stage. */
+  authoritativeContract?: AgentContract;
+  /** V13 TASK-020: SHA-256 digest of the authoritative contract file. */
+  contractDigest?: string;
+  /** V13 TASK-020: Operating rules and constraints. */
+  rules?: readonly string[];
+  /** V13 TASK-020: Knowledge brief lines relevant to this role/task. */
+  relevantKnowledge?: readonly string[];
+  /** V13 TASK-020: Expected output description. */
+  expectedOutput?: z.infer<typeof ExpectedOutputSchema>;
+  /** V13 TASK-020: Attempt or correlation ID. */
+  correlationId?: string;
 }
 
 export function packetCompilerHash(): string {
@@ -549,7 +602,7 @@ export function packetCompilerHash(): string {
 function deriveKnowledgeRoot(task: RuntimeTaskV2, targetRoots: readonly string[]): string | undefined {
   const artifactSource = task.artifact_hashes[0]?.source;
   if (!artifactSource) return undefined;
-  const candidate = path.resolve(artifactSource, "..", "..", "..");
+  const candidate = path.resolve(artifactSource, "..", "..", "..", "..");
   if (targetRoots.map(root => path.resolve(root)).includes(candidate)) return undefined;
   if (!fs.existsSync(path.join(candidate, "_docs", "module"))) return undefined;
   return candidate;
@@ -562,6 +615,7 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   const task = parsed.data;
   if (task.task_id !== input.req.taskId) throw new Error(`RuntimeTask ${task.task_id} cannot compile packet for ${input.req.taskId}`);
   assertRuntimeTaskFresh(task);
+  if (task.contract.version === "workflow-1" && input.req.stage !== PRE_PLAN_STAGES[task.workflow_origin!.accepted.length]) throw new Error("workflow preparation can dispatch only its next unaccepted BA/SA/PM stage");
   const roots = task.scope.work_roots.filter(root => root.stage === input.req.stage);
   if (!task.design_evidence) throw new Error(`task ${task.task_id}: design evidence migration required before unattended packet compilation`);
   if (!input.baseRevision) throw new Error(`task ${task.task_id}: base revision is required to verify design evidence`);
@@ -575,7 +629,10 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
     const problems = verifyDesignEvidence([ref], { targetRoot: evidenceRoot, knowledgeRoot, currentRevision: input.baseRevision, allowContentStableRevision: singleRepoKnowledge });
     if (problems.length) throw new Error(`design evidence drift: ${problems.join("; ")}`);
   }
-  const allow = unique(roots.flatMap(root => root.allow.map(entry => entry.contract_glob)).filter(glob => input.contractScope.allow.includes(glob)));
+  const documentGrants = pathRulesFor(input.req.stage, task.workflow_plan ? path.dirname(path.dirname(task.workflow_plan.workflow_source)) : undefined).write;
+  const allow = unique(STAGE_DOCUMENT[input.req.stage] && !roots.some(root => root.access === "write")
+    ? input.contractScope.allow.filter(glob => documentGrants.includes(glob))
+    : roots.flatMap(root => root.allow.map(entry => entry.contract_glob)).filter(glob => input.contractScope.allow.includes(glob)));
   const candidates = input.retrievalCandidates ?? [];
   for (const candidate of candidates) {
     if (candidate.revision !== input.baseRevision || contentHash(fs.readFileSync(candidate.path)) !== candidate.hash) throw new Error(`retrieval evidence drift: ${candidate.path}`);
@@ -589,6 +646,43 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   const stageInstructions = [businessInputInstruction, input.extra ?? ""]
     .filter((part) => part.length > 0)
     .join("\n\n");
+
+  let roleContract: z.infer<typeof RoleContractDigestSchema> | undefined;
+  if (input.authoritativeContract && input.contractDigest) {
+    roleContract = {
+      name: input.authoritativeContract.agent.name,
+      role: input.authoritativeContract.agent.role,
+      digest: input.contractDigest,
+      ...(input.authoritativeContract.constraints ? { constraints: [...input.authoritativeContract.constraints] } : {}),
+      ...(input.authoritativeContract.tools ? { tools: [...input.authoritativeContract.tools] } : {}),
+    };
+  }
+
+  const rawRules = input.rules ?? input.authoritativeContract?.constraints;
+  const cleanedRules = rawRules
+    ? rawRules.map((r) => r.trim()).filter((r) => r.length > 0)
+    : undefined;
+  const rules = cleanedRules && cleanedRules.length > 0 ? cleanedRules : undefined;
+
+  const cleanedKnowledge = input.relevantKnowledge
+    ? input.relevantKnowledge.map((k) => k.trim()).filter((k) => k.length > 0)
+    : undefined;
+  const relevantKnowledge = cleanedKnowledge && cleanedKnowledge.length > 0
+    ? cleanedKnowledge
+    : undefined;
+
+  let expectedOutput = input.expectedOutput;
+  if (!expectedOutput && input.authoritativeContract) {
+    const docName = STAGE_DOCUMENT[input.req.stage];
+    expectedOutput = {
+      artifact_type: input.authoritativeContract.output.required[0] ?? (docName ? docName.replace(/\.md$/, "") : "code"),
+      ...(docName ? { doc_path: `_docs/module/${path.basename(path.dirname(task.plan_source))}/${docName}`, schema_name: `${docName.replace(/\.md$/, "")}.schema.json` } : {}),
+      ...(input.authoritativeContract.output.required.length ? { required_sections: [...input.authoritativeContract.output.required] } : {}),
+    };
+  }
+
+  const correlationId = input.correlationId;
+
   const fields = PacketFieldsSchema.parse({
     version: 2, attempt: input.attempt ?? 1, task_id: input.req.taskId, stage: input.req.stage, role: input.role,
     contract: task.contract,
@@ -607,7 +701,7 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
     code_intel_evidence: input.codeIntelEvidence ?? "",
     verification_context: input.req.context.filter(item => item.source === "qa-evidence"),
     identity: {
-      task_hash: planTaskHash({ ...task.contract, status: "pending" }), plan_hash: task.plan_hash,
+      task_hash: taskContractHash(task.contract), plan_hash: task.plan_hash,
       artifact_hashes: task.artifact_hashes,
       config_hash: packetConfigHash({
         config: input.config ?? null,
@@ -617,6 +711,11 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
       }),
       compiler_version: "v8-packet-2", compiler_hash: packetCompilerHash(), base_revision: input.baseRevision,
     },
+    ...(roleContract ? { role_contract: roleContract } : {}),
+    ...(rules && rules.length ? { rules } : {}),
+    ...(relevantKnowledge && relevantKnowledge.length ? { relevant_knowledge: relevantKnowledge } : {}),
+    ...(expectedOutput ? { expected_output: expectedOutput } : {}),
+    ...(correlationId ? { correlation_id: correlationId } : {}),
   });
   const text = renderPacketText(fields);
   const payload = {
@@ -627,17 +726,13 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   return validateArtifact(ArtifactType.EXECUTION_PACKET, { ...payload, packet_hash: stableHash(payload) });
 }
 
-/** Compatibility wrapper for existing callers/tests using the old sliced array. */
-export function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
-  return buildPromptParts(req, extra, { docs: sliced }).text;
-}
 
 export function failResult(reason: string, metrics: Partial<RunMetrics> = {}): AgentExecutorResult {
   return { outcome: { tokens: 0, cost: 0, context_chars: 0, ...metrics, result: "FAIL", failure_reason: reason } };
 }
 
 /**
- * A qa-engineer run's result, from the `review.md` it wrote.
+ * A qa-engineer run's result, from the `qa.md` it wrote.
  *
  * Fails closed on a missing document even when the runtime reported success: a
  * round nobody can read is not a round that passed. The owner attached on a
@@ -649,20 +744,70 @@ export function qaArtifactResult(
   req: AgentExecutorRequest,
   metrics: RunMetrics,
   moduleName: string,
-  reviewMd: string | null,
+  qaMd: string | null,
 ): AgentExecutorResult {
-  if (reviewMd === null) {
+  if (qaMd === null) {
     return failResult(
-      `qa-engineer reported success but _docs/module/${moduleName}/review.md doesn't exist — cannot confirm the round`,
+      `qa-engineer reported success but _docs/module/${moduleName}/qa.md doesn't exist — cannot confirm the round`,
       metrics,
     );
   }
-  const { artifact } = parseQaReport(req.taskId, reviewMd);
+  const { artifact } = parseQaReport(req.taskId, qaMd);
   return {
     outcome: { ...metrics, result: artifact.status },
     artifactType: ArtifactType.QA_REPORT,
     artifact,
-    failure: artifact.status === "FAIL" ? (classifyQaFailure(reviewMd) ?? undefined) : undefined,
+    failure: artifact.status === "FAIL" ? (classifyQaFailure(qaMd) ?? undefined) : undefined,
+  };
+}
+
+/** The escalation a review.md nobody can read as a verdict gets: no owner is guessed. */
+function unreadableReviewFailure(reason: string): StructuredFailure {
+  return {
+    category: "unknown",
+    owner: AgentStage.HUMAN,
+    severity: "high",
+    retryable: false,
+    reason,
+    affected: [],
+    requiresHuman: true,
+  };
+}
+
+/**
+ * A reviewer run's result, from the `review.md` it wrote (V13 TASK-006).
+ *
+ * Same fail-closed rule as `qaArtifactResult`: the runtime reporting success is
+ * not a review — a missing review.md, or one whose current round cannot be read
+ * as a verdict, is a FAIL escalated to a person, never a PASS and never a
+ * guessed owner. A readable FAIL carries the structured failure whose owner is
+ * the one the reviewer named on its open blocking finding.
+ */
+export function reviewerArtifactResult(
+  req: AgentExecutorRequest,
+  metrics: RunMetrics,
+  moduleName: string,
+  reviewMd: string | null,
+): AgentExecutorResult {
+  if (reviewMd === null || reviewMd.trim() === "") {
+    const reason = `reviewer reported success but _docs/module/${moduleName}/review.md doesn't exist (or is empty) — cannot confirm the review`;
+    return { ...failResult(reason, metrics), failure: unreadableReviewFailure(reason) };
+  }
+  const parsed = parseReviewReport(req.taskId, reviewMd);
+  if (!parsed.artifact) {
+    const reason = `_docs/module/${moduleName}/review.md cannot be read as a review verdict: ${parsed.problems.join("; ")}`;
+    return { ...failResult(reason, metrics), failure: unreadableReviewFailure(reason) };
+  }
+  const artifact = parsed.artifact;
+  return {
+    outcome: {
+      ...metrics,
+      result: artifact.verdict,
+      ...(parsed.problems.length > 0 ? { failure_reason: parsed.problems.join("; ") } : {}),
+    },
+    artifactType: ArtifactType.REVIEW_REPORT,
+    artifact,
+    failure: artifact.verdict === "FAIL" ? classifyReviewFailure(artifact) : undefined,
   };
 }
 
@@ -687,9 +832,4 @@ export function securityArtifactResult(
     failure:
       artifact.overallStatus === "FAIL" ? (classifySecurityFailure(securityMd, req.taskId) ?? undefined) : undefined,
   };
-}
-
-/** The two stages whose verdict lives in a document rather than in an exit status. */
-export function isDocumentVerdictStage(stage: AgentStage): boolean {
-  return stage === AgentStage.QA_ENGINEER || stage === AgentStage.SECURITY;
 }

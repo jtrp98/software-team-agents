@@ -7,10 +7,12 @@ import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { makeItem } from "../knowledge/sampleKnowledge.js";
 import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
-import { laneOf } from "./roleLane.js";
-import { recordSignoff } from "./roleApproval.js";
-import { acknowledge, loadRoleWorkspace, writeRoleWorkspace } from "./roleWorkspace.js";
-import { BA_WORKFLOW, DEV_WORKFLOW, SA_WORKFLOW, roleWorkflowState, workspacesUnder } from "./roleWorkflow.js";
+import { testHumanVerifier, trustedCredential } from "../gates/humanDecision.testSupport.js";
+import { decideLane } from "../orchestrator/stageGuards.testSupport.js";
+import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { defaultStateDbPath } from "../store/stateView.js";
+import { LaneDecisionService, laneItemRefs, laneWorkspaces, loadGovernedKnowledge } from "./laneDecisions.js";
+import { BA_WORKFLOW, DEV_WORKFLOW, SA_WORKFLOW, type LaneSpec, roleWorkflowState as roleWorkflowStateOf } from "./roleWorkflow.js";
 
 /**
  * BA -> SA -> DEV integration test.
@@ -23,11 +25,12 @@ import { BA_WORKFLOW, DEV_WORKFLOW, SA_WORKFLOW, roleWorkflowState, workspacesUn
  * from scratch.
  *
  * So this file writes knowledge items with `writeKnowledgeItem()` (the same
- * function every agent calls), writes lane watermarks with
- * `writeRoleWorkspace()`/`acknowledge()` (the same functions `sta roles ack`
- * calls), and never reuses an in-memory object across a "step" — every
- * assertion reloads via `KnowledgeBase.load(root)` and `workspacesUnder(root, ...)`,
- * the same cold read a brand-new agent run would do. If a step's carry,
+ * function every agent calls), records every sign-off and acknowledgement as a
+ * trusted decision in the SQLite lane ledger through `LaneDecisionService`
+ * (what `sta roles signoff|ack` runs, here with the test-only channel), and
+ * never reuses an in-memory object across a "step" — every assertion reopens
+ * the state file and reloads the governed Knowledge (V13 TASK-028), the same
+ * cold read a brand-new agent run would do. If a step's carry,
  * blocker, or watermark test only passed because a JS reference survived from
  * the previous line, reloading here would have exposed it.
  */
@@ -44,18 +47,31 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  /** Cold read — never held across steps, exactly like a fresh agent context. */
+  /** Cold read of the lane ledger and governed Knowledge — reopened every call, like a fresh agent context. */
+  function governed<T>(fn: (g: ReturnType<typeof loadGovernedKnowledge>) => T): T {
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    try {
+      return fn(loadGovernedKnowledge(root, store));
+    } finally {
+      store.close();
+    }
+  }
+
   function kb(): KnowledgeBase {
-    return KnowledgeBase.load(root);
+    return governed((g) => g.kb);
   }
 
-  function approvedOwnedBy(lane: "ba" | "sa" | "dev"): KnowledgeItem[] {
-    return kb()
-      .query({ module: MODULE })
-      .filter((item) => laneOf(item.owner) === lane && item.status === "approved");
+  function roleWorkflowState(spec: LaneSpec) {
+    return governed((g) =>
+      roleWorkflowStateOf(spec, MODULE, g.kb, laneWorkspaces(g.recordsFor, g.root, MODULE, NOW), (items: KnowledgeItem[]) => laneItemRefs(items, g.root)),
+    );
   }
 
-  it("carries context (unconfirmed assumption, design risk) and approval end to end without loss", () => {
+  function decide(lane: "ba" | "sa" | "dev", action: "signoff" | "ack", options: Parameters<typeof decideLane>[5] = {}) {
+    return decideLane(defaultStateDbPath(root), root, MODULE, lane, action, options);
+  }
+
+  it("carries context (unconfirmed assumption, design risk) and approval end to end without loss", async () => {
     // ---------- BA: draft a requirement carrying an unconfirmed assumption ----------
     const req = makeItem(
       "requirement",
@@ -77,46 +93,40 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     );
     writeKnowledgeItem(req, root);
 
-    expect(roleWorkflowState(BA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW)).stage).toBe("drafting");
+    expect(roleWorkflowState(BA_WORKFLOW).stage).toBe("drafting");
 
     writeKnowledgeItem({ ...req, status: "reviewed", version: 2 }, root);
-    expect(roleWorkflowState(BA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW)).stage).toBe(
-      "awaiting-approval",
+    expect(roleWorkflowState(BA_WORKFLOW).stage).toBe(
+      "awaiting-signoff",
     );
 
     writeKnowledgeItem({ ...req, status: "approved", version: 3 }, root);
-    let baState = roleWorkflowState(BA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    let baState = roleWorkflowState(BA_WORKFLOW);
+    // The file says approved; STA does not: only the lane sign-off decision makes it binding.
+    expect(KnowledgeBase.load(root).get("REQ-101")?.status).toBe("approved");
+    expect(kb().get("REQ-101")?.status).toBe("reviewed");
     expect(baState.stage).toBe("awaiting-signoff");
     // The assumption travels rather than blocking (CLAUDE.md's rule, roleWorkflow.ts's module note).
-    expect(baState.handoff.blockers).toEqual([]);
+    // Nothing blocks but the sign-off itself: the unsigned item is not binding yet.
+    expect(baState.handoff.blockers).toEqual([expect.stringMatching(/^REQ-101 is not approved/)]);
     expect(baState.handoff.carries.some((c) => c.includes("REQ-101") && c.includes("unconfirmed assumption"))).toBe(
       true,
     );
 
-    // ---------- BA signs the lane off — a real file write, not a mock ----------
-    writeRoleWorkspace(
-      recordSignoff(loadRoleWorkspace("ba", MODULE, root, NOW), {
-        approved: approvedOwnedBy("ba"),
-        approve: true,
-        by: "Nid",
-        now: NOW,
-      }),
-      root,
-    );
+    // ---------- BA signs the lane off — a persisted trusted decision, not a mock ----------
+    await decide("ba", "signoff");
+    expect(kb().get("REQ-101")?.status).toBe("approved");
 
-    baState = roleWorkflowState(BA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    baState = roleWorkflowState(BA_WORKFLOW);
     expect(baState.stage).toBe("ready");
     expect(baState.handoff.acknowledgedByTarget).toBe(false); // SA has not read the file yet
     const carriedToSA = baState.handoff.carries;
     const handedOffIds = baState.handoff.items;
 
-    // ---------- SA acknowledges the handoff (watermark, on disk) ----------
-    writeRoleWorkspace(
-      acknowledge(loadRoleWorkspace("sa", MODULE, root, NOW), kb(), handedOffIds, "Ploy", NOW),
-      root,
-    );
+    // ---------- SA acknowledges the handoff (a second, separate decision) ----------
+    await decide("sa", "ack", { ids: handedOffIds });
 
-    baState = roleWorkflowState(BA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    baState = roleWorkflowState(BA_WORKFLOW);
     expect(baState.stage).toBe("ready");
     expect(baState.handoff.acknowledgedByTarget).toBe(true);
     // The carry named in the handoff before SA acknowledged is still named after — acknowledging does not consume it.
@@ -154,42 +164,32 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     writeKnowledgeItem(design, root);
     writeKnowledgeItem(api, root);
 
-    expect(roleWorkflowState(SA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW)).stage).toBe("drafting");
+    expect(roleWorkflowState(SA_WORKFLOW).stage).toBe("drafting");
 
     for (const item of [design, api]) writeKnowledgeItem({ ...item, status: "reviewed", version: 2 }, root);
-    expect(roleWorkflowState(SA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW)).stage).toBe(
-      "awaiting-approval",
+    expect(roleWorkflowState(SA_WORKFLOW).stage).toBe(
+      "awaiting-signoff",
     );
 
     for (const item of [design, api]) writeKnowledgeItem({ ...item, status: "approved", version: 3 }, root);
-    let saState = roleWorkflowState(SA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    let saState = roleWorkflowState(SA_WORKFLOW);
     expect(saState.stage).toBe("awaiting-signoff");
-    expect(saState.handoff.blockers).toEqual([]); // contract_name is set, feasibility is not not-feasible/unknown
+    // Only the pending sign-off blocks: contract_name is set, feasibility is not not-feasible/unknown.
+    expect(saState.handoff.blockers.every((b) => / is not approved — /.test(b))).toBe(true);
     expect(saState.handoff.carries.some((c) => c.includes("DES-101") && c.includes("feasible with risk"))).toBe(true);
     expect(saState.handoff.carries.some((c) => c.includes("ต้องแยก cache"))).toBe(true);
 
     // ---------- SA signs off ----------
-    writeRoleWorkspace(
-      recordSignoff(loadRoleWorkspace("sa", MODULE, root, NOW), {
-        approved: approvedOwnedBy("sa"),
-        approve: true,
-        by: "Ploy",
-        now: NOW,
-      }),
-      root,
-    );
+    await decide("sa", "signoff");
 
-    saState = roleWorkflowState(SA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    saState = roleWorkflowState(SA_WORKFLOW);
     expect(saState.stage).toBe("ready");
     const carriedToDEV = saState.handoff.carries;
     const saHandedOffIds = saState.handoff.items;
 
     // ---------- DEV acknowledges SA's handoff ----------
-    writeRoleWorkspace(
-      acknowledge(loadRoleWorkspace("dev", MODULE, root, NOW), kb(), saHandedOffIds, "Boss", NOW),
-      root,
-    );
-    saState = roleWorkflowState(SA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    await decide("dev", "ack", { ids: saHandedOffIds });
+    saState = roleWorkflowState(SA_WORKFLOW);
     expect(saState.handoff.acknowledgedByTarget).toBe(true);
     expect(saState.handoff.carries).toEqual(carriedToDEV); // still travels — nothing dropped it on ack
 
@@ -222,11 +222,11 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     );
     writeKnowledgeItem(task, root);
 
-    expect(roleWorkflowState(DEV_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW)).stage).toBe("drafting");
+    expect(roleWorkflowState(DEV_WORKFLOW).stage).toBe("drafting");
 
     writeKnowledgeItem({ ...task, status: "reviewed", version: 2 }, root);
-    expect(roleWorkflowState(DEV_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW)).stage).toBe(
-      "awaiting-approval",
+    expect(roleWorkflowState(DEV_WORKFLOW).stage).toBe(
+      "awaiting-signoff",
     );
 
     // Approved once qa-engineer has verified it and it is joined to the state machine —
@@ -241,24 +241,16 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
       root,
     );
 
-    let devState = roleWorkflowState(DEV_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    let devState = roleWorkflowState(DEV_WORKFLOW);
     expect(devState.stage).toBe("awaiting-signoff");
     expect(devState.handoff.to).toBeNull(); // DEV is the last lane — nowhere further for context to go
-    expect(devState.handoff.blockers).toEqual([]);
+    expect(devState.handoff.blockers).toEqual([expect.stringMatching(/^BE-201 is not approved/)]);
     expect(devState.handoff.carries).toEqual([]); // verified + joined: nothing left to carry
 
-    // ---------- DEV signs the lane off — reusing the deploy approval identity ----------
-    writeRoleWorkspace(
-      recordSignoff(loadRoleWorkspace("dev", MODULE, root, NOW), {
-        approved: approvedOwnedBy("dev"),
-        approve: true,
-        by: "Boss",
-        now: NOW,
-      }),
-      root,
-    );
+    // ---------- DEV signs the lane off — under its own dev-signoff gate ----------
+    await decide("dev", "signoff");
 
-    devState = roleWorkflowState(DEV_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    devState = roleWorkflowState(DEV_WORKFLOW);
     expect(devState.stage).toBe("ready");
 
     // ---------- Whole-chain sanity: every lane, read cold one more time, agrees on the final shape ----------
@@ -266,12 +258,12 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     expect(finalKb.get("REQ-101")?.status).toBe("approved");
     expect(finalKb.get("DES-101")?.status).toBe("approved");
     expect(finalKb.get("BE-201")?.status).toBe("approved");
-    expect(roleWorkflowState(BA_WORKFLOW, MODULE, finalKb, workspacesUnder(root, MODULE, NOW)).stage).toBe("ready");
-    expect(roleWorkflowState(SA_WORKFLOW, MODULE, finalKb, workspacesUnder(root, MODULE, NOW)).stage).toBe("ready");
-    expect(roleWorkflowState(DEV_WORKFLOW, MODULE, finalKb, workspacesUnder(root, MODULE, NOW)).stage).toBe("ready");
+    expect(roleWorkflowState(BA_WORKFLOW).stage).toBe("ready");
+    expect(roleWorkflowState(SA_WORKFLOW).stage).toBe("ready");
+    expect(roleWorkflowState(DEV_WORKFLOW).stage).toBe("ready");
   });
 
-  it("a rejected sign-off stops the lane on disk and does not silently re-ask (T08/T103)", () => {
+  it("a rejected sign-off stops the lane and does not silently re-ask (T08/T103)", async () => {
     const req = makeItem(
       "requirement",
       "REQ-102",
@@ -287,24 +279,22 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     );
     writeKnowledgeItem(req, root, { force: true });
 
-    writeRoleWorkspace(
-      recordSignoff(loadRoleWorkspace("ba", MODULE, root, NOW), {
-        approved: approvedOwnedBy("ba"),
-        approve: false,
-        by: "Nid",
-        note: "priority ผิด ต้องเป็น should",
-        now: NOW,
-      }),
-      root,
-    );
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    try {
+      const service = new LaneDecisionService({ store, verifier: testHumanVerifier() });
+      const request = service.request(root, MODULE, "ba", "signoff");
+      await service.submit({ requestId: request.requestId, approved: false, note: "priority ผิด ต้องเป็น should", credential: trustedCredential() });
+    } finally {
+      store.close();
+    }
 
-    const state = roleWorkflowState(BA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    const state = roleWorkflowState(BA_WORKFLOW);
     expect(state.stage).toBe("rejected");
     expect(state.nextAction.actor).toBe("human");
     expect(state.nextAction.what).toContain("priority ผิด");
 
     // Reloading fresh does not turn a "no" back into a pending question.
-    const reloaded = roleWorkflowState(BA_WORKFLOW, MODULE, KnowledgeBase.load(root), workspacesUnder(root, MODULE, NOW));
+    const reloaded = roleWorkflowState(BA_WORKFLOW);
     expect(reloaded.stage).toBe("rejected");
   });
 
@@ -338,7 +328,7 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
       { force: true },
     );
 
-    const state = roleWorkflowState(SA_WORKFLOW, MODULE, kb(), workspacesUnder(root, MODULE, NOW));
+    const state = roleWorkflowState(SA_WORKFLOW);
     expect(state.stage).toBe("blocked");
     expect(state.handoff.blockers.some((b) => b.includes("DES-102") && b.includes("not an engineer's call"))).toBe(
       true,

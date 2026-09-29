@@ -25,11 +25,12 @@ import {
   LedgerTransitionError,
   applyAttemptStatus,
   applyRunStatus,
-  applyTaskStatus,
   transitionVocabulary,
 } from "./vocabulary.js";
-import { LEDGER_ADAPTER_VERSION, LedgerAdapterError, ledgerTaskStatusFromPersisted, projectWaveRun, resolveExecutionAuthority } from "./adapters.js";
+import { LEDGER_ADAPTER_VERSION, ledgerTaskStatusFromPersisted } from "./adapters.js";
 import { assertAuditRoundTrip, exportRunAudit, importRunAudit } from "./auditExport.js";
+import type { StageEntryGuard } from "../orchestrator/stageGuards.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -90,6 +91,7 @@ function makeAttempt(overrides: Partial<LedgerAttempt> = {}): LedgerAttempt {
     route_basis: "level-2;task-tier:T2/task-tier:T2",
     tier: "T2",
     adapter_version: "claude-code@1",
+    runtime_version: "2.1.0",
     config_hash: HASH_A, plan_hash: HASH_C, base_revision: "abc1234",
     capability_evidence: [{ capability: "pre-tool-guard", verified: true, detail: null }],
     guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: [path.join(root, "target")] },
@@ -117,19 +119,10 @@ describe("T-V8-016 — one transition vocabulary", () => {
     expect(Object.keys(vocabulary)).toEqual(["run", "task", "attempt"]);
     expect(vocabulary.run.COMPLETED).toEqual([]);
     expect(() => applyRunStatus("R", "COMPLETED", "RUNNING")).toThrow(LedgerTransitionError);
-    try {
-      applyTaskStatus("T", "DONE", "RUNNING");
-      throw new Error("expected a refusal");
-    } catch (error) {
-      expect(error).toBeInstanceOf(LedgerTransitionError);
-      expect((error as LedgerTransitionError).allowed).toEqual([]);
-      expect((error as Error).message).toContain("reconcile the durable record");
-    }
   });
 
   it("treats a replayed transition as idempotent rather than a conflict", () => {
     expect(applyRunStatus("R", "RUNNING", "RUNNING")).toEqual({ status: "RUNNING", idempotent: true });
-    expect(applyTaskStatus("T", "CHECKPOINTED", "CHECKPOINTED").idempotent).toBe(true);
     expect(applyAttemptStatus("A", "FROZEN", "RUNNING")).toEqual({ status: "RUNNING", idempotent: false });
   });
 });
@@ -160,7 +153,7 @@ describe("T-V8-016 — transactions and crash consistency", () => {
       ledger.createRun(makeRun());
       ledger.registerTasks(makeTasks());
     });
-    try { store.transaction(() => { ledger.setTaskStatus(runId, "BE-004", "READY"); throw new Error("power cut"); }); } catch { /* expected */ }
+    try { store.transaction(() => { ledger.projectTaskStatus(runId, "BE-004", "READY"); throw new Error("power cut"); }); } catch { /* expected */ }
     store.close(); // the process ends here
 
     const reopened = new SqliteTaskStore(file);
@@ -179,8 +172,8 @@ describe("T-V8-016 — transactions and crash consistency", () => {
     store.transaction(() => {
       ledger.createRun(makeRun());
       ledger.registerTasks(makeTasks());
-      // setTaskStatus opens its own transaction internally.
-      ledger.setTaskStatus(runId, "BE-004", "READY");
+      // projectTaskStatus opens its own transaction internally.
+      ledger.projectTaskStatus(runId, "BE-004", "READY");
     });
     expect(ledger.readTask(runId, "BE-004")?.status).toBe("READY");
   });
@@ -234,31 +227,13 @@ describe("T-V8-016 — idempotency and actionable conflicts", () => {
   });
 
   it("names what is missing rather than returning an empty answer", () => {
-    expect(() => ledger.setTaskStatus(runId, "NOPE-1", "READY")).toThrow(LedgerNotFoundError);
-    expect(() => ledger.readiness("01HZZZZZZZZZZZZZZZZZZZZZZZ")).toThrow(LedgerNotFoundError);
+    expect(() => ledger.projectTaskStatus(runId, "NOPE-1", "READY")).toThrow(LedgerNotFoundError);
   });
 });
 
-describe("T-V8-016 — readiness, checkpoints and read-through state", () => {
+describe("T-V8-016 — checkpoints and read-through state", () => {
   beforeEach(() => {
     store.transaction(() => { ledger.createRun(makeRun()); ledger.registerTasks(makeTasks()); });
-  });
-
-  it("answers readiness from the frozen DAG, not from a plan file", () => {
-    expect(ledger.readiness(runId)).toEqual({ ready: ["BE-004"], waiting: [{ task_id: "FE-010", waiting_on: ["BE-004"] }], blocked: [], settled: [] });
-    ledger.setTaskStatus(runId, "BE-004", "READY");
-    ledger.setTaskStatus(runId, "BE-004", "RUNNING");
-    ledger.setTaskStatus(runId, "BE-004", "VERIFYING");
-    ledger.setTaskStatus(runId, "BE-004", "CHECKPOINTED");
-    expect(ledger.readiness(runId)).toEqual({ ready: ["FE-010"], waiting: [], blocked: [], settled: ["BE-004"] });
-  });
-
-  it("treats a blocked upstream as unsatisfiable rather than skippable", () => {
-    ledger.setTaskStatus(runId, "BE-004", "BLOCKED", { reason: "human gate" });
-    const readiness = ledger.readiness(runId);
-    expect(readiness.blocked).toEqual(["BE-004"]);
-    expect(readiness.ready).toEqual([]);
-    expect(readiness.waiting).toEqual([{ task_id: "FE-010", waiting_on: ["BE-004"] }]);
   });
 
   it("records a checkpoint once and reads retries/approvals through their own authority", () => {
@@ -314,72 +289,45 @@ describe("T-V8-016 — versioned compatibility adapters (dual-read, never dual-w
       machine: { pipeline: [AgentStage.BACKEND_ENGINEER], requiresHumanApproval: false, sequence: [TaskState.CREATED], current: TaskState.CREATED, history: [] },
       now: 1,
     });
-    const at = (current: TaskState) => ({ ...base, machine: { ...base.machine, current } });
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.CREATED))).toBe("PLANNED");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.IMPLEMENTATION))).toBe("RUNNING");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.QA))).toBe("VERIFYING");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.READY_TO_DEPLOY))).toBe("CHECKPOINTED");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.DEPLOYED))).toBe("DONE");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.BLOCKED))).toBe("BLOCKED");
-    // A human freeze is invisible to the pipeline machine but decisive for a run.
-    expect(ledgerTaskStatusFromPersisted({ ...at(TaskState.IMPLEMENTATION), paused: true })).toBe("BLOCKED");
-    expect(ledgerTaskStatusFromPersisted({ ...at(TaskState.IMPLEMENTATION), cancelled: true })).toBe("BLOCKED");
-  });
-
-  it("projects a real wave run into ledger vocabulary and leaves its files untouched", () => {
-    const waveRunId = createRunId();
-    const manifest: RunManifest = {
-      run_id: waveRunId, created_at: new Date(5_000).toISOString(), target_root: path.join(root, "target"),
-      target_id: "orders-target", knowledge_root: path.join(root, "knowledge"), module: "orders", wave: 1,
-      plan_hash: HASH_C, task_order: ["BE-004", "FE-010"], base_branch: "main", base_sha: "abc1234",
-      run_branch: `sta/run/${waveRunId}`, runtime_id: "claude-code", tier: "T2", model: "claude-opus-5",
-      max_tasks: 2, sta_version: "2.0.0",
+    // A realistic pipeline for the engine's own status projection to walk.
+    const machine = {
+      pipeline: [AgentStage.BACKEND_ENGINEER, AgentStage.QA_ENGINEER],
+      requiresHumanApproval: false,
+      sequence: [TaskState.CREATED, TaskState.IMPLEMENTATION, TaskState.QA, TaskState.READY_TO_DEPLOY, TaskState.DEPLOYED],
+      history: [],
     };
-    writeLegacyWaveRun(root, manifest);
-    for (const record of [
-      { ts: new Date(5_001).toISOString(), kind: "RUN_STARTED" as const },
-      { ts: new Date(5_002).toISOString(), kind: "RUN_ISOLATED" as const },
-      { ts: new Date(5_003).toISOString(), kind: "TASK_READY" as const, task_id: "BE-004" },
-      { ts: new Date(5_004).toISOString(), kind: "TASK_STARTED" as const, task_id: "BE-004" },
-      { ts: new Date(5_005).toISOString(), kind: "TASK_AGENT_DONE" as const, task_id: "BE-004" },
-      { ts: new Date(5_006).toISOString(), kind: "TASK_CHECKPOINTED" as const, task_id: "BE-004", sha: "def5678" },
-    ]) appendLegacyWaveRecord(root, waveRunId, record);
-    const journalBefore = fs.readFileSync(path.join(root, ".workflow", "wave-runs", waveRunId, "journal.jsonl"), "utf8");
-
-    const owners = new Map([["BE-004", AgentStage.BACKEND_ENGINEER], ["FE-010", AgentStage.FRONTEND_ENGINEER]]);
-    const projected = projectWaveRun(root, waveRunId, { taskOwners: owners });
-    expect(projected.adapter_version).toBe(LEDGER_ADAPTER_VERSION);
-    expect(projected.run.status).toBe("RUNNING");
-    expect(projected.run.boundary).toBe("next-gate");
-    // Facts a wave manifest never recorded are null, never substituted.
-    expect(projected.run.config_hash).toBeNull();
-    expect(projected.tasks.map((t) => t.task_hash)).toEqual([null, null]);
-    expect(projected.checkpoints).toEqual([
-      { run_id: waveRunId, task_id: "BE-004", attempt_id: null, sha: "def5678", packet_hash: null, at: 5_006 },
-    ]);
-    expect(projected.tasks.map((t) => [t.task_id, t.status])).toEqual([["BE-004", "CHECKPOINTED"], ["FE-010", "PLANNED"]]);
-    expect(projected.events).toHaveLength(6);
-    expect(fs.readFileSync(path.join(root, ".workflow", "wave-runs", waveRunId, "journal.jsonl"), "utf8")).toBe(journalBefore);
-
-    expect(() => projectWaveRun(root, waveRunId)).toThrow(LedgerAdapterError);
-    expect(() => projectWaveRun(root, waveRunId)).toThrow(/records no owner for BE-004/);
+    const at = (current: TaskState, cursor = 0) => ({ ...base, pipelineCursor: cursor, machine: { ...machine, current } });
+    const project = (task: ReturnType<typeof at>, options: { completionVerified?: boolean; guard?: StageEntryGuard } = {}) =>
+      ledgerTaskStatusFromPersisted(task, {
+        allTasks: [task],
+        stageEntryGuard: options.guard ?? ALLOW_EVERY_STAGE_TEST_GUARD,
+        completionVerified: options.completionVerified ?? false,
+      });
+    expect(project(at(TaskState.CREATED))).toBe("PLANNED");
+    expect(project(at(TaskState.IMPLEMENTATION))).toBe("RUNNING");
+    expect(project(at(TaskState.QA, 1))).toBe("VERIFYING");
+    expect(project(at(TaskState.READY_TO_DEPLOY, 1))).toBe("CHECKPOINTED");
+    // V13 TASK-007: DONE only when the engine's completion evidence re-verifies.
+    const deployed = { ...at(TaskState.DEPLOYED, 1), completionEvidenceId: "evd_completion" };
+    expect(project(deployed, { completionVerified: true })).toBe("DONE");
+    expect(project(deployed, { completionVerified: false })).toBe("BLOCKED");
+    expect(project(at(TaskState.DEPLOYED, 1), { completionVerified: true })).toBe("BLOCKED");
+    expect(project(at(TaskState.BLOCKED))).toBe("BLOCKED");
+    // A human freeze is invisible to the pipeline machine but decisive for a run.
+    expect(project({ ...at(TaskState.IMPLEMENTATION), paused: true })).toBe("BLOCKED");
+    expect(project({ ...at(TaskState.IMPLEMENTATION), cancelled: true })).toBe("BLOCKED");
+    // A stage the engine's own entry guard refuses waits on a person, whatever the machine says.
+    expect(project(at(TaskState.IMPLEMENTATION), { guard: () => ({ allowed: false, reason: "no handoff" }) })).toBe("BLOCKED");
   });
 
-  it("lets exactly one store claim current truth for a run id", () => {
-    const waveRunId = createRunId();
-    writeLegacyWaveRun(root, {
-      run_id: waveRunId, created_at: new Date(5_000).toISOString(), target_root: path.join(root, "target"),
-      target_id: "orders-target", knowledge_root: path.join(root, "knowledge"), module: "orders", wave: 1,
-      plan_hash: HASH_C, task_order: ["BE-004"], base_branch: "main", base_sha: "abc1234",
-      run_branch: `sta/run/${waveRunId}`, runtime_id: "claude-code", tier: "T2", model: "claude-opus-5",
-      max_tasks: 1, sta_version: "2.0.0",
-    });
-    // The same id present in BOTH stores still resolves to exactly one authority.
-    expect(resolveExecutionAuthority({ projectRoot: root, runId: waveRunId, ledgerHasRun: true }).authority).toBe("ledger");
-    expect(resolveExecutionAuthority({ projectRoot: root, runId: waveRunId, ledgerHasRun: false }).authority).toBe("legacy-wave-journal");
-    expect(() => resolveExecutionAuthority({ projectRoot: root, runId: createRunId(), ledgerHasRun: false })).toThrow(
-      /exists in neither the ledger nor/,
-    );
+  it("V13 TASK-007 — projectTaskStatus follows the engine without the transition table and records itself as a projection", () => {
+    const run = makeRun();
+    ledger.transaction(() => { ledger.createRun(run); ledger.registerTasks(makeTasks()); });
+    expect(ledger.projectTaskStatus(run.run_id, "BE-004", "RUNNING", { reason: "engineer holds it" }).status).toBe("RUNNING");
+    expect(ledger.projectTaskStatus(run.run_id, "BE-004", "RUNNING").status).toBe("RUNNING");
+    const events = ledger.eventsForRun(run.run_id).filter((event) => event.kind === "TASK_STATUS" && event.task_id === "BE-004");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ actor: "engine-projection", from: "PLANNED", to: "RUNNING", payload: { projection: true } });
   });
 
   it("refuses a ledger record written by a version this build cannot read", () => {

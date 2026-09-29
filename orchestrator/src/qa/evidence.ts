@@ -36,7 +36,7 @@ export interface EvidenceRecord {
   createdAt: number;
 }
 
-/** One finding from a previous QA round's Open Issues (`review.md`). */
+/** One finding from a previous QA round's Open Issues (`qa.md`). */
 export interface QaFindingRecord {
   id: string;
   description: string;
@@ -103,8 +103,11 @@ export interface EvidencePackageInput {
   mode: QaModeDecision;
   /** Model-reasoning effort, independent from mode's verification surface. */
   effort?: QaEffortDecision;
-  /** Controls the one mechanical instruction that exists only on the escape-hatch path. */
-  deterministicGate?: "enabled" | "disabled";
+  /**
+   * V13 TASK-017 — the deterministic gate is mandatory and always enforced;
+   * the historical "disabled" escape-hatch wording is deleted. The section
+   * below renders from the real sweep result's presence, not a caller claim.
+   */
   scope: QaScope;
   /**
    * T-V8-014 — the exact task contract this round verifies against: authored
@@ -164,17 +167,7 @@ export function buildEvidencePackage(input: EvidencePackageInput): string {
     ["## Diff summary", wrap(input.diffSummary || "(none supplied)")],
   ];
 
-  if (input.deterministicGate === "disabled") {
-    // Reached only via the orchestrator's own `--no-deterministic-gate` escape
-    // hatch — a deliberate choice not to run the sweep for this round. This
-    // records that fact; it does not ask the LLM to run the sweep itself, since
-    // a request in a prompt is not a fact and there is no verified evidence to
-    // hand over instead.
-    sections.push([
-      "## Deterministic gate: disabled",
-      "No deterministic sweep result is available for this round (`--no-deterministic-gate` was set for this run). Verify from the evidence in this package and direct inspection; do not treat the absence of a sweep result as a pass.",
-    ]);
-  } else if (input.deterministicGate === "enabled") {
+  if (input.deterministic) {
     sections.push([
       "## Deterministic gate: enabled",
       "Consume the supplied structured verification result; do not re-run the mechanical checks.",

@@ -1,18 +1,22 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { inspectMarkerBlock } from "../targetcli/knowledgeRender.js";
 import { AgentStage } from "../types.js";
+import { signAttemptGrant, type AttemptGrantToken } from "../governance/attemptGrant.js";
 import {
+  ATTEMPT_GRANT_KEY_PATH,
+  ATTEMPT_GRANT_TOKEN_PATH,
   GUARD_RULES_CLOSE,
   GUARD_RULES_OPEN,
   GUARD_RULE_HOSTS,
   GUARD_STACK_RULES_ENV,
   GUARD_TARGET_WORK_ROOTS_ENV,
   PathDeniedError,
-  SESSION_ROLE_PATH,
+  UNASSIGNED_SESSION_DENY,
   UNIVERSAL_DENY,
   WORKSPACE_BA_ARTIFACTS,
   FRAMEWORK_PAYLOAD_ARTIFACTS,
@@ -27,6 +31,7 @@ import {
   serializeGuardTargetWorkRoots,
   targetPathRules,
   toRepoRelative,
+  unassignedSessionDenyWhy,
 } from "./pathPermissions.js";
 
 describe("matchesGlob", () => {
@@ -113,7 +118,7 @@ describe("the shipped contracts' path rules", () => {
       [AgentStage.SYSTEM_ANALYST, "_docs/module/crm/design.md", "_docs/module/crm/plan.md"],
       [AgentStage.PROJECT_MANAGER, "_docs/module/crm/plan.md", "_docs/module/crm/design.md"],
       [AgentStage.TEST_PLANNER, "_docs/module/crm/test-plan.md", "_docs/module/crm/plan.md"],
-      [AgentStage.SECURITY, "_docs/module/crm/security.md", "_docs/module/crm/review.md"],
+      [AgentStage.SECURITY, "_docs/module/crm/security.md", "_docs/module/crm/qa.md"],
       [AgentStage.DEVOPS, "_docs/module/crm/deploy.md", "_docs/module/crm/design.md"],
     ];
     for (const [agent, own, other] of cases) {
@@ -127,7 +132,7 @@ describe("the shipped contracts' path rules", () => {
   it("stops an engineer writing any module document", () => {
     for (const agent of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]) {
       const rules = pathRulesFor(agent);
-      for (const doc of ["design.md", "requirement.md", "plan.md", "test-plan.md", "review.md"]) {
+      for (const doc of ["design.md", "requirement.md", "plan.md", "test-plan.md", "qa.md"]) {
         expect(canWritePath(rules, `_docs/module/crm/${doc}`).allowed, `${agent} ${doc}`).toBe(false);
       }
     }
@@ -153,7 +158,7 @@ describe("the shipped contracts' path rules", () => {
     }
   });
 
-  it("lets qa-engineer edit plan.md, which is its one exception beyond review.md", () => {
+  it("lets qa-engineer edit plan.md, which is its one exception beyond qa.md", () => {
     expect(canWritePath(pathRulesFor(AgentStage.QA_ENGINEER), "_docs/module/crm/plan.md").allowed).toBe(true);
   });
 
@@ -251,7 +256,7 @@ describe("V10 TASK-021 — the Framework payload is denied per stage, not per wo
     expect(canWritePath(permissive, "_docs/module/crm/requirement.md").allowed).toBe(true);
     expect(canWritePath(permissive, "knowledge/sales/requirement/REQ-1.yaml").allowed).toBe(true);
     expect(canWritePath(permissive, "src/index.ts").allowed).toBe(true);
-    expect(canWritePath(permissive, "_docs/module/crm/review.md").allowed).toBe(true);
+    expect(canWritePath(permissive, "_docs/module/crm/qa.md").allowed).toBe(true);
   });
 
   it("TypeScript artifact lists match .claude/hooks/block-path-permissions.js and .opencode/plugin/sta-guards.js exactly", () => {
@@ -281,17 +286,21 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
   const allHostPaths = () => [...GUARD_RULE_HOSTS.map((host) => host.path), GUARD_MIRROR];
 
   interface GeneratedGuardRules {
-    SESSION_ROLE_REL_PATH: string;
+    ATTEMPT_GRANT_REL_PATH: string;
+    ATTEMPT_GRANT_KEY_REL_PATH: string;
     UNIVERSAL_DENY: string[];
     WORKSPACE_BA_ARTIFACTS: string[];
     FRAMEWORK_PAYLOAD_ARTIFACTS: string[];
+    UNASSIGNED_SESSION_DENY: string[];
     matchesGlob(pattern: string, target: string): boolean;
     frameworkPayloadDenial(relative: string, role: string | null): string | null;
     frameworkPayloadDenyWhy(pattern: string): string;
-    sessionRoleFromText(text: unknown): string | null;
-    declaredStackRulesFromText(text: unknown): { write: string[]; deny: string[] };
-    sessionRole(envRole: string | undefined, declaredText: unknown): string | null;
-    stackPathRules(declaredText?: unknown): { write: string[]; deny: string[] };
+    unassignedSessionDenial(relative: string): string | null;
+    unassignedSessionDenyWhy(pattern: string): string;
+    canonicalGrantJson(value: unknown): string;
+    grantSignatureValid(token: unknown, createHmac: typeof import("node:crypto").createHmac, keyHex: string): boolean;
+    attemptGrantFromText(text: unknown, createHmac: typeof import("node:crypto").createHmac, keyHex: string, nowMs: number): { grantId: string; role: string; stack: { write: string[]; deny: string[] } } | null;
+    stackPathRules(grant?: { stack: { write: string[]; deny: string[] } } | null): { write: string[]; deny: string[] };
     boundReadOnlyTarget(nodePath: typeof path, target: string): string | null;
     boundReadOnlyWhy(targetId: string, role: string | null): string;
     knowledgeArtifactDenial(nodePath: typeof path, target: string, role: string | null): { rel: string; why: string } | null;
@@ -305,7 +314,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
       .join("\n");
     return new Function(
-      `${body}\nreturn { SESSION_ROLE_REL_PATH, UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, FRAMEWORK_PAYLOAD_ARTIFACTS, matchesGlob, frameworkPayloadDenial, frameworkPayloadDenyWhy, sessionRoleFromText, declaredStackRulesFromText, sessionRole, stackPathRules, boundReadOnlyTarget, boundReadOnlyWhy, knowledgeArtifactDenial, knowledgeSelectionIncompleteWhy };`,
+      `${body}\nreturn { ATTEMPT_GRANT_REL_PATH, ATTEMPT_GRANT_KEY_REL_PATH, UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, FRAMEWORK_PAYLOAD_ARTIFACTS, UNASSIGNED_SESSION_DENY, matchesGlob, frameworkPayloadDenial, frameworkPayloadDenyWhy, unassignedSessionDenial, unassignedSessionDenyWhy, canonicalGrantJson, grantSignatureValid, attemptGrantFromText, stackPathRules, boundReadOnlyTarget, boundReadOnlyWhy, knowledgeArtifactDenial, knowledgeSelectionIncompleteWhy };`,
     )() as GeneratedGuardRules;
   }
 
@@ -314,6 +323,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     expect(generated.UNIVERSAL_DENY).toEqual([...UNIVERSAL_DENY]);
     expect(generated.WORKSPACE_BA_ARTIFACTS).toEqual([...WORKSPACE_BA_ARTIFACTS]);
     expect(generated.FRAMEWORK_PAYLOAD_ARTIFACTS).toEqual([...FRAMEWORK_PAYLOAD_ARTIFACTS]);
+    expect(generated.UNASSIGNED_SESSION_DENY).toEqual([...UNASSIGNED_SESSION_DENY]);
   });
 
   /**
@@ -342,7 +352,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       "knowledge/sales/requirement/REQ-1.yaml",
       "_docs/module/crm/requirement.md",
       "_docs/module/crm/uxui/design.md",
-      "_docs/module/crm/review.md",
+      "_docs/module/crm/qa.md",
       "_docs/status.md",
       "decisions/DR-001.yaml",
       "targets.yaml",
@@ -585,14 +595,15 @@ describe("V11 TASK-020 — the managed-session selection marker in the knowledge
   });
 });
 
-describe("declared session role — the desktop role-play identity channel (V12)", () => {
+describe("STA-issued attempt grant — the direct-mode identity channel (V13 TASK-012)", () => {
+  const KEY = "a".repeat(64);
+
   /** Same recipe as the T-V5-020 suite: executes the rendered block the way a hook host does. */
   function evaluateBlock(): {
-    SESSION_ROLE_REL_PATH: string;
-    sessionRoleFromText(text: unknown): string | null;
-    declaredStackRulesFromText(text: unknown): { write: string[]; deny: string[] };
-    sessionRole(envRole: string | undefined, declaredText: unknown): string | null;
-    stackPathRules(declaredText?: unknown): { write: string[]; deny: string[] };
+    ATTEMPT_GRANT_REL_PATH: string;
+    ATTEMPT_GRANT_KEY_REL_PATH: string;
+    attemptGrantFromText(text: unknown, createHmac: typeof import("node:crypto").createHmac, keyHex: string, nowMs: number): { grantId: string; role: string; stack: { write: string[]; deny: string[] } } | null;
+    stackPathRules(grant?: { stack: { write: string[]; deny: string[] } } | null): { write: string[]; deny: string[] };
     frameworkPayloadDenial(relative: string, role: string | null): string | null;
     frameworkPayloadDenyWhy(pattern: string): string;
   } {
@@ -601,67 +612,97 @@ describe("declared session role — the desktop role-play identity channel (V12)
       .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
       .join("\n");
     return new Function(
-      `${body}\nreturn { SESSION_ROLE_REL_PATH, sessionRoleFromText, declaredStackRulesFromText, sessionRole, stackPathRules, frameworkPayloadDenial, frameworkPayloadDenyWhy };`,
+      `${body}\nreturn { ATTEMPT_GRANT_REL_PATH, ATTEMPT_GRANT_KEY_REL_PATH, attemptGrantFromText, stackPathRules, frameworkPayloadDenial, frameworkPayloadDenyWhy };`,
     )();
   }
 
-  it("renders the declared-role path from the one TypeScript constant", () => {
-    expect(evaluateBlock().SESSION_ROLE_REL_PATH).toBe(SESSION_ROLE_PATH);
+  /** Signs a token exactly the way STA's own issuer does, so the block is tested against real grant bytes. */
+  function signedToken(over: Partial<AttemptGrantToken> = {}, keyHex = KEY): AttemptGrantToken {
+    const unsigned = {
+      attempt_grant: 1,
+      grant_id: `agr_${"b".repeat(32)}`,
+      role: "qa-engineer",
+      stage: "qa-engineer",
+      task_id: "T-GRANT",
+      contract_digest: "c".repeat(64),
+      scope: { write: ["_docs/status.md"], deny: [], stack: { write: ["server/**"], deny: [] } },
+      work_roots: [],
+      knowledge_root: null,
+      issued_at: "2026-09-25T00:00:00.000Z",
+      expires_at: "2026-09-26T00:00:00.000Z",
+      nonce: "d".repeat(32),
+      ...over,
+    };
+    return signAttemptGrant(unsigned as Omit<AttemptGrantToken, "signature">, keyHex);
+  }
+
+  const NOW = Date.parse("2026-09-25T12:00:00.000Z");
+
+  it("renders the token and key paths from the one TypeScript constants", () => {
+    const generated = evaluateBlock();
+    expect(generated.ATTEMPT_GRANT_REL_PATH).toBe(ATTEMPT_GRANT_TOKEN_PATH);
+    expect(generated.ATTEMPT_GRANT_KEY_REL_PATH).toBe(ATTEMPT_GRANT_KEY_PATH);
   });
 
-  it("sessionRoleFromText accepts exactly the shape the session-role CLI writes", () => {
+  it("accepts exactly a validly-signed, unexpired token and hands back the granted identity", () => {
     const generated = evaluateBlock();
-    expect(generated.sessionRoleFromText(JSON.stringify({ role: "backend-engineer", declared_at: "2026-09-22T00:00:00Z" }))).toBe("backend-engineer");
-    expect(generated.sessionRoleFromText(JSON.stringify({ role: "qa-engineer", stack: { write: ["a/**"], deny: [] } }))).toBe("qa-engineer");
-    // Absent, unreadable or off-shape is "no declared role" — never a guess.
-    for (const bad of [null, undefined, "", "not json", "[]", '"str"', JSON.stringify({}), JSON.stringify({ role: "" }), JSON.stringify({ role: "Not A Role" }), JSON.stringify({ role: "backend_engineer" }), JSON.stringify({ role: 7 })]) {
-      expect(generated.sessionRoleFromText(bad), String(bad)).toBeNull();
+    const grant = generated.attemptGrantFromText(JSON.stringify(signedToken()), createHmac, KEY, NOW);
+    expect(grant).toMatchObject({ grantId: `agr_${"b".repeat(32)}`, role: "qa-engineer", stack: { write: ["server/**"], deny: [] } });
+  });
+
+  it("a self-written role file is worthless: unsigned, tampered or forged tokens grant nothing", () => {
+    const generated = evaluateBlock();
+    // The retired self-declaration shape, hand-written exactly as the old
+    // channel accepted it: no signature, no authority.
+    expect(generated.attemptGrantFromText(JSON.stringify({ role: "backend-engineer", declared_at: "2026-09-25T00:00:00Z" }), createHmac, KEY, NOW)).toBeNull();
+    // A real token with one field edited after signing.
+    const tampered = signedToken();
+    tampered.role = "backend-engineer";
+    expect(generated.attemptGrantFromText(JSON.stringify(tampered), createHmac, KEY, NOW)).toBeNull();
+    // A token signed under a different key (the session guessed one).
+    expect(generated.attemptGrantFromText(JSON.stringify(signedToken({}, "f".repeat(64))), createHmac, KEY, NOW)).toBeNull();
+    // Off-shape anything is "no grant", never an error.
+    const wrongVersion = JSON.parse(JSON.stringify(signedToken()));
+    wrongVersion.attempt_grant = 2;
+    for (const bad of [null, undefined, "", "not json", "[]", JSON.stringify({}), JSON.stringify(wrongVersion), JSON.stringify(signedToken({ role: "Not A Role" }))]) {
+      expect(generated.attemptGrantFromText(bad, createHmac, KEY, NOW), String(bad)).toBeNull();
     }
   });
 
-  it("sessionRole prefers env identity outright and falls back to the declaration only without one", () => {
+  it("an expired grant grants nothing, checked against the clock the hook is given", () => {
     const generated = evaluateBlock();
-    const declaration = JSON.stringify({ role: "qa-engineer" });
-    expect(generated.sessionRole("backend-engineer", declaration)).toBe("backend-engineer");
-    expect(generated.sessionRole(undefined, declaration)).toBe("qa-engineer");
-    expect(generated.sessionRole(undefined, "not json")).toBeNull();
-    expect(generated.sessionRole(undefined, null)).toBeNull();
+    const token = JSON.stringify(signedToken({ expires_at: "2026-09-25T00:00:00.000Z" }));
+    expect(generated.attemptGrantFromText(token, createHmac, KEY, NOW)).toBeNull();
+    // And the exact boundary: one millisecond before expiry still holds.
+    const boundary = JSON.stringify(signedToken({ expires_at: "2026-09-25T12:00:00.001Z" }));
+    expect(generated.attemptGrantFromText(boundary, createHmac, KEY, NOW)).not.toBeNull();
   });
 
-  it("the declaration's stack half merges beside the env channel, malformed dropping out empty", () => {
+  it("the grant's stack half merges beside the env channel, malformed dropping out empty", () => {
     const generated = evaluateBlock();
-    const declaration = JSON.stringify({ role: "backend-engineer", stack: { write: ["server/**"], deny: ["dist/**"] } });
+    const grant = { stack: { write: ["server/**"], deny: ["dist/**"] } };
     const saved = process.env[GUARD_STACK_RULES_ENV];
     try {
       delete process.env[GUARD_STACK_RULES_ENV];
-      expect(generated.stackPathRules(declaration)).toEqual({ write: ["server/**"], deny: ["dist/**"] });
-      expect(generated.stackPathRules()).toEqual({ write: [], deny: [] });
+      expect(generated.stackPathRules(grant)).toEqual({ write: ["server/**"], deny: ["dist/**"] });
+      expect(generated.stackPathRules(null)).toEqual({ write: [], deny: [] });
 
       process.env[GUARD_STACK_RULES_ENV] = JSON.stringify({ write: ["src/**"], deny: [] });
-      expect(generated.stackPathRules(declaration)).toEqual({ write: ["src/**", "server/**"], deny: ["dist/**"] });
-
-      // A declaration whose stack half is garbage grants nothing extra — the
-      // failure is stricter than intended, never looser.
-      for (const bad of ["{not json", JSON.stringify({ role: "backend-engineer" }), JSON.stringify({ role: "backend-engineer", stack: { write: "server/**" } })]) {
-        expect(generated.stackPathRules(bad), bad).toEqual({ write: ["src/**"], deny: [] });
-      }
+      expect(generated.stackPathRules(grant)).toEqual({ write: ["src/**", "server/**"], deny: ["dist/**"] });
     } finally {
       if (saved === undefined) delete process.env[GUARD_STACK_RULES_ENV];
       else process.env[GUARD_STACK_RULES_ENV] = saved;
     }
   });
 
-  it("a declared role turns the per-stage layer on with no env at all, exactly as STA_ROLE would", () => {
+  it("a granted role turns the per-stage layer on with no env at all, exactly as STA_ROLE would", () => {
     const generated = evaluateBlock();
-    const declaration = JSON.stringify({ role: "backend-engineer" });
-    // The same denial an orchestrated backend-engineer stage gets, now through
-    // the declaration alone.
-    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", generated.sessionRole(undefined, declaration))).toBe(
+    const grant = generated.attemptGrantFromText(JSON.stringify(signedToken()), createHmac, KEY, NOW);
+    expect(grant && generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", grant.role)).toBe(
       generated.frameworkPayloadDenyWhy("contracts/**"),
     );
-    // And without a declaration (or with an off-shape one) the layer stays off.
-    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", generated.sessionRole(undefined, "not json"))).toBeNull();
-    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", generated.sessionRole(undefined, null))).toBeNull();
+    // Without a grant (or with an unverified one) the layer stays off.
+    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", null)).toBeNull();
   });
 });
 
@@ -775,14 +816,16 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
     expect([...backend.write].sort()).toEqual(
       ["README.md", "_docs/status-archive.md", "_docs/status.md", "app/api/**", "package.json", "prisma/**", "server/**", "src/lib/**", "src/server/**"].sort(),
     );
-    expect([...backend.deny].sort()).toEqual(["_docs/module/**", ".claude/**", "components/**", "contracts/**"].sort());
+    expect([...backend.deny].sort()).toEqual(
+      ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/**", ".claude/**", "components/**", "contracts/**"].sort(),
+    );
 
     const frontend = pathRulesFor("frontend-engineer", workspace);
     expect([...frontend.write].sort()).toEqual(
       ["_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "public/**", "src/app/**", "src/components/**", "styles/**"].sort(),
     );
     expect([...frontend.deny].sort()).toEqual(
-      ["_docs/module/**", ".claude/**", "app/api/**", "contracts/**", "prisma/**", "server/**"].sort(),
+      ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/**", ".claude/**", "app/api/**", "contracts/**", "prisma/**", "server/**"].sort(),
     );
   });
 
@@ -837,13 +880,15 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
 describe("V10 TASK-010 — target-side write rules", () => {
   const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-  it("grants the whole Target instead of the role×stack allowlist", () => {
+  it("scopes Target writes to the role×stack allowlist — a root binding alone grants no path (V13 TASK-011)", () => {
     const rules = targetPathRules(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT);
-    expect(rules.write).toEqual(["**"]);
-    expect(canWritePath(rules, "infra/main.tf").allowed).toBe(true);
-    expect(canWritePath(rules, "ClassOnlineWeb/Views/Home/Index.cshtml").allowed).toBe(true);
-    // The role×stack rules would have refused both of these.
-    expect(canWritePath(pathRulesFor(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT), "infra/main.tf").allowed).toBe(false);
+    expect(rules.write).toEqual(pathRulesFor(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT).write);
+    expect(rules.write).not.toContain("**");
+    // What the contract+stack grant holds on the Knowledge side holds on the
+    // Target side; everything else is refused by default.
+    expect(canWritePath(rules, "server/routes/deal.ts").allowed).toBe(true);
+    expect(canWritePath(rules, "infra/main.tf").allowed).toBe(false);
+    expect(canWritePath(rules, "ClassOnlineWeb/Views/Home/Index.cshtml").allowed).toBe(false);
   });
 
   it("still refuses Knowledge artifacts and framework payload", () => {

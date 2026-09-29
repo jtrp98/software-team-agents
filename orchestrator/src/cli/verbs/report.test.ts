@@ -99,7 +99,7 @@ function createFixtureGitRepo(): { dir: string; cleanup: () => void } {
     "utf8"
   );
   fs.writeFileSync(
-    path.join(modDir, "review.md"),
+    path.join(modDir, "qa.md"),
     `# Review\n\n## Open Issues — all phases\n| Issue | Phase | Routes to | Blocking |\n|---|---|---|---|\n| bug-1 | 1 | backend-engineer | non-blocking |\n`,
     "utf8"
   );
@@ -166,7 +166,7 @@ describe("T-V6-018 — sta report verb", () => {
         ],
         allPhases: [1, 2],
       },
-      review: {
+      qa: {
         moduleName: "test-mod",
         absent: false,
         outcome: "⚠️ Partial (FULL)",
@@ -236,7 +236,7 @@ describe("T-V6-018 — sta report verb", () => {
     // 2. Existing blocks and the additive run section are present
     expect(html).toContain("1. Modules × Phases Matrix");
     expect(html).toContain("2. Current Phase Plan (Phase 1)");
-    expect(html).toContain("3. Open Issues / Reviews");
+    expect(html).toContain("3. Open Issues / QA");
     expect(html).toContain("4. Working Tree Status");
     expect(html).toContain("5. Bounded Runs");
 
@@ -318,7 +318,7 @@ describe("T-V6-018 — sta report verb", () => {
       overallStatus: "green",
       status: { absent: true },
       plan: { moduleName: "test-mod", currentPhase: 1, tasks: [], allPhases: [], absent: true },
-      review: { moduleName: "test-mod", absent: true, openIssues: [] },
+      qa: { moduleName: "test-mod", absent: true, openIssues: [] },
       changed: {
         projectRoot: "C:\\mock\\root",
         isGit: true,
@@ -346,7 +346,7 @@ describe("T-V6-018 — sta report verb", () => {
       overallStatus: "green",
       status: { absent: true },
       plan: { moduleName: "test-mod", currentPhase: 1, tasks: [], allPhases: [], absent: true },
-      review: { moduleName: "test-mod", absent: true, openIssues: [] },
+      qa: { moduleName: "test-mod", absent: true, openIssues: [] },
       changed: {
         projectRoot: "C:\\mock\\root",
         isGit: true,
@@ -411,7 +411,7 @@ describe("T-V6-018 — sta report verb", () => {
     expect(generateHtmlReport({ ...mockReportBase, codeIntel: undefined })).not.toContain("Code Intelligence");
   });
 
-  it("handles missing review.md and plan.md gracefully with stated absences", () => {
+  it("handles missing qa.md and plan.md gracefully with stated absences", () => {
     const absentReport: ReportData = {
       projectName: "absent-project",
       generatedAt: "2026-09-06T12:00:00.000Z",
@@ -426,7 +426,7 @@ describe("T-V6-018 — sta report verb", () => {
         allPhases: [],
         absent: true,
       },
-      review: {
+      qa: {
         moduleName: "nonexistent",
         absent: true,
         openIssues: [],
@@ -448,8 +448,8 @@ describe("T-V6-018 — sta report verb", () => {
 
     expect(html).toContain("status.md absent");
     expect(html).toContain("plan.md absent");
-    expect(html).toContain("No open reviews:");
-    expect(html).toContain("<code>_docs/module/nonexistent/review.md</code> absent");
+    expect(html).toContain("No open QA issues:");
+    expect(html).toContain("<code>_docs/module/nonexistent/qa.md</code> absent");
     expect(html).toContain("Working tree clean — 0 changed files.");
   });
 

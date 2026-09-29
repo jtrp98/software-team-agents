@@ -30,9 +30,9 @@ permissions:
   capabilities: [read, write_docs]
   # Writes only its own lane artifact folder and its own knowledge kind. knowledge/_sources/** is read-only:
   # people place export files there, the agent only reads them.
-  read: [".claude/agents/uxui-designer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/uxui/**", "_docs/status-archive.md", "_docs/status.md", "knowledge/*/ux-design/**", "knowledge/_sources/design/**"]
+  read: [".claude/agents/uxui-designer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/qa.md", "_docs/module/*/uxui/**", "_docs/status-archive.md", "_docs/status.md", "knowledge/*/ux-design/**", "knowledge/_sources/design/**"]
   write: ["_docs/module/*/uxui/**", "knowledge/*/ux-design/**"]
-  deny: ["_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "app/**", "src/**", "components/**", "server/**", "prisma/**", "styles/**", "public/**", "contracts/**", ".claude/**", "knowledge/_sources/**", "workflows/**", "stacks/**"]
+  deny: ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/qa.md", "app/**", "src/**", "components/**", "server/**", "prisma/**", "styles/**", "public/**", "contracts/**", ".claude/**", "knowledge/_sources/**", "workflows/**", "stacks/**"]
 tools: [Read, Glob, Grep, Write, Edit]
 states: [IMPLEMENTATION]
 capability:

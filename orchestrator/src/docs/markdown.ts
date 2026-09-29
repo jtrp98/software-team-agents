@@ -90,13 +90,3 @@ export function firstTable(text: string): MarkdownTable {
   }
   return { header, rows };
 }
-
-/** Every `- [ ]` / `- [x]` line, with whether it was ticked. */
-export function checkboxLines(text: string): Array<{ done: boolean; text: string }> {
-  const out: Array<{ done: boolean; text: string }> = [];
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*[-*]\s+\[([ xX])\]\s+(.*)$/.exec(line);
-    if (match) out.push({ done: match[1].toLowerCase() === "x", text: match[2].trim() });
-  }
-  return out;
-}

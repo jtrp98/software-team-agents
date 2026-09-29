@@ -47,6 +47,13 @@ export class BootstrapNotSettledError extends Error {
   }
 }
 
+export class UntrustedHumanValidationError extends Error {
+  constructor() {
+    super("bootstrap validation requires a trusted human decision record; a supplied name is not approval evidence");
+    this.name = "UntrustedHumanValidationError";
+  }
+}
+
 /** Idempotent: an existing state file is returned as-is, never reset — bootstrap starts once per project/module. */
 export function initBootstrap(
   module: string | null = null,
@@ -135,13 +142,11 @@ export function recordHumanValidation(
   const state = requireState(projectRoot);
   const settled = state.stages.every((s) => s.status === "done" || s.status === "skipped");
   if (!settled) throw new BootstrapNotSettledError();
-
-  state.validated_by = validatedBy;
-  state.validated_at = now;
-  state.status = computeStatus(state);
-  state.updated_at = now;
-  writeBootstrapState(state, projectRoot);
-  return state;
+  // TASK-001 has no configured trusted human channel. Keep the persisted
+  // bootstrap and its Knowledge items unchanged until one exists.
+  void validatedBy;
+  void now;
+  throw new UntrustedHumanValidationError();
 }
 
 export { ALL_STAGES };

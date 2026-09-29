@@ -51,13 +51,13 @@ sta resume   --task-id <id> --module <name> [--root <name>]          # continue 
 sta retry    --task-id <id> --module <name> [--root <name>]          # same as resume
 sta pause    --task-id <id>                          # freeze; run/resume/retry refuse
 sta cancel   --task-id <id> [--reason <text>]        # ปิด task ถาวร
-sta approve  <task-id> [--yes|--no]                  # resolve human gate ของ task
+sta approve  <task-id> --request <request-id> [--yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   # resolve human gate ผ่าน Controller chat relay — bare `--yes/--no` ไม่มี chat reference ถูกปฏิเสธ
 sta status   [<task-id>] [--watch]                   # ทุก task หรือ task เดียว
 sta audit    <task-id> [--decisions]                 # WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail
 ```
 
 exit codes ของ `run`/`retry`: `0` deployed · `1` blocked · `2` unknown gate · `3` rejected โดยคน ·
-`4` parked — มี gate รอ `sta approve <task-id> --yes|--no`
+`4` parked — มี gate รอ human decision ที่ Controller แสดงใน bubble chat แล้ว relay ผ่าน `sta approve`/`sta roles`
 
 ### Observation / report
 
@@ -82,18 +82,28 @@ sta policy [<area>] [<section>] [--json]             # อ่าน policies/ �
 ### Roles / Knowledge lanes (BA · SA · UXUI · DEV)
 
 ```bash
-sta roles                                        # ทุก lane ยืนตรงไหนของ module
-sta roles review REQ-101 --as system-analyst     # draft → reviewed (พร้อม checklist)
-sta roles approve REQ-101 --by "<ชื่อคน>"         # reviewed → approved (คนเท่านั้น)
-sta roles signoff ba --by "<ชื่อคน>"              # ปิด gate ของ lane ตัวเอง [--reject] [--note]
-sta roles ack sa REQ-101 --by "<ชื่อคน>"          # record ว่าคนใน lane เห็น item แล้ว
+sta roles                                        # ทุก lane ยืนตรงไหนของ module (+ lane request ที่ pending)
+sta roles signoff ba --module <name>             # เปิด lane request → Controller แสดงใน bubble chat (chat-relay) → exit 4 รอคำตอบ
+sta roles signoff ba --module <name> --request <request-id> [--yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   # relay คำตอบเดิมของ Human พร้อม chat reference → บันทึก decision
+sta roles ack sa [REQ-101,...] --module <name> [--request <request-id>]   # คนใน lane ผู้รับยืนยันว่าเห็น version เหล่านี้แล้ว
 sta roles inbox [ba|sa|uxui|dev]                 # lane นี้มีอะไรต้องดู
 sta roles impact REQ-101                         # lane ไหนจะโดนกระทบถ้าแก้ item นี้
 sta roles context dev                            # lane นี้เห็นอะไรได้บ้าง
 ```
 
-lane ที่มีจริง: `ba | sa | uxui | dev` — acknowledge/signoff เป็น human act บันทึกใน
-`knowledge/_roles/**` (agent เขียนไฟล์นี้ไม่ได้ทุกกรณี) โมเดลเต็มอยู่ที่
+lane ที่มีจริง: `ba | sa | uxui | dev` — sign-off และ ack เป็น human decision แยกกันสองครั้ง
+(V13 TASK-028) ผ่าน trusted channel เดียวกับ `sta approve` และบันทึกใน lane ledger ของ
+STA state DB เท่านั้น: gate type ต่อ lane (`ba-signoff`, `sa-signoff`, `uxui-signoff`, `dev-signoff`,
+`ba-ack`, `sa-ack`, `uxui-ack`, `dev-ack`). ช่องทางตัดสินเดียวคือ **Controller chat relay** (V13 TASK-027,
+`req.md` §25): STA เปิด pending request แล้ว Controller แสดงใน bubble chat — request ID, gate type, scope,
+item versions/digests และข้อความที่ต้องตอบ (บรรทัดแรก `approve <request-id>` หรือ `reject <request-id>`);
+คำตอบเดิมของ Human ถูก relay กลับพร้อม conversation/message ID และ actor (`--chat-actor-id`) หรือแจ้งชัดว่า
+host ไม่เปิดเผย actor (`--chat-actor-unavailable`); STA ตรวจ pending, scope, replay และ item version ก่อนบันทึก
+— แต่ STA ตรวจความแท้ของ actor/message เองไม่ได้ (เป็นคำรับรองของ Controller ซึ่ง Human ยอมรับความเสี่ยงนี้
+แล้วอย่างชัดเจน) และไม่มี fallback channel; sign-off ทำให้ item
+ของ lane เป็น approved ด้วย (ไม่มี `roles approve` แยก) และผูก `{id, version, digest}` — item เปลี่ยน =
+stale. ไม่มีคำตอบที่ผูกกับ request ถูกต้อง = request ค้าง pending (exit 4/5). `--by`, ไฟล์ `knowledge/_roles/**` และ `status: approved`
+ในไฟล์ item ไม่ใช่ authority; `roles review`/`roles approve` ถูกปฏิเสธ. โมเดลเต็มอยู่ที่
 [`knowledge/README.md`](../knowledge/README.md) § Role workspaces
 
 ### Install / machine config / diagnostics
@@ -146,11 +156,9 @@ flag เหล่านี้เลือก workflow ที่ right-size — �
 
 | Flag | ค่า/ผล |
 |---|---|
-| `--runtime <claude-code|codex|opencode|antigravity>` | เลือก runner สำหรับ run นี้ (precedence สูงสุด) |
+| `--runtime <claude-code|codex|opencode|antigravity|zcode>` | เลือก runner สำหรับ run นี้ (precedence สูงสุด) |
 | `--model <name>` | explicit model override สำหรับทุก stage ของ run นี้; runtime ปฏิเสธ model ที่มันใช้ไม่ได้ |
 | `--effort <name>` | explicit effort override สำหรับทุก stage ของ run นี้; adapter ปฏิเสธ vocabulary/capability ที่มันใช้ไม่ได้ |
-| `--no-qa-optimization` | กลับไปใช้ executor QA แบบก่อน optimization สำหรับ task นี้; ไม่ใช่ QA skip |
-| `--no-deterministic-gate` | explicit escape hatch ปิด deterministic pre-check สำหรับ task นี้; default gate เปิด |
 | `--token-budget <n>` | positive integer, post-hoc task token ceiling; ไม่ใช่ pre-spawn context cap |
 | `--mode <single|auto|manual>` | **ถอดออกแล้ว** — error พร้อมชี้ไป `--runtime`/`--model`/`routing.by_role` |
 
@@ -171,7 +179,7 @@ registry เดียวใน `orchestrator/src/cli/checkers.ts` — ตรว�
 `--check-escalation-policy` · `--check-workspace` (workspace.yaml + misplaced docs) · `--check-repos` ·
 `--check-environments` · `--check-doc-structure` · `--check-doc-size` ·
 `--check-plan` (plan.md เป็น dependency graph) · `--check-knowledge` · `--check-installation` ·
-`--check-roles` · `--check-git-ownership` (git mutation อยู่ใน `orchestrator/src/git/` เท่านั้น) ·
+`--check-git-ownership` (git mutation อยู่ใน `orchestrator/src/git/` เท่านั้น) ·
 `--build-templates <out-dir>` · `--version`
 
 ---

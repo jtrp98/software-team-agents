@@ -37,12 +37,13 @@ import type { KnowledgeItem } from "./knowledgeModel.js";
 
 export type ViewName = "business" | "architecture" | "uxui" | "technical" | "all";
 
-/** Which knowledge kinds a document category carries. `review.md`, `security.md` and code are not knowledge kinds — they are records and artefacts, so they map to nothing. */
+/** Which knowledge kinds a document category carries. `review.md`, `qa.md`, `security.md` and code are not knowledge kinds — they are records and artefacts, so they map to nothing. */
 export const KINDS_BY_CATEGORY: Record<ContextCategory, KnowledgeKind[]> = {
   [ArtifactType.REQUIREMENTS]: ["requirement", "business-rule", "domain"],
   [ArtifactType.DESIGN]: ["architecture", "api", "db-schema", "domain"],
   [ArtifactType.PLAN]: ["task"],
   [ArtifactType.TEST_PLAN]: ["test"],
+  [ArtifactType.REVIEW_REPORT]: [],
   [ArtifactType.QA_REPORT]: [],
   [ArtifactType.SECURITY_REPORT]: [],
   // A handoff only points at authoritative items; it carries no new kind.
@@ -79,6 +80,7 @@ export const VIEW_OF: Record<AgentStage, ViewName> = {
   [AgentStage.UXUI_DESIGNER]: "uxui",
   [AgentStage.BACKEND_ENGINEER]: "technical",
   [AgentStage.FRONTEND_ENGINEER]: "technical",
+  [AgentStage.REVIEWER]: "technical",
   [AgentStage.QA_ENGINEER]: "technical",
   [AgentStage.SECURITY]: "technical",
   [AgentStage.DEVOPS]: "technical",

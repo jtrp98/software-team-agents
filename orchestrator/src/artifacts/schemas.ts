@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { AgentStage } from "../types.js";
-import { PacketFieldsSchema, renderPacketText, stableHash, Sha256Schema, contentHash } from "./executionPacket.js";
-import { planTaskHash } from "../docs/planTask.js";
+import { PacketFieldsSchema, renderPacketText, stableHash, Sha256Schema, contentHash, taskContractHash } from "./executionPacket.js";
 
 /**
  * Required-field schemas for every artifact type in the pipeline. An agent's
@@ -14,6 +13,8 @@ export enum ArtifactType {
   PLAN = "plan",
   TEST_PLAN = "test-plan",
   QA_REPORT = "qa-report",
+  /** The reviewer's verdict on the implementation, parsed from `_docs/module/<m>/review.md` (V13 TASK-006). */
+  REVIEW_REPORT = "review-report",
   SECURITY_REPORT = "security-report",
   HANDOFF = "handoff",
   EXECUTION_PACKET = "execution-packet",
@@ -43,41 +44,7 @@ const ContextBudgetCompositionSchema = z
   })
   .strict();
 
-/**
- * The deterministic handoff from Task Compiler to runtime execution. It is a
- * regenerable Local Runtime State artifact, never an authored module document.
- */
-export const LegacyExecutionPacketSchema = z
-  .object({
-    text: z.string().min(1),
-    composition: PromptCompositionSchema,
-    budgetComposition: ContextBudgetCompositionSchema,
-    task_id: z.string().min(1),
-    stage: z.enum(AgentStage),
-    role: z.string().min(1),
-    acceptance_criteria: z.array(z.string().min(1)),
-    required_verification: z.array(z.string().min(1)),
-    stop_conditions: z.array(z.string().min(1)),
-    scope: z
-      .object({
-        allow: z.array(z.string().min(1)),
-        deny: z.array(z.string().min(1)),
-      })
-      .strict(),
-    sources: z.array(z.string().min(1)),
-  })
-  .strict()
-  .superRefine((packet, ctx) => {
-    const compositionChars = Object.values(packet.composition).reduce((sum, chars) => sum + chars, 0);
-    const budgetChars = Object.values(packet.budgetComposition).reduce((sum, chars) => sum + chars, 0);
-    if (compositionChars !== packet.text.length) {
-      ctx.addIssue({ code: "custom", path: ["composition"], message: `composition totals ${compositionChars}, expected text length ${packet.text.length}` });
-    }
-    if (budgetChars !== packet.text.length) {
-      ctx.addIssue({ code: "custom", path: ["budgetComposition"], message: `budget composition totals ${budgetChars}, expected text length ${packet.text.length}` });
-    }
-  });
-export type LegacyExecutionPacket = z.infer<typeof LegacyExecutionPacketSchema>;
+
 
 export const ExecutionPacketSchema = PacketFieldsSchema.extend({
   text: z.string().min(1), composition: PromptCompositionSchema,
@@ -87,7 +54,9 @@ export const ExecutionPacketSchema = PacketFieldsSchema.extend({
   if (packet.text !== renderPacketText(packet)) fail("packet text diverges from its semantic fields");
   const { packet_hash, ...payload } = packet;
   if (packet_hash !== stableHash(payload)) fail("packet hash drift");
-  if (packet.identity.task_hash !== planTaskHash({ ...packet.contract, status: "pending" })) fail("canonical task hash drift");
+  if (packet.identity.task_hash !== taskContractHash(packet.contract)) fail("canonical task hash drift");
+  if (packet.contract.version === 1 && (packet.selected_traces.length === 0 || packet.identity.artifact_hashes.length < 2)) fail("planned task requires requirement/design traces and hashes");
+  if (packet.contract.version === "workflow-1" && ![AgentStage.BUSINESS_ANALYST, AgentStage.SYSTEM_ANALYST, AgentStage.PROJECT_MANAGER].includes(packet.stage)) fail("workflow preparation cannot dispatch an implementation or verification role");
   if (packet.task_id !== packet.contract.id || packet.role !== packet.stage) fail("packet task/stage identity mismatch");
   for (const composition of [packet.composition, packet.budgetComposition]) if (Object.values(composition).reduce((sum, n) => sum + n, 0) !== packet.text.length) fail("packet composition does not cover the rendered text");
   const selected = packet.selected_traces.map(t => t.id);
@@ -117,6 +86,7 @@ export type ExecutionPacket = z.infer<typeof ExecutionPacketSchema>;
 export type ValidatableArtifactType =
   | ArtifactType.HANDOFF
   | ArtifactType.EXECUTION_PACKET
+  | ArtifactType.REVIEW_REPORT
   | ArtifactType.QA_REPORT
   | ArtifactType.SECURITY_REPORT;
 
@@ -236,6 +206,60 @@ export const QaReportArtifactSchema = z
   );
 export type QaReportArtifact = z.infer<typeof QaReportArtifactSchema>;
 
+/**
+ * One reviewer finding (`## Open Findings — all phases` in review.md). A
+ * finding the reviewer cannot tie to a file and line is not a finding, so
+ * `location` must carry a `path:line` pointer.
+ */
+export const ReviewFindingSchema = z.strictObject({
+  id: z.string().regex(/^RV-\d+$/, "a review finding id is RV-<n>"),
+  severity: z.enum(["BLOCKING", "NON_BLOCKING"]),
+  location: z.string().regex(/^[^\s:][^:]*:\d+(?:-\d+)?$/, "a review finding location is path:line"),
+  /** The role whose work must change. Routing reads this; the reviewer never fixes anything itself. */
+  owner: z.enum(AgentStage),
+  status: z.enum(["OPEN", "RESOLVED"]),
+  description: z.string().min(1),
+});
+export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+
+/**
+ * The reviewer's verdict on the implementation (V13 TASK-006), parsed from
+ * `_docs/module/<m>/review.md` by `parseReviewReport` — never accepted as an
+ * agent's claim. PASS and FAIL are both held to what they say: a PASS with an
+ * open blocking finding is a contradiction, and a FAIL with nothing open and
+ * blocking gives the owner nothing to fix.
+ */
+export const ReviewReportArtifactSchema = z
+  .strictObject({
+    taskId: z.string().min(1),
+    verdict: z.enum(["PASS", "FAIL"]),
+    findings: z.array(ReviewFindingSchema),
+    /** The files the reviewer actually read. A review that read nothing reviewed nothing. */
+    reviewed: z.array(z.string().min(1)).min(1),
+  })
+  .superRefine((report, ctx) => {
+    const openBlocking = report.findings.filter((f) => f.status === "OPEN" && f.severity === "BLOCKING");
+    if (report.verdict === "PASS" && openBlocking.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["verdict"],
+        message: `verdict PASS requires no OPEN BLOCKING finding (open: ${openBlocking.map((f) => f.id).join(", ")})`,
+      });
+    }
+    if (report.verdict === "FAIL" && openBlocking.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["findings"],
+        message: "verdict FAIL requires at least one OPEN BLOCKING finding — a failed review with nothing to fix is not actionable",
+      });
+    }
+    const ids = report.findings.map((f) => f.id);
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({ code: "custom", path: ["findings"], message: "review finding ids must be unique" });
+    }
+  });
+export type ReviewReportArtifact = z.infer<typeof ReviewReportArtifactSchema>;
+
 const SecurityFindingSchema = z.object({
   id: z.string().min(1),
   severity: z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]),
@@ -262,6 +286,7 @@ export const SecurityReportArtifactSchema = z
 export type SecurityReportArtifact = z.infer<typeof SecurityReportArtifactSchema>;
 
 export const ARTIFACT_SCHEMAS = {
+  [ArtifactType.REVIEW_REPORT]: ReviewReportArtifactSchema,
   [ArtifactType.QA_REPORT]: QaReportArtifactSchema,
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifactSchema,
   [ArtifactType.HANDOFF]: HandoffArtifactSchema,
@@ -279,6 +304,7 @@ export class ArtifactValidationError extends Error {
 }
 
 interface ArtifactDataMap {
+  [ArtifactType.REVIEW_REPORT]: ReviewReportArtifact;
   [ArtifactType.QA_REPORT]: QaReportArtifact;
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifact;
   [ArtifactType.HANDOFF]: HandoffArtifact;

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
-import { runTargetCli } from "./cli.js";
+import { parseTargetArgs, runTargetCli } from "./cli.js";
 import { runTargetInit, runtimeCommand } from "./initCommand.js";
 import { isInsideFrameworkRoot, resolveFrameworkRoot, resolveRoots } from "./roots.js";
 import { devPreflight, runSession, workspacePreflight } from "./devCommand.js";
@@ -1588,11 +1588,10 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(openRun.err).toMatch(/Target checkout/);
     expect(openRun.err).toMatch(/targets\.local\.yaml/);
 
-    // `--role` is accepted and ignored — with a warning, and detection records.
-    const warned = await capture(() => runTargetCli(["init", "--role", "dev"], target, fw));
-    expect(warned.code).toBe(0);
-    expect(warned.err).toMatch(/--role is retired and ignored/);
-    expect(fs.existsSync(path.join(target, ".agent-team", "config.yaml"))).toBe(true);
+    // V13 TASK-012 — the retired `--role` parser branch is gone: the flag is
+    // an unrecognized argument now, and nothing keys off a recorded role.
+    expect(() => parseTargetArgs(["init", "--role", "dev"])).toThrow(/unrecognized argument: --role/);
+    expect(fs.existsSync(path.join(target, ".agent-team"))).toBe(false);
 
     // An ambiguous repository refuses to guess; a hand-set config role remains
     // the one disambiguator now that the flag is gone.
@@ -1992,7 +1991,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       const config = defaultTargetConfig(path.basename(target), "2026-01-01T00:00:00Z", "dev");
       config.knowledge = { path: knowledge };
       writeTargetConfig(target, config);
-      expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: configPath }))).code).toBe(0);
+      expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: configPath }))).code).toBe(0);
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: configPath }))).out,
@@ -2018,7 +2017,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     it("an agent prompt from the payload is payload, not drift — there is no other role to belong to", async () => {
       const target = makeTarget();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
-      expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+      expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
       // `business-analyst` now ships to every workspace, so sync materialises
       // it and tracks it in the manifest instead of flagging a hand-copy.
@@ -2044,7 +2043,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     it("an engineer prompt in a Knowledge workspace is payload too — the mirror case answers the same", async () => {
       const knowledge = makeKnowledgeRepo();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
-      expect((await capture(() => runTargetCli(["init", "--role", "ba"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+      expect((await capture(() => runTargetCli(["init"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
       expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(true);
 
@@ -2058,7 +2057,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     it("a foreign file whose name does not match any known agent is still left alone (existing policy, unchanged)", async () => {
       const target = makeTarget();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
-      expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+      expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
       write(target, ".claude/agents/my-personal-notes.md", "# not an agent\n");
 
@@ -2081,7 +2080,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       // Written before init, so the Framework has never tracked it: the
       // mechanism TASK-022 had to leave intact.
       write(target, ".claude/agents/business-analyst.md", HAND_WRITTEN_PROMPT);
-      expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+      expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,

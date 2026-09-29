@@ -17,8 +17,8 @@
 
 Guard coverage per runtime คือ verdict เดียวกับที่ `open` preflight ตรวจก่อน launch —
 `codex`/`opencode` ไม่ใช่แค่ "support ต่ำกว่า" แต่คือ **launch requirement จริง**:
-`software-team-agents open --runtime codex` refuse ที่จะเริ่ม (`NOT READY — UNGUARDED`) เว้นแต่ส่ง
-`--allow-unguarded-runtime` ซึ่งจะพิมพ์ `[UNGUARDED SESSION — acknowledged]` บน launch line
+`software-team-agents open --runtime codex` refuse ที่จะเริ่ม (`NOT READY — UNGUARDED`)
+โดยไม่มี bypass flag หรือ acknowledgement override อีกต่อไป (`--allow-unguarded-runtime` ถูกถอดออกแล้วใน V13)
 
 - **enforced** — guards ทั้งหก wired และ verified
 - **partial** — native runtime guard บังคับได้บางส่วน; exit checks ที่ runtime ไม่บังคับเองจะถูก
@@ -30,11 +30,11 @@ Guard coverage per runtime คือ verdict เดียวกับที่ `
 
 | Runtime | สถานะ | Guard coverage |
 |---|---|---|
-| **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe); certified for unattended Target writes | **enforced** — ครบทั้งหก (`block-git`, `block-outside-repo`, `block-path-permissions`, `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop`) |
-| **Codex** | ✅ **Supported** — interactive และ headless adapter verify บน Codex 0.154.0/0.155.1 แล้ว; headless enforcement = per-run native permission profile (เขียนเฉพาะ path ที่ packet อนุญาต ปิด network บล็อก Git ด้วย execpolicy + OS deny) **live-verified ปลายทางจริง รอบสาม 2026-09-23** (deny นอก workspace / allow ใน workspace / read-only deny ทุก write / network ตายระดับ DNS) และ exit checks fail-closed จับ typecheck แดงหลัง process จบ; certified for unattended Target writes; **interactive session ยัง unguarded** — ต้อง `--allow-unguarded-runtime` และจำกัด analysis/proposal | **headless enforced / interactive unguarded** — adapter ใช้ native permission profile + isolated execpolicy โดยไม่พึ่ง project hook; `.codex/hooks.json` ยังเป็น compatibility payload สำหรับ interactive เท่านั้น (default trust ข้าม hooks, hook พัง fail-open — ไม่ถูก claim เป็น enforcement ฝั่ง headless); exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
-| **OpenCode** | 🧪 **Experimental** — bindings + plugin `sta-guards.js` + commands mirror sync ครบ (`/name` ผ่าน `opencode run --command`), `open --runtime opencode` และ `sta run --runtime opencode` ใช้ได้; native exit hook ไม่มี แต่ `ExitCheckRunner` กลางตรวจ typecheck/lint และ secret แบบ fail-closed หลัง process จบ; V8 จำกัดไว้ที่ analysis/proposal | **partial** — plugin บังคับ `block-outside-repo` + `block-path-permissions`, permission block ของ binding บังคับ `block-git`; `block-doc-rewrite`, `block-secret-leak` และ `require-green-before-stop` ไม่มีกลไก native บน OpenCode workspace โดยสองตัวหลังมี runner กลางครอบ; **ที่ขาด plugin = unguarded** ไม่ใช่ partial (OpenCode default posture คือ allow-all) |
-| **Antigravity** | ✅ **Supported** — runtime id `antigravity`, binary `agy`; probe, headless `-p`, JSON envelope, token usage, adapter round-trip และ machine-global bridge hook (`~/.gemini/config/hooks.json`) verify บน install จริง (agy 1.2.7/Windows 11) แล้ว; headless guarded write ได้รับ certification สำหรับ unattended Target writes ผ่าน bridge hook; pipeline และ guards verified ครบถ้วน | **enforced via bridge hook** — deny path มีจริงและ fail closed จริง; agy อ่าน PreToolUse hooks จาก `~/.gemini/config/hooks.json` ระดับเครื่อง forward ไปหา `sta-guard.js` และ `block-git.js` บังคับ path permissions, block git state-changing และ universal floor ในตัว; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
-| **ZCode Desktop** | 🧪 **Experimental** — desktop interactive role-play runtime (คำตัดสิน V12): ผู้ใช้เปิด ZCode เองแล้ว AI เล่น role ของ pipeline จาก instructions/skills + `sta context`/`sta policy`; ไม่มี CLI ไม่มี headless — `sta run --runtime zcode` refuse ที่ registry และไม่มี launch path; guard wiring `.zcode/config.json` **UAT สดผ่านครบบน session จริง (2026-09-23, `planning/v12/evidence/zcode-uat/`)**; unattended Target writes ยัง refuse เสมอ | **partial** — payload sync แล้ว wire 4 PreToolUse guards + Stop pair; `block-path-permissions` อ่าน role จาก `STA_ROLE` หรือ `.workflow/session-role.json` ที่ประกาศผ่าน `software-team-agents session-role` — session ที่ประกาศ role ได้ per-role Target/Knowledge write bounds เหมือน orchestrated stage, session ที่ไม่ประกาศเหลือ floor เท่านั้น (read ยังเป็น instruction-level); Stop-hook โดน cap 3 continuations ต่อ session (GUARD GAP, QA round ครอบ); PostToolUse และ per-agent exit guards ไม่มี guard ที่ ship มา |
+| **Claude Code** | ✅ **Supported** — V13 TASK-031: headless run รัน `claude` ทั้ง process ภายใต้ Windows elevated sandbox ของ Codex (`codex sandbox`) ด้วย profile ต่อ run: อ่านกว้าง, approval channel เป็น OS deny ทั้งอ่าน/เขียน, เขียนได้เฉพาะ path ที่ packet อนุญาต (VCS/runtime binding อ่านอย่างเดียว), `CLAUDE_CONFIG_DIR`/`TEMP`/`CODEX_HOME` ต่อ run ลบหลังจบ, ปิด network ที่ OS และออกได้ทาง loopback CONNECT proxy ไป api.anthropic.com:443 เท่านั้น; UAT บน Claude Code 2.1.283 + codex-cli 0.158.0 ปฏิเสธ glob/ตัวแปร/encoded/junction ต่อไฟล์จำลองและ egress นอก allowlist โดย workspace ใช้ได้; certified for unattended Target writes **เฉพาะ Windows**, ต้องมี Codex ติดตั้งและ login ที่คนเตรียมใน environment (`claude setup-token`) | **headless enforced** — OS sandbox profile ต่อ run + network lock; hooks ยังเป็นชั้นเสริม ไม่ใช่หลักฐาน isolation; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
+| **Codex** | ✅ **Supported** — interactive และ headless adapter verify บน Codex 0.154.0/0.155.1 แล้ว; headless enforcement = per-run native permission profile (เขียนเฉพาะ path ที่ packet อนุญาต ปิด network บล็อก Git ด้วย execpolicy + OS deny) และ TASK-027 เพิ่ม OS read/write deny ของ approval channel; UAT กับโปรไฟล์ที่ adapter สร้างบน Codex 0.155.0-alpha.16.4 ปฏิเสธ read/write แบบ glob, ตัวแปร และ encoded command ต่อไฟล์จำลอง โดยยังอ่าน/เขียน workspace ได้; certified for unattended Target writes; **interactive session ยัง unguarded** — direct-mode launch ปฏิเสธการรัน (ไม่มี acknowledgement bypass แล้ว — V13 TASK-012) และจำกัดเฉพาะ analysis/proposal ผ่าน STA dispatch | **headless enforced / interactive unguarded** — adapter ใช้ native permission profile + isolated execpolicy โดยไม่พึ่ง project hook; `.codex/hooks.json` ยังเป็น compatibility payload สำหรับ interactive เท่านั้น (default trust ข้าม hooks, hook พัง fail-open — ไม่ถูก claim เป็น enforcement ฝั่ง headless); exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
+| **OpenCode** | 🧪 **Experimental** — plugin/adapter เคย verify แล้ว; V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel | **partial** — plugin บังคับ guard บางส่วน; ไม่ใช้เป็นหลักฐาน approval isolation |
+| **Antigravity** | ✅ **Supported** — bridge hook เคย verify แล้ว แต่ V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel; unattended Target writes ไม่ certified | **bridge hook enforced** สำหรับ guard เดิม; ไม่ใช้เป็นหลักฐาน approval isolation |
+| **ZCode Desktop** | 🧪 **Experimental** — desktop role-play และ headless adapter เคย verify แล้ว; V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel; unattended Target writes ยัง refuse | **partial** — project hooks และ post-run check ไม่ใช้เป็นหลักฐาน approval isolation |
 
 Same verdict, three places: ตารางนี้, `sta runtimes` (อ่าน `RUNTIME_SUPPORT` ตรง) และ
 `software-team-agents --help`'s `--runtime` line — ทั้งสาม quote `guardSettings.ts`'s
@@ -45,7 +45,7 @@ enforce จริง (`orchestrator/src/runtime/runtimeSupport.test.ts` pin ไ�
 
 การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` — default (`propose`) ติด permission prompt
 ที่ไม่มีคนกดใน headless run สิทธิ์เขียน Target แบบ unattended เป็นของ runtime ที่ได้รับ certification
-(ดูตาราง — ปัจจุบันคือ Claude Code, Codex headless adapter และ Antigravity headless adapter)
+(ดูตาราง — หลัง V13 TASK-027 a1 และ TASK-031 เหลือ Codex headless adapter และ Claude Code headless ภายใต้ Codex sandbox บน Windows; runtime อื่นหยุด production role dispatch)
 
 ### ตรวจสถานะ login ก่อน run ยาว
 
@@ -56,7 +56,7 @@ run ที่ยาวขึ้นคือ quota ที่เสียเปล
 | Claude Code | `claude auth status` | subcommand ยืนยันบน 2.1.278 (`claude auth --help`: login/logout/status) |
 | Codex | `codex login status` · `codex doctor` | ยืนยันบน 0.154.0 — `login status` ตอบสถานะ (เช่น "Logged in using ChatGPT"); `doctor` วินิจฉัย config/auth/runtime ครบและ read-only |
 | Antigravity (agy) | — ไม่มี subcommand เช็ค auth บน 1.2.7 | ปัญหา auth จะแสดงเป็น error/denied ตอน run เท่านั้น (ดู [`troubleshooting.md`](troubleshooting.md)) |
-| ZCode | — ไม่มี CLI | ตรวจจากตัว app เท่านั้น |
+| ZCode | `node <ZCode>/resources/glm/zcode.cjs --version` · `… hooks trust status --json` | ยืนยันบน CLI 0.16.9 (ZCode 3.14.3) — adapter ส่ง `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`/`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` ให้เอง; auth/signing ที่ใช้ไม่ได้จะแสดงเป็น `UNAVAILABLE` ตอน run |
 
 ### Quota windows
 

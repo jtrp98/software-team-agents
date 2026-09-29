@@ -326,24 +326,24 @@ withTempProject((tmp) => {
   const env = { CLAUDE_PROJECT_DIR: tmp };
   const mod = path.join(tmp, '_docs', 'module', 'sales-crm');
 
-  for (const f of ['requirement.md', 'design.md', 'plan.md', 'test-plan.md', 'review.md', 'security.md', 'deploy.md']) {
+  for (const f of ['requirement.md', 'design.md', 'plan.md', 'test-plan.md', 'qa.md', 'security.md', 'deploy.md']) {
     write(path.join(mod, f), `# ${f}\n\n## Change Log\n- 2026-08-18 created\n`);
   }
-  write(path.join(mod, 'review', 'phase-1.md'), '# archived round\n');
+  write(path.join(mod, 'qa', 'phase-1.md'), '# archived round\n');
   write(path.join(tmp, '_docs', 'status.md'), '# Project Status\n');
 
   const cases = [
     ['Write over an existing plan.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'plan.md') } }, BLOCK],
     ['Write over an existing test-plan.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'test-plan.md') } }, BLOCK],
     ['Write over an existing design.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'design.md') } }, BLOCK],
-    ['Write over an existing review.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'review.md') } }, BLOCK],
+    ['Write over an existing qa.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'qa.md') } }, BLOCK],
     ['Write over an existing security.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'security.md') } }, BLOCK],
     ['relative path to an existing doc is blocked too', { tool_name: 'Write', tool_input: { file_path: '_docs/module/sales-crm/requirement.md' } }, BLOCK],
 
     ['Write to a doc that does not exist yet is allowed (first creation)', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs/module/new-mod/requirement.md') } }, ALLOW],
     ['Edit on an existing doc is allowed — that is the point', { tool_name: 'Edit', tool_input: { file_path: path.join(mod, 'plan.md') } }, ALLOW],
     ['MultiEdit on an existing doc is allowed', { tool_name: 'MultiEdit', tool_input: { file_path: path.join(mod, 'plan.md') } }, ALLOW],
-    ['Write to an archived round is allowed (not one of the seven)', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'review', 'phase-1.md') } }, ALLOW],
+    ['Write to an archived round is allowed (not one of the seven)', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'qa', 'phase-1.md') } }, ALLOW],
     ['Write to status.md is allowed (not a per-module doc)', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'status.md') } }, ALLOW],
     ['Write to app code named plan.md elsewhere is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'app', 'plan.md') } }, ALLOW],
   ];
@@ -1087,14 +1087,24 @@ check(
 );
 
 const targetWorkRoot = path.join(os.tmpdir(), 'sta-target-work');
+// V13 TASK-011: a runtime grant names a real checkout, and a bound Target
+// write is scoped by the role contract plus the stack half the orchestrator
+// hands over — a root binding alone grants no path.
+fs.mkdirSync(path.join(targetWorkRoot, 'src'), { recursive: true });
+const targetStackRules = { STA_STACK_PATH_RULES: JSON.stringify({ write: ['src/**'], deny: [] }) };
 check(
   'backend-engineer may write only the runtime-granted canonical Target root',
-  runPathHook('Write', path.join(targetWorkRoot, 'src', 'route.ts'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
+  runPathHook('Write', path.join(targetWorkRoot, 'src', 'route.ts'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]), ...targetStackRules }),
   ALLOW,
 );
 check(
   'runtime-granted Target root still blocks .git writes',
   runPathHook('Write', path.join(targetWorkRoot, '.git', 'config'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
+  BLOCK,
+);
+check(
+  '  a Target path no role/stack rule grants is denied — a root binding alone grants no path (V13 TASK-011)',
+  runPathHook('Write', path.join(targetWorkRoot, 'whatever', 'unlisted.txt'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]), ...targetStackRules }),
   BLOCK,
 );
 
@@ -1178,28 +1188,38 @@ withTempProject((tmp) => {
     payloadRes.status === BLOCK && payloadRes.stderr.includes('Framework payload') && !/software-team-agents (ba|dev)/.test(payloadRes.stderr) ? 0 : 1, 0);
 
   // The same rule inside a granted Target work root, where the floor branch
-  // used to return early and let everything else through.
+  // used to return early and let everything else through. V13 TASK-011: the
+  // grant is a real checkout and the write is scoped by the role contract.
   const workRoot = path.join(tmp, 'target');
+  fs.mkdirSync(path.join(workRoot, 'src'), { recursive: true });
+  write(path.join(tmp, 'contracts', 'backend-engineer.yaml'),
+    'permissions:\n  read: ["README.md"]\n  write: ["README.md"]\n  deny: []\n');
+  const workGrant = {
+    CLAUDE_PROJECT_DIR: tmp,
+    STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]),
+    STA_STACK_PATH_RULES: JSON.stringify({ write: ['src/**'], deny: [] }),
+  };
   check('  the ban reaches a granted Target work root too',
-    runPathHook('Write', path.join(workRoot, 'contracts', 'backend-engineer.yaml'), 'backend-engineer',
-      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }), BLOCK);
+    runPathHook('Write', path.join(workRoot, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', workGrant), BLOCK);
   check('  Target source in that same root stays allowed',
-    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
-      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }), ALLOW);
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer', workGrant), ALLOW);
 
   // What the recorded role no longer does. Knowledge artifacts are banned by
   // stage (9b-2), not by which repository the session was opened in — one
-  // workspace now holds the payload and the documents together.
+  // workspace now holds the payload and the documents together. And since
+  // V13 TASK-012 an unassigned session has no governed-artifact authority at
+  // all: read/discover/propose is its contract, so the role-owned document
+  // tree is refused on the floor, whatever the recorded workspace role says.
   const env = { CLAUDE_PROJECT_DIR: tmp };
   for (const [label, config] of [['role: dev', DEV_CONFIG], ['role: ba', BA_CONFIG]]) {
     write(path.join(tmp, '.agent-team', 'config.yaml'), config);
-    check(`${label} -> requirement.md allowed interactively (no STA_ROLE, no per-agent rule reachable)`,
-      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), ALLOW);
+    check(`${label} -> requirement.md refused on the unassigned floor (V13 TASK-012: governed work is role-owned)`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), BLOCK);
     check(`  ${label} -> design.md likewise`,
-      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), ALLOW);
-    check(`  ${label} -> engineer-owned review.md allowed`,
-      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'review.md') } }, env), ALLOW);
-    check(`  ${label} -> app source allowed`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), BLOCK);
+    check(`  ${label} -> engineer-owned qa.md likewise`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'qa.md') } }, env), BLOCK);
+    check(`  ${label} -> app source still allowed (the floor posture, unchanged)`,
       runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'src', 'app.ts') } }, env), ALLOW);
     check(`  ${label} -> backend-engineer still refused the Framework payload`,
       runPathHook('Write', path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', env), BLOCK);
@@ -1209,7 +1229,7 @@ withTempProject((tmp) => {
 
   fs.rmSync(path.join(tmp, '.agent-team'), { recursive: true, force: true });
   check('no .agent-team/config.yaml -> identical answers, nothing was keyed off it',
-    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), ALLOW);
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), BLOCK);
   check('  and the payload ban does not need it either',
     runPathHook('Write', path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', env), BLOCK);
 });
@@ -1223,6 +1243,15 @@ section('9b-2. V10 TASK-012 — engineer/devops never write Knowledge, wherever 
 withTempProject((tmp) => {
   const workRoot = path.join(tmp, 'target');
   const knowledgeRoot = path.join(workRoot, 'knowledge-repo');
+  // V13 TASK-011: the grant names a real checkout, and every role's write is
+  // scoped by a resolvable contract — minimal flow-style contracts keep this
+  // section self-contained.
+  fs.mkdirSync(path.join(knowledgeRoot, '_docs', 'module', 'm'), { recursive: true });
+  write(path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["src/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'frontend-engineer.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["src/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'devops.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["knowledge-repo/_docs/**", "src/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'system-analyst.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["knowledge-repo/_docs/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'qa-engineer.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["knowledge-repo/_docs/**"]\n  deny: []\n');
   const grant = {
     CLAUDE_PROJECT_DIR: tmp,
     STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]),
@@ -1250,10 +1279,10 @@ withTempProject((tmp) => {
     runPathHook('Write', path.join(knowledgeRoot, 'knowledge', '_roles', 'ba', 'seen.yaml'), 'system-analyst',
       { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([knowledgeRoot]), STA_KNOWLEDGE_ROOT: knowledgeRoot }),
     BLOCK);
-  check('no STA_KNOWLEDGE_ROOT -> the rule cannot fire, and the floor is all that is left',
+  check('no STA_KNOWLEDGE_ROOT -> deny-default still refuses an unscoped docs write into the granted Target (V13 TASK-011)',
     runPathHook('Write', path.join(knowledgeRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
       { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }),
-    ALLOW);
+    BLOCK);
 });
 
 // V11 TASK-020 — the launch contract's selection marker reaches the guard.
@@ -1308,13 +1337,27 @@ withTempProject((tmp) => {
     BLOCK);
 });
 
-// V12 — a desktop role-play session (ZCode) has no orchestrator to set
-// STA_ROLE, so it declares the role it is playing through
-// .workflow/session-role.json, written only by `software-team-agents
-// session-role`. The declaration turns the per-role layer on; env identity
-// still wins; anything unreadable or off-shape is "no declared role" — the
-// floor-only posture of the interactive cases above.
-section('9b-4. V12 — a declared session role applies the per-role layer without STA_ROLE');
+// V13 TASK-012 — a direct-mode session has no orchestrator to set STA_ROLE,
+// so its only per-role authority is a STA-issued scoped attempt grant
+// (.workflow/attempt-grant.json, written by `sta grant issue`). The fixture
+// signs tokens the way STA's issuer does (canonical JSON + HMAC-SHA256 over
+// the workspace key) — that is the exact contract the hook verifies. A
+// self-written role file — the retired `.workflow/session-role.json`
+// declaration, reborn as an unsigned grant — grants nothing; the env identity
+// still wins; anything unreadable, unsigned or expired is "no grant", and an
+// unassigned session is refused the governed artifact tree on the floor.
+section('9b-4. V13 TASK-012 — a verified attempt grant applies the per-role layer without STA_ROLE');
+
+const crypto = require('crypto');
+
+function signGrant(unsigned, keyHex) {
+  const normalize = (v) => Array.isArray(v)
+    ? v.map(normalize)
+    : (v && typeof v === 'object')
+      ? Object.fromEntries(Object.entries(v).filter(([, val]) => val !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, val]) => [k, normalize(val)]))
+      : v;
+  return { ...unsigned, signature: crypto.createHmac('sha256', keyHex).update(JSON.stringify(normalize(unsigned))).digest('hex') };
+}
 
 withTempProject((tmp) => {
   // Minimal contracts keep this section self-contained: the reader only needs
@@ -1324,33 +1367,72 @@ withTempProject((tmp) => {
   write(path.join(tmp, 'contracts', 'qa-engineer.yaml'),
     'permissions:\n  read: ["_docs/status.md"]\n  write: ["_docs/status.md"]\n  deny: []\n');
   const env = { CLAUDE_PROJECT_DIR: tmp };
-  const declare = (body) => {
-    fs.mkdirSync(path.join(tmp, '.workflow'), { recursive: true });
-    if (body === null) fs.rmSync(path.join(tmp, '.workflow', 'session-role.json'), { force: true });
-    else write(path.join(tmp, '.workflow', 'session-role.json'), body);
+  const KEY = '9'.repeat(64);
+  fs.mkdirSync(path.join(tmp, '.workflow'), { recursive: true });
+  write(path.join(tmp, '.workflow', 'sta-grant-key'), KEY + '\n');
+  const tokenPath = path.join(tmp, '.workflow', 'attempt-grant.json');
+  const grantFile = (token) => {
+    if (token === null) fs.rmSync(tokenPath, { force: true });
+    else write(tokenPath, JSON.stringify(token, null, 2) + '\n');
   };
+  const unsigned = (over) => ({
+    attempt_grant: 1,
+    grant_id: 'agr_' + 'a'.repeat(32),
+    role: 'qa-engineer',
+    stage: 'qa-engineer',
+    task_id: 'T-1',
+    contract_digest: 'b'.repeat(64),
+    scope: { write: [], deny: [], stack: { write: [], deny: [] } },
+    work_roots: [],
+    knowledge_root: null,
+    // The positive-path grant is minted against the current clock so it can
+    // never go stale as wall time passes; the negative test below keeps a
+    // fixed, forever-past expiry on purpose.
+    issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+    nonce: 'c'.repeat(32),
+    ...over,
+  });
   const attempt = (rel) =>
     runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, ...rel.split('/')) } }, env);
 
-  declare(JSON.stringify({ role: 'qa-engineer', declared_at: '2026-09-22T00:00:00Z' }));
-  check('declared role -> contract write path allowed', attempt('_docs/status.md'), ALLOW);
+  grantFile(signGrant(unsigned(), KEY));
+  check('issued grant -> contract write path allowed', attempt('_docs/status.md'), ALLOW);
   check('  uncovered path denied, the role named in the refusal', attempt('app.ts'), BLOCK);
-  check('  the universal floor outranks the declaration', attempt('knowledge/_roles/ba/seen.yaml'), BLOCK);
-  check('  the declaration cannot rewrite itself through a file tool', attempt('.workflow/session-role.json'), BLOCK);
+  check('  the universal floor outranks the grant', attempt('knowledge/_roles/ba/seen.yaml'), BLOCK);
+  check('  the grant cannot rewrite itself through a file tool', attempt('.workflow/attempt-grant.json'), BLOCK);
 
-  declare(JSON.stringify({ role: 'backend-engineer', stack: { write: ['server/**'], deny: [] } }));
-  check('declared stack globs arrive beside the role (server/** allowed)', attempt('server/route.ts'), ALLOW);
-  check('  the contract still bounds what the declaration cannot widen', attempt('_docs/status.md'), BLOCK);
+  grantFile(signGrant(unsigned({ grant_id: 'agr_' + 'd'.repeat(32), role: 'backend-engineer', scope: { write: [], deny: [], stack: { write: ['server/**'], deny: [] } } }), KEY));
+  check('granted stack globs arrive beside the role (server/** allowed)', attempt('server/route.ts'), ALLOW);
+  check('  the contract still bounds what the grant cannot widen', attempt('_docs/status.md'), BLOCK);
 
-  check('env STA_ROLE wins over the declaration (qa-engineer env denies server/**)',
+  check('env STA_ROLE wins over the grant (qa-engineer env denies server/**)',
     runPathHook('Write', path.join(tmp, 'server', 'route.ts'), 'qa-engineer', env), BLOCK);
 
-  declare(null);
-  check('declaration removed -> anonymous again, floor only', attempt('app.ts'), ALLOW);
-  declare('{not json');
-  check('corrupt declaration -> treated as no declared role', attempt('app.ts'), ALLOW);
-  declare(JSON.stringify({ role: 'Not A Role' }));
-  check('off-shape role string -> treated as no declared role', attempt('app.ts'), ALLOW);
+  // A self-written token: the old self-declaration reborn. Shape plausible,
+  // signature absent — the hook applies no per-role layer and the unassigned
+  // floor refuses the governed artifact tree.
+  grantFile(unsigned());
+  check('self-written token (no signature) grants nothing', attempt('_docs/status.md'), BLOCK);
+  // A real token with one field edited after signing: if the hook trusted the
+  // widened scope it would allow the granted contract path; detecting the
+  // tamper means no per-role layer at all, so the write is refused.
+  const tampered = signGrant(unsigned({ grant_id: 'agr_' + 'e'.repeat(32) }), KEY);
+  tampered.scope = { write: ['**'], deny: [], stack: { write: [], deny: [] } };
+  grantFile(tampered);
+  check('tampered token (signature no longer covers the bytes) grants nothing', attempt('_docs/status.md'), BLOCK);
+  // Expired against the clock the hook runs with.
+  grantFile(signGrant(unsigned({ grant_id: 'agr_' + 'f'.repeat(32), expires_at: '2026-09-24T00:00:00.000Z' }), KEY));
+  check('expired grant -> no per-role layer, the unassigned floor refuses the artifact tree', attempt('_docs/status.md'), BLOCK);
+
+  grantFile(null);
+  check('grant removed -> unassigned again: governed artifacts refused, floor posture elsewhere', attempt('_docs/status.md'), BLOCK);
+  check('  app source still allowed on the floor', attempt('app.ts'), ALLOW);
+  grantFile('{not json');
+  check('corrupt token -> treated as no grant', attempt('_docs/status.md'), BLOCK);
+  check('  and still no per-role layer for it', attempt('app.ts'), ALLOW);
+  grantFile(signGrant(unsigned({ role: 'Not A Role' }), KEY));
+  check('off-shape role string -> treated as no grant', attempt('_docs/status.md'), BLOCK);
 });
 
 // A workspace written by an older `init` still records `role: ba` or `role:
@@ -1376,7 +1458,10 @@ withTempProject((tmp) => {
   for (const [label, config] of configs) {
     if (config === null) fs.rmSync(path.join(tmp, '.agent-team'), { recursive: true, force: true });
     else write(path.join(tmp, '.agent-team', 'config.yaml'), config);
-    check(`${label} -> plan.md allowed interactively`, attempt('_docs/module/m/plan.md'), ALLOW);
+    // V13 TASK-012: plan.md is governed work, refused on the unassigned floor
+    // whatever the recorded workspace role says — the recorded role decides
+    // nothing, and no session claim changes that.
+    check(`${label} -> plan.md refused on the unassigned floor`, attempt('_docs/module/m/plan.md'), BLOCK);
     check(`  ${label} -> contracts allowed interactively (no stage named)`, attempt('contracts/backend-engineer.yaml'), ALLOW);
     check(`  ${label} -> contracts refused for a named stage`, asEngineer('contracts/backend-engineer.yaml'), BLOCK);
     check(`  ${label} -> the floor still holds`, attempt('node_modules/pkg/index.js'), BLOCK);
@@ -1398,13 +1483,21 @@ check(
 // the universal floor against the Target's own root, the Knowledge ban, and the
 // read-only Target refusal — and that nothing puts a role×stack allowlist back
 // in, which Phase 2 replaced with module/Target scope (V10 TASK-024).
-section('9d. V10 TASK-024 — launched from Knowledge, writing a Target: what the guard still enforces');
+section('9d. V13 TASK-011 — launched from Knowledge, writing a Target: binding + role/contract scope, deny by default');
 
 withTempProject((knowledge) => {
   const target = path.join(knowledge, '..', path.basename(knowledge) + '-target');
   const readOnly = path.join(knowledge, '..', path.basename(knowledge) + '-readonly');
-  fs.mkdirSync(target, { recursive: true });
+  const escapeDir = path.join(knowledge, '..', path.basename(knowledge) + '-escape');
+  fs.mkdirSync(path.join(target, 'src'), { recursive: true });
   fs.mkdirSync(readOnly, { recursive: true });
+  fs.mkdirSync(escapeDir, { recursive: true });
+  // Minimal contract so the role layer resolves; the hook reads contracts from
+  // the session root (no dependencies, flow style only — see section 9b-4).
+  write(path.join(knowledge, 'contracts', 'backend-engineer.yaml'),
+    'permissions:\n  read: ["README.md"]\n  write: ["src/**"]\n  deny: []\n');
+  write(path.join(knowledge, 'contracts', 'system-analyst.yaml'),
+    'permissions:\n  read: ["README.md"]\n  write: ["_docs/**"]\n  deny: []\n');
   try {
     const grant = {
       CLAUDE_PROJECT_DIR: knowledge,
@@ -1416,17 +1509,22 @@ withTempProject((knowledge) => {
       ]),
     };
 
-    // 1. A path inside the granted Target.
+    // 1. A path inside the granted Target, covered by the role's write rules.
     check('engineer -> <target>/src/x.ts allowed from a Knowledge root',
       runPathHook('Write', path.join(target, 'src', 'x.ts'), 'backend-engineer', grant), ALLOW);
     check('  the floor is evaluated against the Target, not the session root',
       runPathHook('Write', path.join(target, '.git', 'config'), 'backend-engineer', grant), BLOCK);
     check('  and Framework payload stays refused there too',
       runPathHook('Write', path.join(target, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', grant), BLOCK);
-    // Phase 2 moved scope to module/Target; a path outside this role's contract
-    // globs must NOT be refused here, or the allowlist is back by accident.
-    check('  a path no contract glob covers is still allowed — no role x stack allowlist in a Target',
-      runPathHook('Write', path.join(target, 'whatever', 'unlisted.txt'), 'backend-engineer', grant), ALLOW);
+    // V13 TASK-011: a root binding alone grants no path — a Target write the
+    // role contract does not grant is refused, not silently allowed.
+    check('  a Target path no contract glob grants is denied — deny by default',
+      runPathHook('Write', path.join(target, 'whatever', 'unlisted.txt'), 'backend-engineer', grant), BLOCK);
+    // A symlink inside the granted root that resolves outside it is refused:
+    // the decision runs on the canonical path, not the spelled one.
+    fs.symlinkSync(escapeDir, path.join(target, 'src', 'escape'), 'junction');
+    check('  a symlink escaping the granted root is refused on its canonical path',
+      runPathHook('Write', path.join(target, 'src', 'escape', 'x.ts'), 'backend-engineer', grant), BLOCK);
 
     // 2. A path inside the Knowledge root the session was launched from.
     check('engineer -> <knowledge>/_docs/module/m/design.md refused',
@@ -1446,14 +1544,20 @@ withTempProject((knowledge) => {
       refused.status === BLOCK && refused.stderr.includes('Target "web"') ? 0 : 1, 0);
     check('  an interactive session (no STA_ROLE) gets the same refusal — TASK-023 read-only decision',
       runPathHook('Write', path.join(readOnly, 'src', 'x.ts'), undefined, grant), BLOCK);
-    check('a path in neither repository is left to block-outside-repo.js',
-      runPathHook('Write', path.join(knowledge, '..', 'elsewhere', 'stray.txt'), 'backend-engineer', grant), ALLOW);
+    // V13 TASK-011: with a resolved role the hook itself refuses a path in
+    // neither repository — no bound write root covers it. An anonymous
+    // interactive session stays block-outside-repo.js's case.
+    check('a path in neither repository is refused for a named role — no bound write root covers it',
+      runPathHook('Write', path.join(knowledge, '..', 'elsewhere', 'stray.txt'), 'backend-engineer', grant), BLOCK);
+    check('  an anonymous session leaves it to block-outside-repo.js',
+      runPathHook('Write', path.join(knowledge, '..', 'elsewhere', 'stray.txt'), undefined, grant), ALLOW);
     check('  and block-outside-repo.js does refuse it',
       runHook('block-outside-repo.js', { tool_name: 'Write', tool_input: { file_path: path.join(knowledge, '..', 'elsewhere', 'stray.txt') } },
         { CLAUDE_PROJECT_DIR: knowledge, STA_WRITABLE_WORK_ROOTS: JSON.stringify([target]) }), BLOCK);
   } finally {
     fs.rmSync(target, { recursive: true, force: true });
     fs.rmSync(readOnly, { recursive: true, force: true });
+    fs.rmSync(escapeDir, { recursive: true, force: true });
   }
 });
 
@@ -1490,7 +1594,7 @@ withTempProject((tmp) => {
   const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
   check('Phase 1 fully checked -> implemented ✅', /Phase 1 — implemented ✅/.test(out) ? 0 : 1, 0);
   check('Phase 2 untouched -> implemented ⬜', /Phase 2 — implemented ⬜/.test(out) ? 0 : 1, 0);
-  check('no review.md yet -> verified ⬜', /Phase 1 — implemented ✅ · verified ⬜/.test(out) ? 0 : 1, 0);
+  check('no qa.md yet -> verified ⬜', /Phase 1 — implemented ✅ · verified ⬜/.test(out) ? 0 : 1, 0);
   check('Phase 2 is gated and unaudited -> security ⬜', /Phase 2.*security ⬜/.test(out) ? 0 : 1, 0);
   check('Phase 1 has no gate -> security n\\/a', /Phase 1.*security n\/a/.test(out) ? 0 : 1, 0);
   check('Now line points at the first open phase', /\*\*Now\*\*: Phase 1/.test(out) ? 0 : 1, 0);
@@ -1498,20 +1602,20 @@ withTempProject((tmp) => {
 
 withTempProject((tmp) => {
   write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A\n${taskTable([['task one', 'verified']])}`);
-  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+  write(path.join(tmp, '_docs', 'module', 'm', 'qa.md'),
     '# Review\n\n## Review Outcome — Phase 1\n**Status:** ✅ Verified (FULL)\nAccepted.\n');
   write(path.join(tmp, '_docs', 'module', 'm', 'deploy.md'),
     '# Deploy\n\n## Deploy History\n| Date | Environment | Phase/Module | Outcome |\n|---|---|---|---|\n| 2026-01-01 | production | Phase 1 | success |\n');
   runGenerate({ CLAUDE_PROJECT_DIR: tmp });
   const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
-  check('review.md\'s Status line drives verified + mode', /verified ✅ \(FULL\)/.test(out) ? 0 : 1, 0);
+  check('qa.md\'s Status line drives verified + mode', /verified ✅ \(FULL\)/.test(out) ? 0 : 1, 0);
   check('deploy.md\'s history row drives deployed ✅', /deployed ✅/.test(out) ? 0 : 1, 0);
   check('fully done phase -> Now says complete', /\*\*Now\*\*: All phases complete/.test(out) ? 0 : 1, 0);
 });
 
 withTempProject((tmp) => {
   write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A 🔒\n${taskTable([['task one', 'verified']])}`);
-  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+  write(path.join(tmp, '_docs', 'module', 'm', 'qa.md'),
     '# Review\n\n## Review Outcome — Phase 1\n**Status:** ✅ Verified (FULL)\nAccepted.\n');
   write(path.join(tmp, '_docs', 'module', 'm', 'security.md'),
     '# Security\n\n## Open Findings — all rounds\n| Sev | Finding | Location | Status | Round | Routes to |\n|---|---|---|---|---|---|\n| 🟠 | x | Phase 1 | 🔵 Open | 1 | backend-engineer |\n');
@@ -1522,7 +1626,7 @@ withTempProject((tmp) => {
 
 withTempProject((tmp) => {
   write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A\n${taskTable([['task one', 'verified']])}`);
-  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+  write(path.join(tmp, '_docs', 'module', 'm', 'qa.md'),
     '# Review\n\n## Open Issues — all phases\n| Issue | Phase | Routes to | Blocking |\n|---|---|---|---|\n| BE-001 bug | 1 | backend-engineer | blocking |\n\n## Review Outcome — Phase 1\n**Status:** ⚠️ Partial (FULL)\nSent back.\n');
   runGenerate({ CLAUDE_PROJECT_DIR: tmp });
   const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');

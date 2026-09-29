@@ -72,17 +72,17 @@ function fixture(): { knowledge: string; api: string; web: string; mvc: string }
 }
 
 describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
-  it("V10 TASK-008: every engineer stage resolves every bound Target as writable; a fullstack Target still de-duplicates physically", () => {
+  it("V13 TASK-011: each engineer stage writes only its own role's Targets; the sibling role's Target stays read-only; a fullstack Target bound to both roles stays writable for both", () => {
     const { api, web, mvc } = fixture();
     const splitArgs = parseArgs(
       ["--task-id", "T-split", "--module", "orders", "--bug-fix", "--backend", "--frontend", "--backend-target", "api", "--frontend-target", "web"],
       api,
     );
     const split = runtimeTaskWorkRoots(splitArgs, "T-split", classifyTask(splitArgs.classification));
+    // An engineer stage's packet scope carries only the Targets its own role
+    // may write; the sibling role's Target is not this stage's scope at all.
     expect(split.filter((root) => root.stage === AgentStage.BACKEND_ENGINEER || root.stage === AgentStage.FRONTEND_ENGINEER)).toEqual([
       { stage: AgentStage.BACKEND_ENGINEER, targetId: "api", path: api, access: "write" },
-      { stage: AgentStage.BACKEND_ENGINEER, targetId: "web", path: web, access: "write" },
-      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "api", path: api, access: "write" },
       { stage: AgentStage.FRONTEND_ENGINEER, targetId: "web", path: web, access: "write" },
     ]);
 
@@ -97,5 +97,16 @@ describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
       { stage: AgentStage.FRONTEND_ENGINEER, targetId: "mvc", path: mvc, access: "write" },
     ]);
     expect(new Set(engineerRoots.map((root) => root.path))).toEqual(new Set([mvc]));
+  });
+
+  it("V13 TASK-011: a code task without an explicit Target binding refuses at intake — the legacy-project fallback is gone", () => {
+    const { api } = fixture();
+    const unbound = parseArgs(
+      ["--task-id", "T-unbound", "--module", "orders", "--bug-fix", "--backend"],
+      api,
+    );
+    expect(() => runtimeTaskWorkRoots(unbound, "T-unbound", classifyTask(unbound.classification))).toThrow(
+      /task T-unbound has no explicit Target binding/,
+    );
   });
 });

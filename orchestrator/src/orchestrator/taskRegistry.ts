@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
+import type { HumanDecisionVerifier } from "../gates/humanDecision.js";
 import { TaskState } from "../types.js";
-import type { ClassificationResult } from "../classification/taskClassifier.js";
+import type { ClassificationInput, ClassificationResult } from "../classification/taskClassifier.js";
 import type { Budget } from "../cost/costControl.js";
 import type { Environment } from "../environment/environment.js";
 import { writeStateViewFromStore } from "../store/stateView.js";
@@ -9,6 +10,8 @@ import { TaskGraph, taskGraphFromPlan, type TaskNode } from "../graph/taskGraph.
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
+import { verifyTaskCompletion } from "./transitionGuard.js";
+import type { StageEntryGuard } from "./stageGuards.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import {
   buildRuntimeTask,
@@ -45,6 +48,16 @@ export interface TaskRegistryOptions {
   stateViewPath?: string;
   /** Read-only plan authority for this invocation; persisted states supply completion. */
   planTasks?: () => readonly WorkPlanTask[] | null;
+  /** Trusted human channel for approval decisions. Omitted = unconfigured: every decision fails closed. */
+  humanDecisionVerifier?: HumanDecisionVerifier;
+  /** Where dispatch reads `contracts/*.yaml`; the reviewer-independence check reads the same ones. */
+  contractRoot?: string;
+  /**
+   * V13 TASK-007 — the stage-entry guard every task this registry opens is
+   * built with. Required: production passes `createRoleLaneStageGuard`
+   * (`stageGuards.ts`); nothing defaults it and nothing turns it off.
+   */
+  stageEntryGuard: StageEntryGuard;
 }
 
 export interface TaskListing {
@@ -72,6 +85,10 @@ export class TaskRegistry {
   private readonly now?: () => number;
   private readonly stateViewPath?: string;
   private readonly planTasks?: TaskRegistryOptions["planTasks"];
+  private readonly humanDecisionVerifier?: HumanDecisionVerifier;
+  private readonly contractRoot?: string;
+  /** The guard every orchestrator this registry builds is given — and the one its status projection reads. */
+  readonly stageEntryGuard: StageEntryGuard;
   /** True while a `transaction()` is open: the file-backed state view cannot be rolled back, so it waits for the commit. */
   private deferStateView = false;
 
@@ -81,10 +98,20 @@ export class TaskRegistry {
     this.now = opts.now;
     this.stateViewPath = opts.stateViewPath;
     this.planTasks = opts.planTasks;
+    this.humanDecisionVerifier = opts.humanDecisionVerifier;
+    this.contractRoot = opts.contractRoot;
+    this.stageEntryGuard = opts.stageEntryGuard;
   }
 
   private orchestratorOptions() {
-    return { store: this.store, budget: this.budget, now: this.now };
+    return {
+      store: this.store,
+      budget: this.budget,
+      now: this.now,
+      humanDecisionVerifier: this.humanDecisionVerifier,
+      contractRoot: this.contractRoot,
+      stageEntryGuard: this.stageEntryGuard,
+    };
   }
 
   /** Reload authored input; persisted RuntimeTask fields are never a second plan authority. */
@@ -92,7 +119,7 @@ export class TaskRegistry {
     const supplied = this.planTasks?.();
     if (supplied) return supplied;
     const tasks = taskId ? [this.store.loadTask(taskId)].filter((t): t is PersistedTask => t !== null) : this.store.listTasks();
-    const sources = [...new Set(tasks.flatMap(t => t.runtimeTask && "version" in t.runtimeTask && t.runtimeTask.version === 2 ? [t.runtimeTask.plan_source] : []))];
+    const sources = [...new Set(tasks.flatMap(t => t.runtimeTask && "version" in t.runtimeTask && t.runtimeTask.version === 2 && t.runtimeTask.contract.version === 1 ? [t.runtimeTask.plan_source] : []))];
     if (sources.length > 1) throw new Error("graph spans multiple plans; select an explicit module plan context");
     if (!sources.length) return null;
     const parsed = readWorkPlan(fs.readFileSync(sources[0], "utf8"));
@@ -104,6 +131,8 @@ export class TaskRegistry {
   create(params: {
     taskId: string;
     classification: ClassificationResult;
+    /** Raw signals `classification` was computed from; threaded to `buildRuntimeTask` so it compiles and persists `workflow_plan` (V13 TASK-004). */
+    classificationInput?: ClassificationInput;
     dependsOn?: string[];
     environment?: Environment;
     targetBindings?: TargetBindings;
@@ -139,6 +168,7 @@ export class TaskRegistry {
       taskId: params.taskId,
       workflow: params.workflow ?? `classification:${params.classification.level.toLowerCase()}`,
       classification: params.classification,
+      classificationInput: params.classificationInput,
       dependsOn,
       projectRoot: params.projectRoot ?? defaultProjectRoot(),
       docsRoot: params.docsRoot,
@@ -225,7 +255,7 @@ export class TaskRegistry {
 
   list(): TaskListing[] {
     const tasks = this.store.listTasks();
-    return tasks.map((task) => ({ task, status: describeStatus(task, tasks) }));
+    return tasks.map((task) => ({ task, status: describeStatus(task, tasks, { stageEntryGuard: this.stageEntryGuard }) }));
   }
 
   runsForTask(taskId: string): RunRecord[] {
@@ -301,10 +331,19 @@ export class TaskRegistry {
     if (!task) throw new TaskNotFoundError(taskId);
     const tasks = this.store.listTasks();
     const plan = this.currentPlan(taskId);
-    if (!plan?.some(t => t.id === taskId)) return unmetDependencies(task, tasks);
+    if (!plan?.some(t => t.id === taskId)) {
+      const unmet = unmetDependencies(task, tasks);
+      // The pointer check above is a view; a dependency counts only once its completion record verifies.
+      const unverified = task.dependsOn.filter((id) => {
+        const dependency = tasks.find((t) => t.taskId === id);
+        return !unmet.includes(id) && (!dependency || !verifyTaskCompletion(this.store, dependency).done);
+      });
+      return [...unmet, ...unverified];
+    }
     const graph = taskGraphFromPlan(plan);
     if (JSON.stringify(graph.dependenciesOf(taskId).sort()) !== JSON.stringify([...task.dependsOn].sort())) throw new Error(`task ${taskId}: registered graph drift; explicitly recompile in a new attempt`);
-    const completed = tasks.filter(t => t.machine.current === TaskState.DEPLOYED && !t.cancelled && !t.paused && unmetDependencies(t, tasks).length === 0).map(t => t.taskId);
+    // Done, not merely DEPLOYED: each completion record is re-verified against the evidence store.
+    const completed = tasks.filter(t => verifyTaskCompletion(this.store, t).done && !t.cancelled && !t.paused && unmetDependencies(t, tasks).length === 0).map(t => t.taskId);
     return graph.waitingOn(taskId, completed, plan.filter(t => t.status === "blocked").map(t => t.id));
   }
 

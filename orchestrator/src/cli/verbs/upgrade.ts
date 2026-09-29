@@ -18,28 +18,18 @@ export async function runUpgradeVerb(rest: string[], defaultProjectRoot: string)
     );
   }
   const mode = flagValue(rest, "--mode");
-  if (mode !== "legacy-project" && mode !== "three-repo") {
-    throw new CliUsageError("upgrade: --mode <legacy-project|three-repo> is required; mode is never inferred from directories");
+  if (mode === "legacy-project") {
+    throw new CliUsageError("upgrade: --mode legacy-project has been removed; use --mode three-repo");
   }
-  if (mode === "three-repo") {
-    try {
-      const result = runThreeRepoUpgrade(projectRoot);
-      console.log(`[orchestrator] three-repo upgrade leaves ${result.knowledgePathsSkipped.length} Knowledge/Target path(s) untouched; update the installed framework package to update bindings.`);
-      return 0;
-    } catch (e) {
-      console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-      return 1;
-    }
+  if (mode !== "three-repo") {
+    throw new CliUsageError("upgrade: --mode three-repo is required; mode is never inferred from directories");
   }
-  // `legacy-project` mode (`.sta/` file-by-file upgrade via
-  // packaging/upgradeCommand.ts) is removed. Error naming the replacement for
-  // this release rather than vanishing silently: `software-team-agents init`
-  // converts a `.sta/`-only workspace to `.agent-team/` (no content loss),
-  // after which `software-team-agents sync` (or this same `upgrade` verb,
-  // which detects `.agent-team/manifest.json` above) keeps it current.
-  console.error(
-    `[orchestrator] upgrade --mode legacy-project no longer exists — run \`software-team-agents init\` inside ${projectRoot} ` +
-      "to convert it to .agent-team/ (no content loss), then `software-team-agents sync` to keep it current",
-  );
-  return 1;
+  try {
+    const result = runThreeRepoUpgrade(projectRoot);
+    console.log(`[orchestrator] three-repo upgrade leaves ${result.knowledgePathsSkipped.length} Knowledge/Target path(s) untouched; update the installed framework package to update bindings.`);
+    return 0;
+  } catch (e) {
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
 }

@@ -18,6 +18,8 @@ import {
   type PlanRunScope,
 } from "./planCompilation.js";
 import { AgentStage, TaskLevel } from "../types.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
+import { installFrameworkWorkflows } from "../workflow/workflows.testSupport.js";
 
 const HASH = "a".repeat(64);
 const canonicalFixture = fs.readFileSync(fileURLToPath(new URL("../docs/fixtures/canonical-plan.md", import.meta.url)), "utf8");
@@ -147,12 +149,13 @@ function register(overrides: { scope?: PlanRunScope; plan?: string; classificati
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "v8-plan-registration-"));
+  installFrameworkWorkflows(root);
   fs.mkdirSync(path.join(root, "target"), { recursive: true });
   planMarkdown = twoTaskPlan();
   writeModuleDocs(planMarkdown);
   store = new SqliteTaskStore(path.join(root, "state.db"));
   ledger = new SqliteRunLedger(store, { projectRoot: root });
-  registry = new TaskRegistry({ store, stateViewPath: path.join(root, ".workflow", "state.yaml") });
+  registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: path.join(root, ".workflow", "state.yaml") });
   runId = createRunId();
 });
 
@@ -191,16 +194,6 @@ describe("T-V8-017 — atomic whole-plan registration", () => {
     expect(fs.existsSync(path.join(root, ".workflow", "state.yaml"))).toBe(true);
   });
 
-  it("makes readiness come from the fixed DAG, not from a plan.md re-read", () => {
-    register();
-    expect(ledger.readiness(runId).ready).toEqual(["BE-004"]);
-    // Editing plan.md afterwards changes nothing about the frozen run.
-    fs.writeFileSync(path.join(root, "_docs", "module", "orders", "plan.md"), canonicalFixture);
-    expect(ledger.readiness(runId)).toEqual({
-      ready: ["BE-004"], waiting: [{ task_id: "FE-010", waiting_on: ["BE-004"] }], blocked: [], settled: [],
-    });
-  });
-
   it("selects an explicit task scope and orders it by the graph, not by the selection", () => {
     const result = register({ scope: { kind: "tasks", taskIds: ["FE-010", "BE-004"] } });
     expect(result.run.task_order).toEqual(["BE-004", "FE-010"]);
@@ -209,7 +202,7 @@ describe("T-V8-017 — atomic whole-plan registration", () => {
   it("selects a phase scope", () => {
     expect(register({ scope: { kind: "phase", phase: 1 } }).run.task_order).toEqual(["BE-004", "FE-010"]);
     // Nothing in phase 2 exists, and an empty scope is a refusal, not an empty run.
-    const fresh = new TaskRegistry({ store });
+    const fresh = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
     expect(() => compileAndRegisterPlan({
       registry: fresh, store, ledger, planMarkdown, references: refs, scope: { kind: "phase", phase: 2 },
       runId: createRunId(), module: "orders", boundary: "qa", targetId: "t", targetRoot: root, knowledgeRoot: root,
@@ -301,10 +294,10 @@ describe("T-V8-017 — every refusal leaves no registration state", () => {
 });
 
 describe("T-V8-017 — derived classification and drift", () => {
-  it("derives the risk half from the plan and leaves work kind to the caller", () => {
+  it("derives a plan-task classification: owner engineer flag plus the authored risk facts, overridable by the caller", () => {
     const [be] = parseCanonicalPlan(planMarkdown, refs).tasks;
     expect(classificationInputForPlanTask(be!)).toMatchObject({
-      isIncrementalFeature: true, touchesSchema: false, touchesSensitiveArea: false,
+      isPlanTask: true, touchesSchema: false, touchesSensitiveArea: false,
       isProductionDeployOrMigration: false, touchesBackend: true, touchesFrontend: false,
     });
     const schema: PlanTask = { ...be!, risk: ["schema"], humanGate: ["schema"] };
@@ -314,14 +307,17 @@ describe("T-V8-017 — derived classification and drift", () => {
     const deploy: PlanTask = { ...be!, humanGate: ["migration"] };
     expect(classificationInputForPlanTask(deploy).isProductionDeployOrMigration).toBe(true);
     // The caller's explicit value wins over the derived default.
-    expect(classificationInputForPlanTask(be!, { isIncrementalFeature: false, isClearBugFix: true }).isClearBugFix).toBe(true);
+    expect(classificationInputForPlanTask(be!, { isPlanTask: false, isClearBugFix: true }).isClearBugFix).toBe(true);
   });
 
-  it("a schema-risk plan registers as LARGE_CRITICAL with the human gate intact", () => {
+  it("a schema-risk plan task keeps the plan-task pipeline, gains the security pass, and keeps its human gate", () => {
     const schemaPlan = planMarkdown.replace("Risk: shared-contract\nHuman gate: none", "Risk: schema\nHuman gate: schema");
     register({ plan: schemaPlan });
     const stored = store.loadTask("BE-004")!;
-    expect(stored.classification.level).toBe(TaskLevel.LARGE_CRITICAL);
+    expect(stored.classification.level).toBe(TaskLevel.MEDIUM);
+    expect(stored.classification.pipeline).toEqual([
+      AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER, AgentStage.SECURITY,
+    ]);
     expect(stored.classification.requiresHumanApproval).toBe(true);
     expect(stored.classification.sensitiveGate).toBe(true);
   });
@@ -344,9 +340,10 @@ describe("T-V8-017 — derived classification and drift", () => {
     const orders = new Set([first.run.task_order.join(",")]);
     for (let i = 0; i < 5; i += 1) {
       const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v8-plan-order-"));
+      installFrameworkWorkflows(isolatedRoot);
       const isolatedStore = new SqliteTaskStore(path.join(isolatedRoot, "state.db"));
       const isolatedLedger = new SqliteRunLedger(isolatedStore, { projectRoot: isolatedRoot });
-      const isolatedRegistry = new TaskRegistry({ store: isolatedStore });
+      const isolatedRegistry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store: isolatedStore });
       const docs = path.join(isolatedRoot, "_docs", "module", "orders");
       fs.mkdirSync(docs, { recursive: true });
       fs.writeFileSync(path.join(docs, "plan.md"), planMarkdown);

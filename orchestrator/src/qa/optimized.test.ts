@@ -5,6 +5,38 @@ import { withQaOptimization, riskSignalsFromClassification } from "./optimized.j
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { runDeterministicVerification } from "./deterministic.js";
+import { persistedSweep, PASSING_VERIFICATION } from "../evidence/stageEvidence.testSupport.js";
+
+import type { QaTaskContract } from "./taskContract.js";
+
+function mockQaTaskContract(taskId = "T1"): QaTaskContract {
+  return {
+    taskId,
+    title: "Test Task",
+    phase: 1,
+    owner: "backend-engineer",
+    objective: "Test objective",
+    why: "Test why",
+    acceptanceText: "AC-001: test passes",
+    acceptanceIds: ["AC-001"],
+    designIds: [],
+    requirementIds: [],
+    produces: [],
+    consumes: [],
+    validationAndEvidence: "Verify with tests",
+    scopeAndConstraints: "None",
+    doNotModify: "None",
+    compatibility: "None",
+    risk: [],
+    humanGate: [],
+    dependencyOutputs: [],
+    blastRadius: { dependencies: [], descendants: [], contractEdges: [], phases: [1] },
+    fileManifest: ["src/a.ts"],
+    boundTargets: [],
+    openFindings: [],
+    closedFindings: [],
+  };
+}
 
 function qaReq(overrides: Partial<AgentExecutorRequest> = {}): AgentExecutorRequest {
   return {
@@ -27,7 +59,7 @@ const passingQaInner: AgentExecutor = (req) => {
     mode: /SCOPE NOT BOUNDED/.test(evidenceItem?.content ?? "") ? "FULL" : "TARGETED",
     requirements: { R1: "PASS" },
     tests: { passed: 3, failed: 0 },
-    evidence: ["review.md"],
+    evidence: ["qa.md"],
     risks: [],
     hasAutomatedTests: true,
     unverifiedBehaviour: [],
@@ -58,48 +90,63 @@ describe("withQaOptimization", () => {
     expect(evidence).toContain("Effort: lightweight");
   });
 
-  it("opt-in low-risk skip consumes passing deterministic evidence without a model call", async () => {
+  it("low-risk task dispatches QA model call with lightweight effort (V13 TASK-019: no synthetic skip)", async () => {
     let modelCalls = 0;
+    let evidenceContext = "";
     const exec = withQaOptimization({
-      inner: async () => {
+      inner: async (req) => {
         modelCalls++;
-        return { outcome: { tokens: 99, cost: 1, result: "PASS" } };
+        evidenceContext = req.context.find((c) => c.source === "qa-evidence")?.content ?? "";
+        return {
+          outcome: { tokens: 50, cost: 0.05, result: "PASS" },
+          artifactType: ArtifactType.QA_REPORT,
+          artifact: {
+            taskId: req.taskId,
+            status: "PASS",
+            mode: "TARGETED",
+            requirements: { [req.taskId]: "PASS" },
+            tests: { passed: 1, failed: 0 },
+            evidence: ["qa.md"],
+            risks: [],
+            hasAutomatedTests: true,
+            unverifiedBehaviour: [],
+          },
+        };
       },
       changedFiles: () => ["src/a.ts"],
       taskLevel: () => "SMALL" as ClassificationResult["level"],
-      allowQaSkip: true,
-      deterministicGate: "enabled",
-      deterministicVerification: () => ({
+    });
+
+    const result = await exec(qaReq({ deterministicVerification: persistedSweep({
         required: ["unit-tests"],
         status: "passed",
         ran: [{ id: "unit-tests", status: "PASS", durationMs: 1, outputSummary: "1 passed" }],
         failures: [],
         skipped: [],
         missingRequired: [],
-        enforcement: "warn",
+        runnerless: [],
+        enforcement: "enforce",
         passed: true,
-      }),
-    });
-
-    const result = await exec(qaReq());
-    expect(modelCalls).toBe(0);
-    expect(result.outcome).toMatchObject({ result: "PASS", tokens: 0, qa_effort: "skip" });
+      }) }));
+    expect(modelCalls).toBe(1);
+    expect(result.outcome).toMatchObject({ result: "PASS", qa_effort: "lightweight" });
     expect(result.artifactType).toBe("qa-report");
     expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
+    expect(evidenceContext).toContain("Effort: lightweight");
+    expect(evidenceContext).toContain("unit-tests");
   });
 
-  it("refuses opt-in skip when passing deterministic evidence is absent", async () => {
+  it("claimed PASS without QA report artifact fails closed (V13 TASK-019)", async () => {
     const result = await withQaOptimization({
-      inner: async () => ({ outcome: { tokens: 99, cost: 1, result: "PASS" } }),
+      inner: async () => ({ outcome: { tokens: 50, cost: 0.05, result: "PASS" } }),
       changedFiles: () => ["src/a.ts"],
-      taskLevel: () => "SMALL" as ClassificationResult["level"],
-      allowQaSkip: true,
+      taskContract: () => mockQaTaskContract(),
     })(qaReq());
     expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toMatch(/refusing to close without evidence/);
+    expect(result.outcome.failure_reason).toMatch(/claimed PASS without producing a QA report artifact/);
   });
 
-  it("removes the mechanical rerun instruction when the deterministic gate is enabled", async () => {
+  it("removes the mechanical rerun instruction when a real sweep result is supplied", async () => {
     let evidence = "";
     await withQaOptimization({
       inner: async (req) => {
@@ -107,14 +154,13 @@ describe("withQaOptimization", () => {
         return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
       },
       changedFiles: () => ["src/a.ts"],
-      deterministicGate: "enabled",
       taskLevel: () => "LARGE_CRITICAL" as ClassificationResult["level"],
-    })(qaReq());
+    })(qaReq({ deterministicVerification: persistedSweep(PASSING_VERIFICATION) }));
     expect(evidence).toContain("Deterministic gate: enabled");
     expect(evidence).not.toContain("static-analysis-gate.js");
   });
 
-  it("records honestly that no sweep result is available when the deterministic gate is disabled, instead of instructing the LLM to run it (T-V5-036)", async () => {
+  it("renders no disabled-gate section: the escape hatch no longer exists (V13 TASK-017)", async () => {
     let evidence = "";
     await withQaOptimization({
       inner: async (req) => {
@@ -122,37 +168,11 @@ describe("withQaOptimization", () => {
         return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
       },
       changedFiles: () => ["src/a.ts"],
-      deterministicGate: "disabled",
       taskLevel: () => "LARGE_CRITICAL" as ClassificationResult["level"],
     })(qaReq());
-    expect(evidence).toContain("Deterministic gate: disabled");
-    expect(evidence).toContain("No deterministic sweep result is available for this round");
+    expect(evidence).not.toContain("Deterministic gate: disabled");
+    expect(evidence).not.toContain("--no-deterministic-gate");
     expect(evidence).not.toContain("node .claude/scripts/static-analysis-gate.js");
-  });
-
-  it("passes non-QA stages through untouched", async () => {
-    let innerCalls = 0;
-    const inner: AgentExecutor = (req) => {
-      innerCalls += 1;
-      return { outcome: { tokens: 1, cost: 0, result: "PASS", context_chars: req.context.length } };
-    };
-    const exec = withQaOptimization({ inner, changedFiles: () => ["a.ts"] });
-    await exec(qaReq({ stage: AgentStage.BACKEND_ENGINEER }));
-    expect(innerCalls).toBe(1);
-  });
-
-  it("injects the bounded evidence package into the QA context", async () => {
-    let seen: AgentExecutorRequest | undefined;
-    const inner: AgentExecutor = (req) => {
-      seen = req;
-      return passThroughResult();
-    };
-    const exec = withQaOptimization({ inner, changedFiles: () => ["src/a.ts"] });
-    await exec(qaReq());
-    const pkg = seen!.context.find((c) => c.source === "qa-evidence")!;
-    expect(pkg.content).toContain("QA evidence package for T1");
-    expect(pkg.content).toContain("src/a.ts");
-    expect(pkg.content).toContain("TARGETED");
   });
 
   it("uses concise production-style evidence references rather than blank placeholders or source diffs", async () => {
@@ -192,9 +212,8 @@ describe("withQaOptimization", () => {
     const exec = withQaOptimization({
       inner,
       changedFiles: () => ["src/a.ts"],
-      deterministicVerification: () => deterministic,
     });
-    const result = await exec(qaReq());
+    const result = await exec(qaReq({ deterministicVerification: persistedSweep(deterministic) }));
     expect(innerCalls).toBe(0);
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("deterministic verification failed before LLM QA");
@@ -203,11 +222,13 @@ describe("withQaOptimization", () => {
     expect(result.gateEvidence?.qaModeDecision).toBeUndefined();
   });
 
-  it("records the explicit deterministic-gate escape hatch without manufacturing a check result", async () => {
+  it("records no sweep as disabled in the run log without inventing evidence for it (V13 TASK-017)", async () => {
+    // The bypass flag is gone; a QA round with no persisted sweep is recorded
+    // honestly as "disabled" in the run log and still needs real evidence to
+    // pass - it can never claim the gate ran.
     const result = await withQaOptimization({
       inner: passingQaInner,
       changedFiles: () => ["src/a.ts"],
-      deterministicGate: "disabled",
     })(qaReq());
 
     expect(result.outcome.result).toBe("PASS");
@@ -258,28 +279,26 @@ describe("withQaOptimization", () => {
     expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
   });
 
-  it("reports deterministic_gate: disabled — not the caller's requested 'enabled' — when no sweep result was actually produced (T-V5-036)", async () => {
-    // The caller says "enabled" (its own intent for the round) but wires no
-    // deterministicVerification callback, e.g. because the post-Dev hook never
-    // ran for this taskId. The outcome must reflect what happened, not what
-    // was asked for.
+  it("reports deterministic_gate: disabled when no sweep result was actually produced (T-V5-036)", async () => {
+    // No deterministicVerification rides the request, e.g. because no
+    // code-producing stage has completed yet. The outcome reflects what
+    // happened, and the mandatory post-Dev hook is what makes a real sweep
+    // appear - there is no caller flag left to claim one.
     const result = await withQaOptimization({
       inner: passingQaInner,
       changedFiles: () => ["src/a.ts"],
-      deterministicGate: "enabled",
     })(qaReq());
     expect(result.outcome.deterministic_gate).toBe("disabled");
   });
 
-  it("reports deterministic_gate: enabled when a real sweep result was produced, regardless of the caller's flag", async () => {
+  it("reports deterministic_gate: enabled when a real sweep result was produced", async () => {
     const deterministic = await runDeterministicVerification((id) =>
       id === "typecheck" ? { id, status: "PASS", durationMs: 1, outputSummary: "ok" } : null,
     );
     const result = await withQaOptimization({
       inner: passingQaInner,
       changedFiles: () => ["src/a.ts"],
-      deterministicVerification: () => deterministic,
-    })(qaReq());
+    })(qaReq({ deterministicVerification: persistedSweep(deterministic) }));
     expect(result.outcome.deterministic_gate).toBe("enabled");
   });
 

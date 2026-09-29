@@ -66,7 +66,7 @@ describe("V9 Scenario Matrix Coverage (T-V9-020)", () => {
   };
 
   describe("Single Target / single repo scenarios", () => {
-    it("single-repo with no installation config resolves to project root", () => {
+    it("single-repo with no installation config refuses: an unbound root is never a scope (V13 TASK-011)", () => {
       const root = tmpDir("single-repo-");
       const store = new SqliteTaskStore(path.join(root, "state.db"));
       try {
@@ -82,8 +82,9 @@ describe("V9 Scenario Matrix Coverage (T-V9-020)", () => {
         const prevConfig = process.env.STA_INSTALLATION_CONFIG;
         process.env.STA_INSTALLATION_CONFIG = path.join(root, "non-existent-install.yaml");
         try {
-          const roots = resolveWritableWorkRoots(root, "single-repo-task", store, AgentStage.BACKEND_ENGINEER);
-          expect(roots).toEqual([{ path: root }]);
+          expect(() => resolveWritableWorkRoots(root, "single-repo-task", store, AgentStage.BACKEND_ENGINEER)).toThrow(
+            /single-repo-task cannot resolve its Target binding/,
+          );
         } finally {
           if (prevConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
           else process.env.STA_INSTALLATION_CONFIG = prevConfig;

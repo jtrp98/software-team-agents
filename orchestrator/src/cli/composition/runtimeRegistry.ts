@@ -7,6 +7,7 @@ import { ClaudeCodeAdapter } from "../../runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "../../runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "../../runtime/openCodeAdapter.js";
 import { AntigravityAdapter } from "../../runtime/antigravityAdapter.js";
+import { ZcodeAdapter } from "../../runtime/zcodeAdapter.js";
 
 export interface CliDependencies {
   createRuntimeRegistry?: (projectRoot: string) => RuntimeRegistry;
@@ -19,11 +20,9 @@ export function runtimeRegistryFor(projectRoot: string, dependencies: CliDepende
 /**
  * The production composition root.
  *
- * The paid API adapter is no longer constructed here at all:
- * `--runtime` only offers runtimes that can actually run, and `ApiAdapter`
- * (`runtime/apiAdapter.ts`) has no `invoke` in production, so every call it
- * received always returned `NOT_CONFIGURED`. The class itself survives as an
- * unwired reference implementation; it is simply never registered.
+ * The paid API adapter is removed entirely in V13 TASK-024.
+ * Production registers exactly the five target runtimes:
+ * Claude Code, Codex, OpenCode, Antigravity, and ZCode.
  */
 export function createProductionRuntimeRegistry(projectRoot: string): RuntimeRegistry {
   // The human-owned tier file is the one declarative source for models this
@@ -51,5 +50,9 @@ export function createProductionRuntimeRegistry(projectRoot: string): RuntimeReg
       guardConfigPath: fs.existsSync(defaultAgyHooks) ? defaultAgyHooks : null,
       agentsStoreRoot: fs.existsSync(defaultAgyAgents) ? defaultAgyAgents : null,
     }),
+    // V13 TASK-015 — the governed ZCode adapter over the CLI bundled with the
+    // ZCode install. Registered like the others; routing's certification and
+    // capability gates (not registration) decide what it may run.
+    new ZcodeAdapter({ projectRoot }),
   ]);
 }

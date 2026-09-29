@@ -48,11 +48,6 @@ export const WORKSPACE_ROLE_LABEL: Record<WorkspaceRole, string> = {
   dev: "DEV",
 };
 
-export const ROLE_WORKSPACE_KIND: Record<WorkspaceRole, "knowledge" | "target"> = {
-  ba: "knowledge",
-  dev: "target",
-};
-
 /**
  * One managed payload, not two.
  *

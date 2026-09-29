@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
-import { buildPrompt } from "../runtime/agentRunAssembly.js";
+import { buildPromptParts } from "../runtime/agentRunAssembly.js";
 import { FORBIDDEN_COMMANDS, contractGuards } from "../runtime/runtimeGuards.js";
 import { ContextLeakageError, selectContext } from "../context/contextSelection.js";
 import { canWritePath, pathRulesFor } from "./pathPermissions.js";
@@ -144,7 +144,7 @@ describe("untrusted content cannot widen what a role reads", () => {
       "frontend-code": INJECTION,
     } as Parameters<typeof selectContext>[1];
     const context = selectContext(AgentStage.BACKEND_ENGINEER, available);
-    const prompt = buildPrompt({ stage: AgentStage.BACKEND_ENGINEER, taskId: "AUTH-14", context });
+    const prompt = buildPromptParts({ stage: AgentStage.BACKEND_ENGINEER, taskId: "AUTH-14", context }).text;
     expect(prompt).not.toContain(INJECTION);
     expect(prompt).toContain("requirements body");
   });

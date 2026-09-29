@@ -1,31 +1,50 @@
-import { ApprovalType } from "../../gates/approval.js";
-import { CliUsageError, confirm } from "../../cli.js";
+import { ApprovalDecisionError, ApprovalType, describeHumanActor } from "../../gates/approval.js";
+import { chatRelayCredential } from "../chatRelay.js";
+import { chatRelayInstructions } from "../../gates/chatRelayChannel.js";
+import { NoTrustedHumanChannelError, UntrustedHumanDecisionError } from "../../gates/humanDecision.js";
+import { CliUsageError } from "../../cli.js";
 import { flagValue, openStore, positionalArg } from "../support.js";
-
-export function approvalFieldFor(approvalType: ApprovalType | null): "requirementApproved" | "designApproved" | "humanApproved" | null {
-  if (approvalType === ApprovalType.REQUIREMENT_INTERVIEW) return "requirementApproved";
-  if (approvalType === ApprovalType.SCHEMA_CONFIRMATION) return "designApproved";
-  if (approvalType === ApprovalType.DEPLOY) return "humanApproved";
-  return null;
-}
 
 export const APPROVAL_PROMPT: Record<ApprovalType, string> = {
   [ApprovalType.SCHEMA_CONFIRMATION]: "Confirm the exact risk-triggered design boundary: schema/migration, breaking compatibility, critical security, or material ambiguity",
   [ApprovalType.DEPLOY]: "Approve an actual deploy/migration to production",
+  [ApprovalType.REVIEW_FAILURE]: "A reviewer round came back ❌ Changes requested and no automatic route may answer it",
   [ApprovalType.QA_FAILURE]: "A QA round came back ⚠️/❌ and needs a decision",
   [ApprovalType.SECURITY_RISK]: "A Critical/Important security finding is unresolved",
   [ApprovalType.REQUIREMENT_INTERVIEW]: "Answer the displayed missing confirmation or material business question; generic approval cannot supply a missing decision",
-  [ApprovalType.UXUI_SIGNOFF]: "Confirm the current UX/UI artifact before frontend work starts",
+  [ApprovalType.UXUI_SIGNOFF]: "Sign off the UXUI lane: the listed UX artifacts at these exact versions are binding and frontend work may start",
+  [ApprovalType.BA_SIGNOFF]: "Sign off the BA lane: the listed requirement items at these exact versions are binding and the BA lane is finished",
+  [ApprovalType.SA_SIGNOFF]: "Sign off the SA lane: the listed design items at these exact versions are binding and the SA lane is finished",
+  [ApprovalType.DEV_SIGNOFF]: "Sign off the DEV lane: the listed task items at these exact versions are binding",
+  [ApprovalType.BA_ACK]: "Acknowledge, for the BA lane, that you have seen the listed items at these exact versions",
+  [ApprovalType.SA_ACK]: "Acknowledge, for the SA lane, that you have seen the listed items at these exact versions",
+  [ApprovalType.UXUI_ACK]: "Acknowledge, for the UXUI lane, that you have seen the listed items at these exact versions",
+  [ApprovalType.DEV_ACK]: "Acknowledge, for the DEV lane, that you have seen the listed items at these exact versions",
 };
 
-/** `approve <task-id> [--yes|--no]` — resolves the current WAITING_FOR_HUMAN gate without the full run loop. */
+/** Exit code when no trusted human identity channel can authenticate the decision (unconfigured, or unreachable). */
+export const APPROVE_EXIT_NO_TRUSTED_CHANNEL = 5;
+/** Exit code when the ledger refuses the decision (unknown, settled, superseded, wrong scope, replay, untrusted output). */
+export const APPROVE_EXIT_REFUSED = 6;
+/** Exit code when STA has just announced the request on its channel: nobody can have answered it yet. */
+export const APPROVE_EXIT_ANNOUNCED = 4;
+
+/**
+ * `approve <task-id> --request <request-id> [--yes|--no] [--note <text>]`
+ *
+ * Shows one pending request or records the Controller's relay of the Human's
+ * chat answer. STA checks the pending request and requires chat reference
+ * fields; it cannot authenticate their origin independently.
+ */
 export async function runApproveVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   const stateDb = flagValue(rest, "--state-db");
   const taskId = positionalArg(rest);
   if (!taskId) throw new CliUsageError("approve: a task id is required");
-  const forcedYes = rest.includes("--yes");
-  const forcedNo = rest.includes("--no");
+  const yes = rest.includes("--yes");
+  const no = rest.includes("--no");
+  const requestId = flagValue(rest, "--request");
+  const note = flagValue(rest, "--note");
 
   const { store, registry } = openStore(projectRoot, stateDb);
   try {
@@ -37,26 +56,57 @@ export async function runApproveVerb(rest: string[], defaultProjectRoot: string)
     }
     const orchestrator = registry.resume(taskId);
     const status = orchestrator.status();
-    if (status.kind !== "WAITING_FOR_HUMAN") {
-      console.log(`[orchestrator] task ${taskId} is not waiting on a human decision right now (status: ${status.kind}).`);
+    registry.refreshStateView();
+    const pending = orchestrator.pendingApprovalRequest();
+    if (!pending) {
+      console.log(`[orchestrator] task ${taskId} has no pending approval request (status: ${status.kind}).`);
       return 1;
     }
-    const field = approvalFieldFor(status.approvalType);
-    const label = status.approvalType ? `${status.approvalType}` : `${status.from} -> ${status.to}`;
-    console.log(`[orchestrator] human decision required (${label}): ${status.reason}`);
-    if (status.approvalType) console.log(`[orchestrator]   ${APPROVAL_PROMPT[status.approvalType]}`);
-    const approved = forcedYes ? true : forcedNo ? false : await confirm(`Approve ${label}?`);
-    if (status.approvalType) {
-      orchestrator.decideApproval(status.approvalType, approved, { by: process.env.USER ?? process.env.USERNAME });
-    } else if (field) {
-      orchestrator.provideHumanApproval(field, approved);
-    } else {
-      console.log(`[orchestrator] this CLI doesn't know how to resolve that gate.`);
-      return 2;
+    const { scope } = pending;
+    console.log(
+      `[orchestrator] pending approval request ${pending.requestId} (${scope.type}` +
+        `${scope.from && scope.to ? `, ${scope.from} -> ${scope.to}` : ""}): ${pending.reason}`,
+    );
+    console.log(`[orchestrator]   ${APPROVAL_PROMPT[scope.type]}`);
+    console.log(`[orchestrator]   ${chatRelayInstructions(pending.requestId)}`);
+    if (!requestId) {
+      throw new CliUsageError(`approve: --request <request-id> is required; the pending request is ${pending.requestId}`);
     }
-    registry.refreshStateView();
-    console.log(approved ? `[orchestrator] approved.` : `[orchestrator] rejected — recorded, will not be asked again on resume.`);
-    return approved ? 0 : 3;
+    if (yes && no) throw new CliUsageError("approve: --yes and --no are mutually exclusive");
+    const credential = yes || no ? chatRelayCredential(rest) : undefined;
+
+    try {
+      if (requestId === pending.requestId) {
+        const publication = await orchestrator.publishPendingApproval();
+        if (!publication) throw new NoTrustedHumanChannelError(requestId);
+        console.log(`[orchestrator] request ${publication.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);
+        if (!yes && !no) {
+          console.log("[orchestrator] show this request to the human in chat, then relay the answer with --yes or --no and its chat reference.");
+          return APPROVE_EXIT_ANNOUNCED;
+        }
+        const { decision, settleError } = await orchestrator.submitHumanDecision({
+          requestId,
+          approved: yes,
+          ...(note === undefined ? {} : { note }),
+          credential,
+        });
+        registry.refreshStateView();
+        if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
+        console.log(`[orchestrator] ${decision.approved ? "approved" : "rejected"} ${requestId} (${describeHumanActor(decision.actor)} via ${decision.source.channel}).`);
+        return decision.approved ? 0 : 3;
+      }
+      throw new ApprovalDecisionError("unknown-request", `pending request is ${pending.requestId}, not ${requestId}`);
+    } catch (e) {
+      if (e instanceof NoTrustedHumanChannelError) {
+        console.error(`[orchestrator] refused: ${e.message}`);
+        return APPROVE_EXIT_NO_TRUSTED_CHANNEL;
+      }
+      if (e instanceof ApprovalDecisionError || e instanceof UntrustedHumanDecisionError) {
+        console.error(`[orchestrator] refused: ${e.message}`);
+        return APPROVE_EXIT_REFUSED;
+      }
+      throw e;
+    }
   } finally {
     registry.close();
   }

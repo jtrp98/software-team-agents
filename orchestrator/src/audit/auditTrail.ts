@@ -100,6 +100,7 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       };
     }
 
+    case "REVIEW_PASSED":
     case "QA_PASSED":
     case "SECURITY_PASSED": {
       const round = num(payload, "round");
@@ -114,6 +115,7 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       };
     }
 
+    case "REVIEW_FAILED":
     case "QA_FAILED":
     case "SECURITY_FAILED": {
       const failure = nested(payload, "failure");
@@ -146,14 +148,15 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
 
     case "APPROVAL_REQUIRED": {
       const approval = nested(payload, "approval") ?? {};
-      const approvalType = str(approval, "type");
-      const from = str(approval, "from");
-      const to = str(approval, "to");
+      const scope = nested(approval, "scope") ?? {};
+      const approvalType = str(scope, "type");
+      const from = str(scope, "from");
+      const to = str(scope, "to");
       return {
         actor: ORCHESTRATOR_ACTOR,
         reason: str(approval, "reason"),
         input: from && to ? `${from} -> ${to}` : null,
-        output: null,
+        output: str(approval, "requestId"),
         decision: `ask:${approvalType ?? "approval"}`,
       };
     }
@@ -162,14 +165,24 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       const approved = payload["approved"] === true;
       const approvalType = str(payload, "type");
       return {
-        // The one event a person, not the pipeline, is the author of.
-        actor: str(payload, "by") ?? HUMAN_ACTOR,
+        // The recorded human answer. In chat-relay mode the actor ID is
+        // Controller-reported and is not independently authenticated by STA.
+        actor: payload["actorId"] === null ? null : str(payload, "actorId") ?? HUMAN_ACTOR,
         reason: str(payload, "note"),
-        input: approvalType,
+        input: str(payload, "requestId"),
         output: approved ? "approved" : "rejected",
         decision: `${approved ? "approve" : "reject"}:${approvalType ?? "approval"}`,
       };
     }
+
+    case "APPROVAL_WITHDRAWN":
+      return {
+        actor: ORCHESTRATOR_ACTOR,
+        reason: str(payload, "reason"),
+        input: str(payload, "requestId"),
+        output: "withdrawn",
+        decision: `withdraw:${str(payload, "type") ?? "approval"}`,
+      };
 
     case "TASK_BLOCKED":
       return {
@@ -209,8 +222,31 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       };
     }
 
+    // V13 TASK-003: STA's completion decision for one stage attempt, from persisted evidence.
+    case "STAGE_COMPLETED": {
+      const refs = list(payload, "refs");
+      return {
+        actor: ORCHESTRATOR_ACTOR,
+        reason: null,
+        input: refs.length > 0 ? refs.join(", ") : null,
+        output: str(payload, "evidenceId"),
+        decision: `complete:${str(payload, "stage") ?? "stage"}#${num(payload, "attempt") ?? "?"}`,
+      };
+    }
+
+    case "STAGE_INCOMPLETE": {
+      const missing = list(payload, "missing");
+      return {
+        actor: ORCHESTRATOR_ACTOR,
+        reason: missing.length > 0 ? missing.join("; ") : null,
+        input: null,
+        output: null,
+        decision: `incomplete:${str(payload, "stage") ?? "stage"}#${num(payload, "attempt") ?? "?"}`,
+      };
+    }
+
     case "TASK_DEPLOYED":
-      return { actor: ORCHESTRATOR_ACTOR, reason: null, input: null, output: null, decision: "deploy" };
+      return { actor: ORCHESTRATOR_ACTOR, reason: null, input: null, output: str(payload, "completionEvidenceId"), decision: "deploy" };
 
     case "DEPLOY_COMPLETED": {
       const stages = list(payload, "stages");
@@ -311,7 +347,7 @@ export interface FormatAuditOptions {
  * Renders a trail for a person reading a terminal.
  *
  * One block per event rather than one line: `reason` is routinely a full
- * sentence from `review.md`, and a table that truncates the "why" column defeats
+ * sentence from `qa.md`, and a table that truncates the "why" column defeats
  * the purpose of having recorded it.
  */
 export function formatAuditTrail(entries: readonly AuditEntry[], opts: FormatAuditOptions = {}): string {
@@ -330,6 +366,13 @@ export function formatAuditTrail(entries: readonly AuditEntry[], opts: FormatAud
     if (entry.reason) lines.push(`    why:      ${entry.reason}`);
     if (entry.input) lines.push(`    in:       ${entry.input}`);
     if (entry.output) lines.push(`    out:      ${entry.output}`);
+    if (entry.type === "APPROVAL_DECIDED") {
+      const channel = str(entry.payload, "channel");
+      const reference = str(entry.payload, "evidenceRef");
+      if (channel && reference) lines.push(`    source:   ${channel} ${reference}`);
+      if (entry.payload["actorId"] === null) lines.push(`    actor:    unknown (${str(entry.payload, "actorUnavailableReason") ?? "unavailable"}); audit cannot identify the person`);
+      if (channel === "chat-relay") lines.push("    assurance: actor and message reference are Controller assertions, not independently authenticated by STA");
+    }
   }
   return lines.join("\n");
 }

@@ -150,8 +150,8 @@ camp เป็น approximation ที่คนเลือก `plan.md` ใส�
 implementation/QA phase (T1 reserved) camp ถูกเลือกตอนเริ่ม dev phase: explicit runtime/camp หรือ
 configured camp ชนะเสมอ; headless run ใช้ configured default โดยไม่ถาม stdin (การเลือก camp ไม่ใช่
 automatic quota fallback) pyramid enforcement (`test-pyramid.yaml` ไม่ตั้ง `enforcement` = `warn`) และ
-QA `skip` เป็น **OFF by default**; deterministic gate ตรงข้าม — เปิด default, ปิดเฉพาะ task ด้วย
-`--no-deterministic-gate` operator manual ที่ [`tier-and-effort-run.md`](tier-and-effort-run.md)
+QA `skip` และ bypass switches ทั้งหมดถูกถอดออกแล้วใน V13 — deterministic verification gate และ QA role verification
+เป็น **mandatory เสมอ** โดยไม่มี bypass flag หรือ escape hatch ใดๆ ([`tier-and-effort-run.md`](tier-and-effort-run.md))
 
 ### Target-resolved stack
 

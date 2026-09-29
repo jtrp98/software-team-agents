@@ -13,7 +13,7 @@ import { checkAllContracts } from "../agents/agentContract.js";
 import { checkPathRules } from "../agents/pathPermissions.js";
 import { checkLayout } from "../layout/repoLayout.js";
 import { checkPromptBudget } from "../layout/promptBudget.js";
-import { checkAllWorkflows } from "../workflow/workflowDefinition.js";
+import { checkAllWorkflows, checkWorkflowRoleCoverage } from "../workflow/workflowDefinition.js";
 import { checkBindings } from "../runtime/bindingGenerator.js";
 import { checkProfile } from "../profile/projectProfile.js";
 import { checkDecisions } from "../decisions/decisionLog.js";
@@ -27,7 +27,6 @@ import { checkDocStructure, checkDocSize } from "../docs/docStructure.js";
 import { checkPlanGraphs } from "../docs/planGraph.js";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { validateInstallation } from "../packaging/installValidation.js";
-import { checkRoleWorkspaces } from "../roles/roleWorkspace.js";
 import { checkGitOwnership } from "../git/ownershipCheck.js";
 
 /**
@@ -52,6 +51,7 @@ export type CheckerFlag =
   | "checkLayout"
   | "checkPromptBudget"
   | "checkWorkflows"
+  | "checkWorkflowRoles"
   | "checkBindings"
   | "checkProfile"
   | "checkDecisions"
@@ -66,7 +66,6 @@ export type CheckerFlag =
   | "checkPlan"
   | "checkKnowledge"
   | "checkInstallation"
-  | "checkRoles"
   | "checkGitOwnership";
 
 /**
@@ -136,6 +135,14 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     run: (root) => toOutcome(checkAllWorkflows(root)),
     okMessage: "[orchestrator] workflows/*.yml agree with the classifier.",
     failHeading: "[orchestrator] workflows/*.yml and the classifier disagree:",
+    notes: "none",
+  },
+  {
+    flag: "checkWorkflowRoles",
+    cliFlag: "--check-workflow-roles",
+    run: (root) => toOutcome(checkWorkflowRoleCoverage(root)),
+    okMessage: "[orchestrator] every stage a compiled workflow plan can select has a role contract and an evidence rule.",
+    failHeading: "[orchestrator] a compiled workflow plan can select a stage with no role contract or no evidence rule:",
     notes: "none",
   },
   {
@@ -255,16 +262,6 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     run: (root) => toOutcome(validateInstallation(root)),
     okMessage: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
     failHeading: "[orchestrator] installation metadata has problems:",
-    notes: "leading",
-  },
-  {
-    flag: "checkRoles",
-    cliFlag: "--check-roles",
-    run: (root) => toOutcome(checkRoleWorkspaces(root)),
-    okMessage: "[orchestrator] every role workspace agrees with knowledge/.",
-    failHeading: "[orchestrator] role workspaces have problems:",
-    // "BA is behind on sales-crm" is the check working — what a lane needs to be
-    // told, not a repo inconsistency to fail on.
     notes: "leading",
   },
   {

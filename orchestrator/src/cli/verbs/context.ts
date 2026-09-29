@@ -53,7 +53,7 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
         console.log(rest.includes("--json") ? JSON.stringify(views, null, 2) : renderGeneratedTaskViews(views));
         return views.prompt_preview.state === "executable" ? 0 : 4;
       }
-      const packet = readExecutionPacketForAudit(packetPath);
+      const packet = readExecutionPacket(packetPath);
       console.log(rest.includes("--json") ? JSON.stringify(packet, null, 2) : renderContextPacket(packet));
       return 0;
     }
@@ -88,8 +88,7 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
 import * as path from "node:path";
 import { CliUsageError } from "../../cli.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand, renderContextPacket, stageForRole } from "../../context/contextCommand.js";
-import { latestExecutionPacketPath, readExecutionPacketForAudit } from "../../state/runtimeArtifacts.js";
-import { readExecutionPacket } from "../../state/runtimeArtifacts.js";
+import { latestExecutionPacketPath, readExecutionPacket } from "../../state/runtimeArtifacts.js";
 import { recordContextComposition } from "../../observability/sessionRecord.js";
 import { flagValue, positionalArg } from "../support.js";
 import { extractRootSelectorFlag } from "../../threeRepo/rootSelector.js";

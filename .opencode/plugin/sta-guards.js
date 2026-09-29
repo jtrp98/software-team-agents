@@ -25,16 +25,17 @@
  * OpenCode's headless default is allow-all (spike §7) — fail-open. This
  * plugin plus the bindings' permission blocks are what make a run guarded at
  * all; if this file goes missing, `sta status` reports OpenCode NOT READY and
- * the adapter downgrades its guard report instead of pretending.
+ * the adapter refuses the run before spawn (V13 TASK-014) instead of
+ * launching anything unguarded.
  *
  * IDENTITY AND ENVIRONMENT
  *
  * Same channel as the Claude-side hooks: `STA_ROLE` (set by the
- * orchestrator per stage) selects whose contract applies; without it the
- * declared session role (`.workflow/session-role.json`, written only by
- * `software-team-agents session-role` — the desktop role-play channel) is
- * consulted; with neither only the universal floor holds — an anonymous run
- * has no role to check against.
+ * orchestrator per stage) selects whose contract applies; without it a
+ * direct-mode session's per-role authority arrives only through a verified
+ * STA-issued attempt grant (`.workflow/attempt-grant.json`, written only by
+ * `sta grant issue` — V13 TASK-012); with neither only the universal floor
+ * holds, plus the governed-artifact denial an unassigned session owns.
  * `STA_WRITABLE_WORK_ROOTS` (JSON array of absolute paths) grants the
  * canonical Target roots in three-repo mode; invalid input grants nothing.
  *
@@ -56,6 +57,7 @@
 
 const fs = import("node:fs");
 const path = import("node:path");
+const crypto = import("node:crypto");
 
 /** Tools that take a destination path. Bash stays out of scope here exactly as it does in block-outside-repo.js. */
 const PATH_TOOLS = new Set(["write", "edit", "multiedit", "patch", "notebookedit"]);
@@ -71,13 +73,116 @@ const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**',
 const WORKSPACE_BA_ARTIFACTS = ['_docs/module/*/requirement.md', '_docs/module/*/design.md', '_docs/module/*/design-archive.md', '_docs/module/*/test-plan.md', '_docs/module/*/plan.md', '_docs/module/*/uxui/**', '_docs/status.md', 'knowledge/**', 'decisions/**', 'targets.yaml', 'knowledge-policy.yaml'];
 const FRAMEWORK_PAYLOAD_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
 const KNOWLEDGE_DENIED_ROLES = ['backend-engineer', 'frontend-engineer', 'devops'];
-const SESSION_ROLE_REL_PATH = '.workflow/session-role.json';
+const UNASSIGNED_SESSION_DENY = ['_docs/**'];
+const APPROVAL_CHANNEL_DENY_MARKERS = ['.sta-approval-channel', 'github-app.private-key'];
+const ATTEMPT_GRANT_REL_PATH = '.workflow/attempt-grant.json';
+function approvalChannelDenial(nodePath, nodeFs, root, args) {
+  // V13 TASK-027: the human-owned approval channel (GitHub App key, approver
+  // list) is refused to every tool call that names it, read or write, file
+  // tool or shell, whatever the role, grant or work root. Paths are checked
+  // resolved and symlink-followed; command text is checked as written.
+  if (!args || typeof args !== 'object') return null;
+  const texts = [];
+  const visit = (object, depth) => {
+    for (const key of Object.keys(object)) {
+      const value = object[key];
+      const pathKey = /path|file|dir|cwd|pattern|glob/i.test(key);
+      const textKey = /^(command|cmd|commandline|script|input|patch)$/i.test(key);
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item === 'string' && item !== '') {
+          if (!pathKey && !textKey) continue;
+          texts.push(item);
+          if (!pathKey) continue;
+          let resolved = null;
+          try { resolved = nodePath.resolve(root, item); texts.push(resolved); } catch { resolved = null; }
+          if (resolved && nodeFs && typeof nodeFs.realpathSync === 'function') {
+            try { texts.push(nodeFs.realpathSync(resolved)); } catch { /* absent: the resolved text is what there is */ }
+          }
+        } else if (depth > 0 && item && typeof item === 'object') {
+          visit(item, depth - 1);
+        }
+      }
+    }
+  };
+  visit(args, 2);
+  for (const text of texts) {
+    const folded = text.replace(/\\/g, '/').toLowerCase();
+    for (const marker of APPROVAL_CHANNEL_DENY_MARKERS) {
+      if (folded.includes(marker)) return approvalChannelDenyWhy();
+    }
+  }
+  return null;
+}
+function approvalChannelDenyWhy() {
+  return 'Blocked: this names the human-owned STA approval channel (`~/' + APPROVAL_CHANNEL_DENY_MARKERS[0] + '/`: the GitHub App key and the approver list). No agent may read or change it, on any runtime or role; a person configures it and only STA reads it.';
+}
+const ATTEMPT_GRANT_KEY_REL_PATH = '.workflow/sta-grant-key';
+function unassignedSessionDenial(relative) {
+  // A session with no identity holds no governed-artifact authority: read,
+  // discover and propose is all an unassigned direct session may do, so the
+  // role-owned document tree stays out of its file tools' reach. What turns
+  // the per-role layer on is a verified grant, never a claim.
+  for (const pattern of UNASSIGNED_SESSION_DENY) {
+    if (matchesGlob(pattern, relative)) return unassignedSessionDenyWhy(pattern);
+  }
+  return null;
+}
+function unassignedSessionDenyWhy(pattern) {
+  return '`' + pattern + '` is governed work — role-owned artifacts change through STA dispatch, not a direct session. Propose the change and let STA assign the role that owns it; a per-role write bound comes only from a valid attempt grant.';
+}
+function canonicalGrantJson(value) {
+  // The same normalization STA signs under: sorted keys, undefined dropped.
+  // The grant bytes must hash identically on both ends or every signature
+  // fails, so this stays small and stands still.
+  const normalize = (v) => Array.isArray(v) ? v.map(normalize)
+    : (v && typeof v === 'object') ? Object.fromEntries(Object.entries(v)
+      .filter(([, val]) => val !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, val]) => [key, normalize(val)])) : v;
+  return JSON.stringify(normalize(value));
+}
+function grantSignatureValid(token, createHmac, keyHex) {
+  // HMAC-SHA256 over every field but `signature`, compared constant-time.
+  // A hand-written file fails here unless it also carries STA's key — and
+  // even then STA's own issuance record is what completes a write.
+  if (!token || typeof token !== 'object' || Array.isArray(token)) return false;
+  if (typeof token.signature !== 'string' || !/^[0-9a-f]{64}$/.test(token.signature)) return false;
+  const unsigned = {};
+  for (const key of Object.keys(token)) { if (key !== 'signature') unsigned[key] = token[key]; }
+  const expected = createHmac('sha256', keyHex).update(canonicalGrantJson(unsigned)).digest('hex');
+  if (expected.length !== token.signature.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ token.signature.charCodeAt(i);
+  return diff === 0;
+}
+function attemptGrantFromText(text, createHmac, keyHex, nowMs) {
+  // The STA-issued attempt grant: the one channel a direct-mode session's
+  // per-role authority arrives through, written only by `sta grant issue`
+  // after STA's own dispatch decision. Anything absent, unreadable,
+  // off-shape, unsigned or expired is 'no grant' — the floor posture,
+  // never an error. The env identity wins outright when an orchestrator
+  // set one; a grant is read only when it did not.
+  if (typeof text !== 'string' || text === '') return null;
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.attempt_grant !== 1) return null;
+  if (typeof parsed.role !== 'string' || !/^[a-z][a-z0-9-]*$/.test(parsed.role)) return null;
+  if (typeof parsed.grant_id !== 'string' || !/^agr_[0-9a-f]{32}$/.test(parsed.grant_id)) return null;
+  if (typeof parsed.expires_at !== 'string' || !Number.isFinite(Date.parse(parsed.expires_at))) return null;
+  if (Date.parse(parsed.expires_at) <= nowMs) return null;
+  if (!grantSignatureValid(parsed, createHmac, keyHex)) return null;
+  const stack = parsed.scope && typeof parsed.scope === 'object' && !Array.isArray(parsed.scope) ? parsed.scope.stack : null;
+  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
+  const workRoots = Array.isArray(parsed.work_roots) ? parsed.work_roots : [];
+  return { grantId: parsed.grant_id, role: parsed.role, stack: { write: list(stack && stack.write), deny: list(stack && stack.deny) }, workRoots };
+}
 function frameworkPayloadDenial(relative, role) {
   // Bound to the stage, not to the checkout: one workspace carries both the
   // Framework payload and the Knowledge documents, so where a write lands
   // says nothing about whether it is allowed. The role arrives resolved:
   // the env identity when the orchestrator spawned this process, otherwise
-  // a desktop role-play session's declared file.
+  // a direct-mode session's verified attempt grant.
   if (!role) return null;
   for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
     if (matchesGlob(pattern, relative)) return frameworkPayloadDenyWhy(pattern);
@@ -87,49 +192,18 @@ function frameworkPayloadDenial(relative, role) {
 function frameworkPayloadDenyWhy(pattern) {
   return '`' + pattern + '` is Framework payload — `sta sync` materialises it and a person edits it. No agent contract grants it, so no stage may write it; change it in the Framework repository and sync.';
 }
-function sessionRoleFromText(text) {
-  // The declared-session-role channel: a desktop role-play session has no
-  // STA_ROLE env (no launch path sets one), so the role it is playing arrives
-  // as this CLI-written file instead. The path sits under .workflow/, which
-  // UNIVERSAL_DENY refuses to every agent's file tools, so a session cannot
-  // rewrite its own declaration. Anything absent, unreadable or off-shape is
-  // 'no declared role' — the floor-only posture, never an error.
-  if (typeof text !== 'string' || text === '') return null;
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { return null; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  if (typeof parsed.role !== 'string' || !/^[a-z][a-z0-9-]*$/.test(parsed.role)) return null;
-  return parsed.role;
-}
-function declaredStackRulesFromText(text) {
-  // The stack half of the declaration, the same {write, deny} shape the
-  // STA_STACK_PATH_RULES channel carries, pre-resolved by the same CLI call
-  // the orchestrator uses. Malformed drops out empty, which over-restricts an
-  // engineer role rather than letting a layout path through.
-  if (typeof text !== 'string' || text === '') return { write: [], deny: [] };
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { return { write: [], deny: [] }; }
-  const stack = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.stack : null;
-  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
-  return { write: list(stack && stack.write), deny: list(stack && stack.deny) };
-}
-function sessionRole(envRole, declaredText) {
-  // Orchestrated identity wins outright: a stage the runtime spawned is
-  // exactly who the env says. Only a process without one falls to the
-  // declared file, and with neither this returns null — the floor-only
-  // posture every host keeps for an anonymous session.
-  if (envRole) return envRole;
-  return sessionRoleFromText(declaredText);
-}
-function stackPathRules(declaredText) {
+function stackPathRules(grant) {
   let parsed;
   try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { parsed = {}; }
-  const declared = declaredStackRulesFromText(declaredText);
+  const granted = grant ? grant.stack : { write: [], deny: [] };
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
-  return { write: list(parsed && parsed.write).concat(declared.write), deny: list(parsed && parsed.deny).concat(declared.deny) };
+  return { write: list(parsed && parsed.write).concat(granted.write), deny: list(parsed && parsed.deny).concat(granted.deny) };
 }
-function boundReadOnlyTarget(nodePath, target) {
-  let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
+function boundReadOnlyTarget(nodePath, target, grant) {
+  let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { roots = []; }
+  if (!Array.isArray(roots) || roots.length === 0) {
+    if (grant && Array.isArray(grant.workRoots)) roots = grant.workRoots;
+  }
   if (!Array.isArray(roots)) return null;
   const absolute = nodePath.resolve(target);
   for (const candidate of roots) {
@@ -193,20 +267,30 @@ function matchesGlob(pattern, target) {
 let rootCache = null;
 
 export const StaGuards = async ({ project }) => {
-  const [fsMod, pathMod] = await Promise.all([fs, path]);
+  const [fsMod, pathMod, cryptoMod] = await Promise.all([fs, path, crypto]);
   const nodeFs = fsMod.default ?? fsMod;
   const nodePath = pathMod.default ?? pathMod;
+  const nodeCrypto = cryptoMod.default ?? cryptoMod;
 
   // The workspace this session runs in — project.worktree is what opencode
   // hands plugins; cwd is the fallback. Normalized once per process.
   const rawRoot = (project && project.worktree) || process.cwd();
   const root = normalize(nodePath, rawRoot);
 
-  rootCache = { nodeFs, nodePath, root };
+  rootCache = { nodeFs, nodePath, nodeCrypto, root };
 
   return {
     "tool.execute.before": async (input, output) => {
       const tool = String((input && input.tool) || "").toLowerCase();
+      // Every tool, not only path writers: the approval channel is refused to
+      // reads and shell commands too (V13 TASK-027).
+      let approvalChannelWhy = null;
+      try {
+        approvalChannelWhy = approvalChannelDenial(nodePath, nodeFs, root, output && output.args ? output.args : {});
+      } catch {
+        approvalChannelWhy = null; // never trap an agent because this guard itself broke
+      }
+      if (approvalChannelWhy) throw new Error(approvalChannelWhy);
       if (!PATH_TOOLS.has(tool)) return;
       let reason = null;
       try {
@@ -235,13 +319,14 @@ export const StaGuards = async ({ project }) => {
     const { nodePath: np } = rootCache;
     const target = normalize(np, np.resolve(root, rawPath));
 
-    // Identity resolved once per call: env first, the declared session role
-    // only when the orchestrator never named one. Null means anonymous — the
-    // floor alone applies, exactly as it always has.
-    const declaredText = readSessionRoleText();
-    const role = sessionRole(process.env.STA_ROLE, declaredText);
+    // Identity resolved once per call: env first, a verified attempt grant
+    // only when the orchestrator never named one. Null means unassigned — the
+    // floor plus the governed-artifact denial, exactly as the direct-mode
+    // contract says.
+    const grant = readAttemptGrant();
+    const role = process.env.STA_ROLE || (grant ? grant.role : null);
 
-    const readOnlyTarget = boundReadOnlyTarget(np, target);
+    const readOnlyTarget = boundReadOnlyTarget(np, target, grant);
     if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget, role);
 
     // Ahead of `evaluateRules`, which allows anything the floor lets through
@@ -249,28 +334,36 @@ export const StaGuards = async ({ project }) => {
     const knowledgeDenial = knowledgeArtifactDenial(np, target, role);
     if (knowledgeDenial !== null) return denyMessage(knowledgeDenial.rel, role, knowledgeDenial.why);
 
-    if (isUnder(target, root)) return evaluateRules(rawPath, target, role, declaredText);
+    if (isUnder(target, root)) return evaluateRules(rawPath, target, role, grant);
     for (const workRoot of writableWorkRoots(np)) {
-      if (isUnder(target, workRoot)) return evaluateRules(rawPath, target, role, declaredText);
+      if (isUnder(target, workRoot)) return evaluateRules(rawPath, target, role, grant);
     }
     return denyOutsideRoot(rawPath, root);
   }
 
   /**
-   * The declared session-role file — the one channel a desktop role-play
-   * session (ZCode, the V12 decision: no CLI, no launch path, no env channel)
-   * declares the role it is playing through. `software-team-agents
-   * session-role` is the only writer, and the path sits under `.workflow/`,
-   * which the universal floor denies to every agent's file tools. Absent or
-   * unreadable means "no declared role" and changes nothing.
+   * The STA-issued attempt grant — the one channel a direct-mode session's
+   * per-role authority arrives through (V13 TASK-012). `sta grant issue` is
+   * the only writer, the path sits under `.workflow/`, which the universal
+   * floor denies to every agent's file tools, and the signature check inside
+   * the generated block makes a self-written file worthless. Absent,
+   * unreadable, unsigned or expired means "no grant" and changes nothing.
    */
-  function readSessionRoleText() {
-    const { nodeFs: nf, nodePath: npath, root: wsRoot } = rootCache;
+  function readAttemptGrant() {
+    const { nodeFs: nf, nodePath: npath, nodeCrypto: ncrypto, root: wsRoot } = rootCache;
+    let text;
     try {
-      return nf.readFileSync(npath.join(wsRoot, SESSION_ROLE_REL_PATH), "utf8");
+      text = nf.readFileSync(npath.join(wsRoot, ATTEMPT_GRANT_REL_PATH), "utf8");
     } catch {
       return null;
     }
+    let keyHex;
+    try {
+      keyHex = nf.readFileSync(npath.join(wsRoot, ATTEMPT_GRANT_KEY_REL_PATH), "utf8").trim();
+    } catch {
+      return null;
+    }
+    return attemptGrantFromText(text, ncrypto.createHmac, keyHex, Date.now());
   }
 
   /**
@@ -278,7 +371,7 @@ export const StaGuards = async ({ project }) => {
    * contract — repo-relative for workspace paths, work-root-relative for
    * canonical Target roots (mirrors block-path-permissions.js's split).
    */
-  function evaluateRules(rawPath, target, role, declaredText) {
+  function evaluateRules(rawPath, target, role, grant) {
     const { nodePath: np } = rootCache;
     const workRelative = toWritableWorkRelative(np, target);
     const rel = workRelative !== null ? workRelative : relativeWithin(np, root, target);
@@ -295,11 +388,17 @@ export const StaGuards = async ({ project }) => {
     const frameworkWhy = frameworkPayloadDenial(rel, role);
     if (frameworkWhy !== null) return denyMessage(rel, role, frameworkWhy);
 
-    if (!role) return null; // no env role and no declared session role: the floor above is all this can honestly enforce
+    if (!role) {
+      // Unassigned session: governed work is role-owned, so the document tree
+      // is refused even on the floor. Everything else keeps the floor posture.
+      const unassignedWhy = unassignedSessionDenial(rel);
+      if (unassignedWhy) return denyMessage(rel, null, unassignedWhy);
+      return null;
+    }
 
     // The declaration's stack half travels only with the declaration's role: an
     // env identity must not inherit layout globs declared for a different role.
-    const rules = readRules(nodeFs, nodePath, root, role, process.env.STA_ROLE ? null : declaredText);
+    const rules = readRules(nodeFs, nodePath, root, role, process.env.STA_ROLE ? null : grant);
     if (!rules) return null; // unknown role or unreadable contract — fail open
 
     for (const pattern of rules.deny) {
@@ -370,7 +469,7 @@ function isUnder(target, root) {
  * against the real contract files, and contracts/ ships next to this plugin
  * in every DEV workspace.
  */
-function readRules(nodeFs, nodePath, root, role, declaredText) {
+function readRules(nodeFs, nodePath, root, role, grant) {
   if (!/^[a-z][a-z0-9-]*$/.test(role)) return null; // never let an env var build a path
   let text;
   try {
@@ -385,7 +484,7 @@ function readRules(nodeFs, nodePath, root, role, declaredText) {
   // from the orchestrator on the STA_ROLE channel, because no
   // dependency-free reader here can join .agent-team/config.yaml to stacks/;
   // a declared session role carries its own pre-resolved half beside the role.
-  const stack = stackPathRules(declaredText);
+  const stack = stackPathRules(grant);
   return { write: write.concat(stack.write), deny: (deny === null ? [] : deny).concat(stack.deny) };
 }
 

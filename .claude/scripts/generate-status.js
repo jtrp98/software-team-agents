@@ -5,7 +5,7 @@
  * `check-status-sync.js` exists to catch drift in, not prevent -- an agent could always write the
  * wrong symbol or forget to update it. This script removes the duplication instead of policing
  * it: `status.md`'s per-phase table is computed straight from `plan.md`'s task table (each row's
- * `Status` cell), `review.md`'s `## Review Outcome` line, `security.md`'s `## Open Findings`
+ * `Status` cell), `qa.md`'s `## Review Outcome` line, `security.md`'s `## Open Findings`
  * table, and `deploy.md`'s Deploy History, every time it runs.
  *
  * Not a hook -- nothing blocks on this. Run it via Bash: `node .claude/scripts/generate-status.js`.
@@ -91,10 +91,10 @@ function implementedSymbol(phase) {
 }
 
 /** Reads `**Status:** <emoji> ... (FULL|TARGETED)` under `## Review Outcome — Phase N`. */
-function verifiedFor(reviewMd, phaseNum) {
-  if (!reviewMd) return { symbol: '⬜', mode: null };
+function verifiedFor(qaMd, phaseNum) {
+  if (!qaMd) return { symbol: '⬜', mode: null };
   const heading = new RegExp(`^##\\s*Review Outcome\\s*[-–—]+.*\\bPhase\\s*${phaseNum}\\b`, 'im');
-  const lines = reviewMd.split(/\r?\n/);
+  const lines = qaMd.split(/\r?\n/);
   const startIdx = lines.findIndex((l) => heading.test(l));
   if (startIdx === -1) return { symbol: '⬜', mode: null };
   for (let i = startIdx + 1; i < lines.length && i < startIdx + 6; i++) {
@@ -148,9 +148,9 @@ function deployedFor(deployMd, phaseNum) {
 }
 
 /** The first blocking row's issue text from `## Open Issues — all phases`, or null. */
-function blockedOn(reviewMd) {
-  if (!reviewMd) return null;
-  const section = sectionBody(reviewMd, /open\s+issues?/i);
+function blockedOn(qaMd) {
+  if (!qaMd) return null;
+  const section = sectionBody(qaMd, /open\s+issues?/i);
   if (section === null) return null;
   let sawHeaderRow = false;
   for (const line of section.split(/\r?\n/)) {
@@ -172,7 +172,7 @@ function docsLine(moduleDir) {
 
 function buildModuleSection(name, moduleDir) {
   const planMd = readIfExists(path.join(moduleDir, 'plan.md'));
-  const reviewMd = readIfExists(path.join(moduleDir, 'review.md'));
+  const qaMd = readIfExists(path.join(moduleDir, 'qa.md'));
   const securityMd = readIfExists(path.join(moduleDir, 'security.md'));
   const deployMd = readIfExists(path.join(moduleDir, 'deploy.md'));
 
@@ -192,7 +192,7 @@ function buildModuleSection(name, moduleDir) {
   let firstOpen = null;
   for (const phase of phases) {
     const impl = implementedSymbol(phase);
-    const verified = verifiedFor(reviewMd, phase.num);
+    const verified = verifiedFor(qaMd, phase.num);
     const security = securityFor(phase.gated, securityMd, phase.num);
     const deployed = deployedFor(deployMd, phase.num);
     const modeSuffix = verified.mode ? ` (${verified.mode})` : '';
@@ -229,7 +229,7 @@ function buildModuleSection(name, moduleDir) {
       stage += ' deploy';
     }
   }
-  const blocked = blockedOn(reviewMd);
+  const blocked = blockedOn(qaMd);
   lines.push(`**Now**: ${now}`, `**Blocked on**: ${blocked || '—'}`, '');
 
   return { lines, nextAgent, stage };

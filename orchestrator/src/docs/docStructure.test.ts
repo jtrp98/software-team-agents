@@ -109,7 +109,7 @@ x
 - 2026-08-20: created
 `;
 
-const REVIEW_OK = `
+const QA_OK = `
 # Review
 
 ## Open Issues — all phases
@@ -167,7 +167,7 @@ describe("extractStructure", () => {
   });
 
   it("counts review outcomes", () => {
-    const s = extractStructure("review", REVIEW_OK + "\n## Review Outcome — Phase 2\n**Status:** ⚠️ Partial (TARGETED)\n");
+    const s = extractStructure("qa", QA_OK + "\n## Review Outcome — Phase 2\n**Status:** ⚠️ Partial (TARGETED)\n");
     expect(s.reviewOutcomeCount).toBe(2);
   });
 });
@@ -185,8 +185,8 @@ describe("checkOneDoc", () => {
     expect(checkOneDoc("plan", PLAN_OK, "m/plan.md").ok).toBe(true);
   });
 
-  it("passes a well-formed review.md", () => {
-    expect(checkOneDoc("review", REVIEW_OK, "m/review.md").ok).toBe(true);
+  it("passes a well-formed qa.md", () => {
+    expect(checkOneDoc("qa", QA_OK, "m/qa.md").ok).toBe(true);
   });
 
   it("passes a well-formed security.md", () => {
@@ -207,9 +207,9 @@ describe("checkOneDoc", () => {
     expect(result.problems.some((p) => p.includes("phaseCount"))).toBe(true);
   });
 
-  it("fails a review.md with no Review Outcome section", () => {
-    const broken = REVIEW_OK.replace(/## Review Outcome[\s\S]*?Accepted\.\n\n/, "");
-    const result = checkOneDoc("review", broken, "m/review.md");
+  it("fails a qa.md with no Review Outcome section", () => {
+    const broken = QA_OK.replace(/## Review Outcome[\s\S]*?Accepted\.\n\n/, "");
+    const result = checkOneDoc("qa", broken, "m/qa.md");
     expect(result.ok).toBe(false);
     expect(result.problems.some((p) => p.includes("reviewOutcomeCount"))).toBe(true);
   });

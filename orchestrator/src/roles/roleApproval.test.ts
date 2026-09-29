@@ -1,119 +1,113 @@
+import * as os from "node:os";
 import { describe, expect, it } from "vitest";
 import { ApprovalType } from "../gates/approval.js";
+import { LANE_ACK_TYPE, LANE_SIGNOFF_TYPE, type LaneItemRef } from "../gates/laneApproval.js";
 import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { sampleKnowledge } from "../knowledge/sampleKnowledge.js";
+import { laneItemRefs } from "./laneDecisions.js";
 import { ROLE_LANES } from "./roleLane.js";
-import { emptyWorkspace } from "./roleWorkspace.js";
-import {
-  APPROVAL_TYPE_OF_LANE,
-  SignoffError,
-  currentSignoff,
-  describeSignoff,
-  itemRefs,
-  recordSignoff,
-  signoffVerdict,
-} from "./roleApproval.js";
+import { emptyWorkspace, type RoleWorkspace } from "./roleWorkspace.js";
+import { currentSignoff, describeSignoff, signoffVerdict } from "./roleApproval.js";
 
 const NOW = "2026-08-21T10:00:00Z";
 const LATER = "2026-08-22T10:00:00Z";
 
 const baItems = (): KnowledgeItem[] =>
   new KnowledgeBase(sampleKnowledge()).query({ kinds: ["requirement", "business-rule"], module: "sales-crm" });
+const refs = (items: KnowledgeItem[]): LaneItemRef[] => laneItemRefs(items, os.tmpdir());
 
-function signed(approve = true, items = baItems(), note?: string) {
-  return recordSignoff(emptyWorkspace("ba", "sales-crm", NOW), { approved: items, approve, by: "Jaturapat", note, now: NOW });
+/** The projection of decided sign-offs, as `laneDecisions.ts` builds it from the lane ledger. */
+function signed(approve = true, items = baItems(), note: string | null = null, at = NOW, prior: RoleWorkspace = emptyWorkspace("ba", "sales-crm", NOW)): RoleWorkspace {
+  return {
+    ...prior,
+    signoffs: [
+      ...prior.signoffs,
+      {
+        type: ApprovalType.BA_SIGNOFF,
+        status: approve ? "approved" : "rejected",
+        items: refs(items),
+        at,
+        by: "github-user:1001",
+        note,
+        requestId: `apr_${String(prior.signoffs.length).padStart(32, "0")}`,
+        decisionId: `test-decision-${prior.signoffs.length}`,
+      },
+    ],
+  };
 }
 
-describe("APPROVAL_TYPE_OF_LANE (T103)", () => {
-  /**
-   * The gates are not new: CLAUDE.md already names five points that always wait
-   * for a person, and three of them are one per lane. A second enum here would
-   * be two names for one rule.
-   */
-  it("reuses the T08 ApprovalType rather than inventing lane gate names", () => {
-    expect(APPROVAL_TYPE_OF_LANE.ba).toBe(ApprovalType.REQUIREMENT_INTERVIEW);
-    expect(APPROVAL_TYPE_OF_LANE.sa).toBe(ApprovalType.SCHEMA_CONFIRMATION);
-    expect(APPROVAL_TYPE_OF_LANE.dev).toBe(ApprovalType.DEPLOY);
+describe("lane gate types (V13 TASK-028, human decision 2)", () => {
+  it("gives every lane its own sign-off gate and its own acknowledgement gate", () => {
+    for (const lane of ROLE_LANES) {
+      expect(LANE_SIGNOFF_TYPE[lane]).toBeDefined();
+      expect(LANE_ACK_TYPE[lane]).toBeDefined();
+    }
+    const all = [...Object.values(LANE_SIGNOFF_TYPE), ...Object.values(LANE_ACK_TYPE)];
+    expect(new Set(all).size).toBe(8);
   });
 
-  it("gives every lane a gate", () => {
-    for (const lane of ROLE_LANES) expect(APPROVAL_TYPE_OF_LANE[lane]).toBeDefined();
-    expect(new Set(Object.values(APPROVAL_TYPE_OF_LANE)).size).toBe(4);
-  });
-
-  /**
-   * The BA confirmation/interview identity must actually be reachable through
-   * this enum.
-   */
-  it("gives REQUIREMENT_INTERVIEW its first gate", () => {
-    expect(Object.values(APPROVAL_TYPE_OF_LANE)).toContain(ApprovalType.REQUIREMENT_INTERVIEW);
+  it("never reuses a task gate's approver list for a lane act", () => {
+    const lane = new Set([...Object.values(LANE_SIGNOFF_TYPE), ...Object.values(LANE_ACK_TYPE)]);
+    for (const taskGate of [ApprovalType.REQUIREMENT_INTERVIEW, ApprovalType.SCHEMA_CONFIRMATION, ApprovalType.DEPLOY]) {
+      expect(lane.has(taskGate)).toBe(false);
+    }
+    expect(LANE_SIGNOFF_TYPE.uxui).toBe(ApprovalType.UXUI_SIGNOFF);
   });
 });
 
-describe("recordSignoff", () => {
-  it("refuses an unnamed signer — this gate exists so no agent can pass it", () => {
-    expect(() => signed(true, baItems()) && recordSignoff(emptyWorkspace("ba", null, NOW), { approved: baItems(), approve: true, by: "  ", now: NOW })).toThrow(
-      SignoffError,
-    );
-  });
-
-  it("refuses to sign off on nothing — an empty sign-off could never go stale", () => {
-    expect(() => recordSignoff(emptyWorkspace("ba", "sales-crm", NOW), { approved: [], approve: true, by: "X", now: NOW })).toThrow(
-      /covers no item/,
-    );
-  });
-
-  it("appends rather than replacing, so the history of send-backs survives", () => {
-    const once = signed(false, baItems(), "acceptance criteria are vague");
-    const twice = recordSignoff(once, { approved: baItems(), approve: true, by: "Nan", now: LATER });
+describe("currentSignoff", () => {
+  it("is the last decision — the history of send-backs survives before it", () => {
+    const twice = signed(true, baItems(), null, LATER, signed(false, baItems(), "acceptance criteria are vague"));
     expect(twice.signoffs).toHaveLength(2);
     expect(currentSignoff(twice)?.status).toBe("approved");
-    expect(twice.signoffs?.[0].note).toBe("acceptance criteria are vague");
-  });
-
-  it("records exactly what it covered, at the versions it covered", () => {
-    expect(currentSignoff(signed())?.items).toEqual(itemRefs(baItems()));
-  });
-
-  it("stamps the lane's own gate type", () => {
-    expect(currentSignoff(signed())?.type).toBe(ApprovalType.REQUIREMENT_INTERVIEW);
+    expect(twice.signoffs[0]!.note).toBe("acceptance criteria are vague");
   });
 });
 
 describe("signoffVerdict", () => {
   it("is 'none' before anybody answers", () => {
-    const verdict = signoffVerdict(emptyWorkspace("ba", "sales-crm", NOW), baItems());
+    const verdict = signoffVerdict(emptyWorkspace("ba", "sales-crm", NOW), refs(baItems()));
     expect(verdict.state).toBe("none");
     expect(verdict.signoff).toBeNull();
   });
 
   it("is 'current' while nothing it covered has moved", () => {
-    expect(signoffVerdict(signed(), baItems()).state).toBe("current");
+    expect(signoffVerdict(signed(), refs(baItems())).state).toBe("current");
   });
 
   it("is 'rejected' when the answer was no and nothing has changed since", () => {
-    const verdict = signoffVerdict(signed(false, baItems(), "not specific enough"), baItems());
+    const verdict = signoffVerdict(signed(false, baItems(), "not specific enough"), refs(baItems()));
     expect(verdict.state).toBe("rejected");
-    expect(describeSignoff(verdict, "ba")).toMatch(/rejected by Jaturapat: not specific enough/);
+    expect(describeSignoff(verdict, "ba")).toMatch(/rejected by github-user:1001: not specific enough/);
   });
 
   /** The whole reason a sign-off names versions: otherwise it is a flag that outlives its subject. */
   it("goes stale when something it covered is amended, and names what moved", () => {
     const amended = baItems().map((i) => (i.id === "REQ-003" ? { ...i, version: 2 } : i)) as KnowledgeItem[];
-    const verdict = signoffVerdict(signed(), amended);
+    const verdict = signoffVerdict(signed(), refs(amended));
     expect(verdict.state).toBe("stale");
     expect(verdict.changed).toEqual(["REQ-003"]);
     expect(describeSignoff(verdict, "ba")).toMatch(/no longer covers what is approved — REQ-003 changed/);
   });
 
-  it("goes stale when a new item joins the approved set", () => {
-    const extra = [...baItems(), { ...baItems()[0], id: "REQ-004" }] as KnowledgeItem[];
-    expect(signoffVerdict(signed(), extra).changed).toEqual(["REQ-004"]);
+  it("goes stale when content changes without a version bump (the digest moved)", () => {
+    const edited = baItems().map((i) => (i.id === "REQ-003" ? { ...i, title: `${i.title} (edited)` } : i)) as KnowledgeItem[];
+    expect(signoffVerdict(signed(), refs(edited)).changed).toEqual(["REQ-003"]);
   });
 
-  it("goes stale when an approved item is withdrawn", () => {
-    expect(signoffVerdict(signed(), [baItems()[0]]).changed).toEqual(["RULE-007"]);
+  it("does not move when only the file's status word changes — status is not the subject", () => {
+    const relabelled = baItems().map((i) => ({ ...i, status: i.status === "approved" ? "reviewed" : "approved" })) as KnowledgeItem[];
+    expect(signoffVerdict(signed(), refs(relabelled)).state).toBe("current");
+  });
+
+  it("goes stale when a new item joins the set", () => {
+    const extra = [...baItems(), { ...baItems()[0]!, id: "REQ-004" }] as KnowledgeItem[];
+    expect(signoffVerdict(signed(), refs(extra)).changed).toEqual(["REQ-004"]);
+  });
+
+  it("goes stale when a covered item is withdrawn", () => {
+    expect(signoffVerdict(signed(), refs([baItems()[0]!])).changed).toEqual(["RULE-007"]);
   });
 
   /**
@@ -123,12 +117,11 @@ describe("signoffVerdict", () => {
    */
   it("lets a fixed rejection be asked again instead of standing forever", () => {
     const fixed = baItems().map((i) => (i.id === "RULE-007" ? { ...i, version: 2 } : i)) as KnowledgeItem[];
-    const verdict = signoffVerdict(signed(false), fixed);
+    const verdict = signoffVerdict(signed(false), refs(fixed));
     expect(verdict.state).toBe("stale");
-    expect(verdict.state).not.toBe("rejected");
   });
 
   it("says who signed and when, for a person reading the lane", () => {
-    expect(describeSignoff(signoffVerdict(signed(), baItems()), "ba")).toBe("signed off by Jaturapat on 2026-08-21");
+    expect(describeSignoff(signoffVerdict(signed(), refs(baItems())), "ba")).toBe("signed off by github-user:1001 on 2026-08-21");
   });
 });

@@ -1,6 +1,5 @@
 import {
   NO_GUARDS_REPORT,
-  type RuntimeAdapter,
   type RuntimeAgentRequest,
   type RuntimeAgentResult,
   type RuntimeBinding,
@@ -9,7 +8,18 @@ import {
   type RuntimeProbe,
   type RuntimeWorkspace,
 } from "./runtimeAdapter.js";
+import * as path from "node:path";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import {
+  CAPABILITY_FOR_OPERATION,
+  deterministicAttemptId,
+  ExecutorPortRefusalError,
+  type ExecutorAttemptRef,
+  type ExecutorCancelOutcome,
+  type ExecutorEvidence,
+  type ExecutorPort,
+  type PreparedExecutorAttempt,
+} from "./executorPort.js";
 
 /**
  * A `RuntimeAdapter` backed by nothing at all.
@@ -103,14 +113,18 @@ export interface MockRuntimeOptions {
   probe?: RuntimeProbe;
   /** Files the workspace starts with, keyed by repo-relative path. */
   files?: Record<string, string>;
-  /** What to return for a given request. Defaults to a plain `OK`. */
-  respond?: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult;
+  /** What to return for a given request. Defaults to a plain `OK`. A run is async, so an async responder is fine. */
+  respond?: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult | Promise<RuntimeAgentResult>;
+  /** V13 TASK-013 — what `resume` returns for a reference. Defaults to a normalized resumed `OK`. */
+  resumeRespond?: (ref: ExecutorAttemptRef) => RuntimeAgentResult;
+  /** V13 TASK-013 — what `cancel` reports. Defaults to `{status: "cancelled"}`. */
+  cancelRespond?: (ref: ExecutorAttemptRef) => ExecutorCancelOutcome;
 }
 
 /** Every capability a runtime could declare — the "nothing is missing" baseline, so a test that cares about an absence has to state it. */
 export const ALL_MOCK_CAPABILITIES: readonly RuntimeCapability[] = Object.values(RuntimeCapability);
 
-export class MockRuntimeAdapter implements RuntimeAdapter {
+export class MockRuntimeAdapter implements ExecutorPort {
   readonly id: string;
   readonly displayName: string;
   readonly binding: RuntimeBinding;
@@ -119,9 +133,19 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
   readonly workspace: MemoryWorkspace;
   /** Every request this adapter was given, in order — the record a test asserts the executor's behaviour against. */
   readonly requests: RuntimeAgentRequest[] = [];
+  /** Prepared attempts, keyed by the attempt id the port minted (V13 TASK-013). */
+  readonly attempts: Map<string, RuntimeAgentRequest> = new Map();
+  /** The normalized result each executed attempt finished with (V13 TASK-013). */
+  readonly resultsByAttempt: Map<string, RuntimeAgentResult> = new Map();
+  /** The workspace files each executed attempt changed — the mock's own snapshot diff (V13 TASK-017). */
+  readonly changedFilesByAttempt: Map<string, readonly string[]> = new Map();
+  /** Every resume/cancel reference presented to the lifecycle, in order (V13 TASK-013). */
+  readonly lifecycleRefs: ExecutorAttemptRef[] = [];
 
   private readonly probeResult: RuntimeProbe;
-  private readonly respond: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult;
+  private readonly respond: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult | Promise<RuntimeAgentResult>;
+  private readonly resumeRespond?: (ref: ExecutorAttemptRef) => RuntimeAgentResult;
+  private readonly cancelRespond?: (ref: ExecutorAttemptRef) => ExecutorCancelOutcome;
 
   constructor(opts: MockRuntimeOptions = {}) {
     this.id = opts.id ?? "mock";
@@ -132,16 +156,108 @@ export class MockRuntimeAdapter implements RuntimeAdapter {
     this.workspace = new MemoryWorkspace(opts.files);
     this.probeResult = opts.probe ?? { available: true, version: "0.0.0-mock" };
     this.respond = opts.respond ?? (() => okResult());
+    this.resumeRespond = opts.resumeRespond;
+    this.cancelRespond = opts.cancelRespond;
   }
 
   async probe(): Promise<RuntimeProbe> {
     return this.probeResult;
   }
 
+  /** The one refusal every undeclared lifecycle operation answers with — typed, never approximate. */
+  private requireCapability(operation: "resume" | "cancel" | "collectResult" | "collectEvidence"): void {
+    const capability = CAPABILITY_FOR_OPERATION[operation];
+    if (!this.capabilities.has(capability)) {
+      throw new ExecutorPortRefusalError(
+        "unsupported-operation",
+        operation,
+        this.id,
+        `does not declare ${capability} — the operation is refused, not approximated`,
+      );
+    }
+  }
+
+  async prepare(req: RuntimeAgentRequest): Promise<PreparedExecutorAttempt> {
+    const attemptId = deterministicAttemptId(this.id, req);
+    this.attempts.set(attemptId, req);
+    return {
+      runtimeId: this.id,
+      attemptId,
+      taskId: req.taskId,
+      stage: req.stage,
+      preparedAt: Date.now(),
+    };
+  }
+
+  async execute(attempt: PreparedExecutorAttempt): Promise<RuntimeAgentResult> {
+    const req = this.attempts.get(attempt.attemptId);
+    if (!req) {
+      throw new ExecutorPortRefusalError("unknown-attempt", "execute", this.id, `attempt ${attempt.attemptId} was never prepared by this adapter`);
+    }
+    // The same snapshot discipline the real adapters run: diff the workspace
+    // around the spawn and report what changed as attempt evidence. The
+    // workspace is the cwd, so files are only attributed when the cwd is one
+    // of the snapshotted roots — a verifier stage whose cwd sits outside its
+    // (read-only) Target roots honestly reports `[]`, exactly like production.
+    const before = new Map(this.workspace.files);
+    const result = await this.executeAgent(req);
+    const changed = [...new Set([...before.keys(), ...this.workspace.files.keys()])]
+      .filter((key) => before.get(key) !== this.workspace.files.get(key))
+      .sort();
+    const snapshotRoots = req.workRoots?.length ? req.workRoots : [{ targetId: undefined, path: req.cwd }];
+    const cwdRoot = snapshotRoots.find((root) => path.resolve(root.path) === path.resolve(req.cwd));
+    const evidenceChanged = cwdRoot
+      ? changed.map((file) => (snapshotRoots.length > 1 && cwdRoot.targetId ? `${cwdRoot.targetId}:${file}` : file))
+      : [];
+    this.resultsByAttempt.set(attempt.attemptId, result);
+    this.changedFilesByAttempt.set(attempt.attemptId, evidenceChanged);
+    return result;
+  }
+
+  async resume(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult> {
+    this.requireCapability("resume");
+    this.lifecycleRefs.push(ref);
+    if (this.resumeRespond) return this.resumeRespond(ref);
+    const previous = this.resultsByAttempt.get(ref.attemptId);
+    return okResult({ text: `resumed ${ref.attemptId}`, structured: previous ? { resumed: true } : undefined });
+  }
+
+  async cancel(ref: ExecutorAttemptRef): Promise<ExecutorCancelOutcome> {
+    this.requireCapability("cancel");
+    this.lifecycleRefs.push(ref);
+    if (this.cancelRespond) return this.cancelRespond(ref);
+    const finished = this.resultsByAttempt.has(ref.attemptId);
+    return finished
+      ? { status: "already-finished", detail: `attempt ${ref.attemptId} already finished` }
+      : { status: "cancelled", detail: `attempt ${ref.attemptId} cancelled` };
+  }
+
+  async collectResult(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult | null> {
+    this.requireCapability("collectResult");
+    this.lifecycleRefs.push(ref);
+    return this.resultsByAttempt.get(ref.attemptId) ?? null;
+  }
+
+  async collectEvidence(ref: ExecutorAttemptRef): Promise<ExecutorEvidence> {
+    this.requireCapability("collectEvidence");
+    this.lifecycleRefs.push(ref);
+    const result = this.resultsByAttempt.get(ref.attemptId) ?? null;
+    const changedFiles = this.changedFilesByAttempt.get(ref.attemptId);
+    return {
+      attemptId: ref.attemptId,
+      runtimeId: this.id,
+      result,
+      logs: [`mock://attempt/${ref.attemptId}`],
+      sessionRef: `mock-session-${ref.attemptId.slice(0, 8)}`,
+      ...(changedFiles ? { changedFiles } : {}),
+      collectedAt: Date.now(),
+    };
+  }
+
   async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
     const index = this.requests.length;
     this.requests.push(req);
-    return this.respond(req, index);
+    return await this.respond(req, index);
   }
 
   /** The roles this adapter was asked to run, in order. The assertion most tests actually want. */

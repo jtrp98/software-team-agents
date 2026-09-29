@@ -39,7 +39,7 @@ function context(over: Partial<Parameters<typeof deriveFinding>[1]> = {}): Param
     raised_by: AgentStage.QA_ENGINEER,
     expected: "AC-001.1: the discount field is preserved",
     observed: "the discount field is dropped on import",
-    evidence_refs: ["review.md#Round-1"],
+    evidence_refs: ["qa.md#Round-1"],
     ...over,
   };
 }
@@ -155,7 +155,7 @@ describe("compileRepairPacket (T-V8-013)", () => {
       originalPacket: { packet_hash: HASH_A },
       finding,
       currentDiff: "diff --git a/src/import.ts b/src/import.ts\n+ preserve discount",
-      invalidatedEvidence: ["review.md#Round-1"],
+      invalidatedEvidence: ["qa.md#Round-1"],
       allowedDelta: "src/import.ts only",
     });
     expect(repair.original_packet_hash).toBe(HASH_A);
@@ -206,7 +206,7 @@ describe("T-V8-013 full lifecycle + resume", () => {
 
     const repair = compileRepairPacket({
       originalPacket: { packet_hash: finding.packet_hash },
-      finding, currentDiff: "diff --git a/src/import.ts b/src/import.ts\n+ fix", invalidatedEvidence: ["review.md#Round-1"], allowedDelta: "src/import.ts",
+      finding, currentDiff: "diff --git a/src/import.ts b/src/import.ts\n+ fix", invalidatedEvidence: ["qa.md#Round-1"], allowedDelta: "src/import.ts",
     });
 
     assertCanTransitionFinding(finding, "VERIFIED", finding.raised_by);

@@ -23,7 +23,7 @@ describe("classifyTask", () => {
   it("classifies a clear bug fix as SMALL with engineer -> qa", () => {
     const result = classifyTask({ isClearBugFix: true, touchesBackend: true });
     expect(result.level).toBe(TaskLevel.SMALL);
-    expect(result.pipeline).toEqual([AgentStage.BACKEND_ENGINEER, AgentStage.QA_ENGINEER]);
+    expect(result.pipeline).toEqual([AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER]);
   });
 
   it("puts backend before frontend when both are touched", () => {
@@ -74,6 +74,7 @@ describe("classifyTask", () => {
     expect(result.pipeline).toEqual([
       AgentStage.SYSTEM_ANALYST,
       AgentStage.BACKEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
     ]);
   });
@@ -85,6 +86,7 @@ describe("classifyTask", () => {
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
       AgentStage.BACKEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
     ]);
   });
@@ -97,6 +99,7 @@ describe("classifyTask", () => {
     expect(result.pipeline).toEqual([
       AgentStage.SYSTEM_ANALYST,
       AgentStage.BACKEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
       AgentStage.SECURITY,
     ]);
@@ -116,6 +119,7 @@ describe("classifyTask", () => {
       AgentStage.BACKEND_ENGINEER,
       AgentStage.UXUI_DESIGNER,
       AgentStage.FRONTEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
     ]);
     // A new feature never skips BA; confirmed-input versus interview is
@@ -217,7 +221,7 @@ describe("classifyTask", () => {
     ).toBe("full");
   });
 
-  it("keeps all ten ordinary workflow stage/level/approval outputs byte-identical to the V8 conditional baseline", () => {
+  it("keeps all ten ordinary workflow stage/level/approval outputs byte-identical to the V8 conditional baseline plus the V13 reviewer stage", () => {
     const signalInputs: Record<string, ClassificationInput> = {
       typo: { isTypoOrCopyOnly: true, touchesBackend: true, touchesFrontend: true },
       bugfix: { isClearBugFix: true, touchesBackend: true, touchesFrontend: true },

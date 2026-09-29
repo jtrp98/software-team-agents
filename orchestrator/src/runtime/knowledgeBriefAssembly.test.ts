@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { knowledgeBriefFor, renderKnowledgeBrief } from "./knowledgeBriefAssembly.js";
-import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
+import { seedKnowledgeFixture } from "../knowledge/knowledgeFixture.testSupport.js";
 import { digestOfSource } from "../knowledge/sourceDigest.js";
 
 const NOW = "2026-08-26T00:00:00Z";
@@ -182,11 +182,11 @@ describe("T-V3-09/T-V3-11 assembled retrieval", () => {
       fs.writeFileSync(path.join(targetB, "fact.md"), "dotnet", "utf8");
       fs.writeFileSync(path.join(targetC, "fact.md"), "shared", "utf8");
       const source = (locator: string, origin: "knowledge" | "target", targetId: string | null, digestRoot: string) => [{ type: "file" as const, locator, captured_at: NOW, digest: digestOfSource(locator, digestRoot), origin: { root: origin, target_id: targetId } }];
-      writeKnowledgeItem(req("REQ-GLOBAL", [], source("global.md", "knowledge", null, knowledge)), knowledge, { force: true });
-      writeKnowledgeItem(req("REQ-NODE", ["node-app"], source("fact.md", "target", "node-app", targetA)), knowledge, { force: true });
-      writeKnowledgeItem(req("REQ-DOTNET", ["dotnet-app"], source("fact.md", "target", "dotnet-app", targetB)), knowledge, { force: true });
-      writeKnowledgeItem(req("REQ-ALL3", ["node-app", "dotnet-app", "shared-app"], source("fact.md", "target", "node-app", targetA)), knowledge, { force: true });
-      writeKnowledgeItem(req("REQ-YZ", ["dotnet-app", "shared-app"], source("fact.md", "target", "dotnet-app", targetB)), knowledge, { force: true });
+      seedKnowledgeFixture(req("REQ-GLOBAL", [], source("global.md", "knowledge", null, knowledge)), knowledge);
+      seedKnowledgeFixture(req("REQ-NODE", ["node-app"], source("fact.md", "target", "node-app", targetA)), knowledge);
+      seedKnowledgeFixture(req("REQ-DOTNET", ["dotnet-app"], source("fact.md", "target", "dotnet-app", targetB)), knowledge);
+      seedKnowledgeFixture(req("REQ-ALL3", ["node-app", "dotnet-app", "shared-app"], source("fact.md", "target", "node-app", targetA)), knowledge);
+      seedKnowledgeFixture(req("REQ-YZ", ["dotnet-app", "shared-app"], source("fact.md", "target", "node-app", targetB)), knowledge);
       const scoped = knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: targetA, knowledgeRoot: knowledge, targetRoot: targetA, moduleName: "sb-compass", now: NOW }).join("\n");
       expect(scoped).toContain("REQ-GLOBAL"); expect(scoped).toContain("REQ-NODE"); expect(scoped).not.toContain("REQ-DOTNET");
       expect(scoped).toContain("REQ-ALL3");

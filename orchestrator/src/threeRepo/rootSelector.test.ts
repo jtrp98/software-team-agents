@@ -10,7 +10,7 @@ import {
   extractRootSelectorFlag,
   matchInstalledKnowledgeRootPath,
   resolveInstallationRoot,
-  resolveSelectedKnowledgeRootOrLegacy,
+  resolveSelectedKnowledgeRoot,
   RootSelectorFlagError,
 } from "./rootSelector.js";
 import { parseTargetArgs } from "../targetcli/cli.js";
@@ -116,7 +116,7 @@ describe("extractRootSelectorFlag — the one --root parser rule set", () => {
   });
 });
 
-describe("resolveSelectedKnowledgeRootOrLegacy — fail-closed read side (DR §3 rule 6)", () => {
+describe("resolveSelectedKnowledgeRoot — fail-closed read side (DR §3 rule 6)", () => {
   const roots: string[] = [];
   const original = process.env.STA_INSTALLATION_CONFIG;
   function tmpDir(): string {
@@ -130,10 +130,10 @@ describe("resolveSelectedKnowledgeRootOrLegacy — fail-closed read side (DR §3
     while (roots.length) fs.rmSync(roots.pop()!, { recursive: true, force: true });
   });
 
-  it("installation file missing → legacy projectRoot (unchanged)", () => {
+  it("installation file missing → projectRoot fallback (unchanged)", () => {
     process.env.STA_INSTALLATION_CONFIG = path.join(tmpDir(), "absent.yaml");
     const projectRoot = tmpDir();
-    expect(resolveSelectedKnowledgeRootOrLegacy(projectRoot)).toBe(path.resolve(projectRoot));
+    expect(resolveSelectedKnowledgeRoot(projectRoot)).toBe(path.resolve(projectRoot));
   });
 
   it("installation file present but invalid → throws, never degrades to projectRoot", () => {
@@ -141,7 +141,7 @@ describe("resolveSelectedKnowledgeRootOrLegacy — fail-closed read side (DR §3
     const configPath = path.join(cfgDir, "installation.yaml");
     fs.writeFileSync(configPath, "schema_version: 1\nknowledge_root: 123\n", "utf8");
     process.env.STA_INSTALLATION_CONFIG = configPath;
-    expect(() => resolveSelectedKnowledgeRootOrLegacy(tmpDir())).toThrow(/installation config is invalid/);
+    expect(() => resolveSelectedKnowledgeRoot(tmpDir())).toThrow(/installation config is invalid/);
   });
 
   it("v2 installation + requested name → the selected root path", () => {
@@ -153,7 +153,7 @@ describe("resolveSelectedKnowledgeRootOrLegacy — fail-closed read side (DR §3
       "utf8",
     );
     process.env.STA_INSTALLATION_CONFIG = configPath;
-    expect(resolveSelectedKnowledgeRootOrLegacy(tmpDir(), "personal")).toBe(path.resolve("C:\\kn\\personal"));
+    expect(resolveSelectedKnowledgeRoot(tmpDir(), "personal")).toBe(path.resolve("C:\\kn\\personal"));
   });
 });
 

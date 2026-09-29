@@ -1,7 +1,8 @@
 import { AgentStage, TaskState } from "../types.js";
 import { STAGE_TO_STATE, forwardState } from "../state/taskState.js";
-import { checkGate } from "../gates/gatePolicy.js";
+import { checkGate, gateContextFor } from "../gates/gatePolicy.js";
 import type { PersistedTask } from "../store/taskStore.js";
+import type { StageEntryGuard } from "./stageGuards.js";
 
 /**
  * The TaskState a stage occupies while it runs. `devops` is the one stage
@@ -42,6 +43,16 @@ export function isAgentAssignedAt(stage: AgentStage, state: TaskState, deployPre
 }
 
 /**
+ * Pure view predicate for Done (V13 TASK-003): DEPLOYED *and* the
+ * `task-completion` evidence id the orchestrator wrote in the same transaction.
+ * A bare DEPLOYED state is not Done. Callers holding a store re-verify the
+ * record itself with `verifyTaskCompletion` (`transitionGuard.ts`).
+ */
+export function isTaskDone(task: Pick<PersistedTask, "machine" | "completionEvidenceId">): boolean {
+  return task.machine.current === TaskState.DEPLOYED && task.completionEvidenceId !== null;
+}
+
+/**
  * Coarse label for a state, for a person skimming `.workflow/state.yaml`
  * (e.g. `phase: backend`). IMPLEMENTATION is the one state that
  * cannot be labelled from the state alone — backend and frontend share it —
@@ -56,6 +67,7 @@ export type TaskPhase =
   | "backend"
   | "frontend"
   | "implementation"
+  | "review"
   | "qa"
   | "security"
   | "deploy"
@@ -76,6 +88,9 @@ export function phaseOf(state: TaskState, agent?: AgentStage): TaskPhase {
       if (agent === AgentStage.BACKEND_ENGINEER) return "backend";
       if (agent === AgentStage.FRONTEND_ENGINEER) return "frontend";
       return "implementation";
+    case TaskState.REVIEW:
+    case TaskState.REVIEW_FAILED:
+      return "review";
     case TaskState.QA:
     case TaskState.QA_FAILED:
       return "qa";
@@ -119,8 +134,17 @@ export interface TaskStatusView {
  * completely wrong for rendering a file or printing a list. Reading state
  * must never change it — so this reports what the stored state is, and leaves
  * moving it to the orchestrator.
+ *
+ * Given the engine's `stageEntryGuard` (V13 TASK-007), a stage the guard
+ * refuses is reported as BLOCKED with the guard's reason — the same answer
+ * `Orchestrator.status()` settles on — so a run's result and a listing never
+ * disagree about why a task is not moving. The guard only reads.
  */
-export function describeStatus(task: PersistedTask, allTasks?: readonly PersistedTask[]): TaskStatusView {
+export function describeStatus(
+  task: PersistedTask,
+  allTasks?: readonly PersistedTask[],
+  options: { stageEntryGuard?: StageEntryGuard } = {},
+): TaskStatusView {
   const { machine } = task;
   const current = machine.current;
 
@@ -131,7 +155,11 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
   if (task.cancelled) return { kind: "CANCELLED", state: current, reason: task.cancelReason ?? "cancelled" };
   if (task.paused) return { kind: "PAUSED", state: current, reason: "paused — run `resume` or `retry` to continue" };
 
-  if (current === TaskState.DEPLOYED) return { kind: "DEPLOYED", state: current };
+  if (current === TaskState.DEPLOYED) {
+    return isTaskDone(task)
+      ? { kind: "DEPLOYED", state: current }
+      : { kind: "BLOCKED", state: current, reason: "DEPLOYED without recorded completion evidence — not Done" };
+  }
   if (current === TaskState.BLOCKED) {
     return { kind: "BLOCKED", state: current, reason: task.blockedReason ?? "blocked" };
   }
@@ -155,11 +183,21 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
 
   const stage = machine.pipeline[task.pipelineCursor];
   if (stage !== undefined && isAgentAssignedAt(stage, current, task.deployPrepared)) {
+    const entry = options.stageEntryGuard?.({
+      taskId: task.taskId,
+      stage,
+      level: task.classification.level,
+      knowledgeRoot: task.knowledgeRoot,
+      runtimeTask: task.runtimeTask,
+    });
+    if (entry && !entry.allowed) {
+      return { kind: "BLOCKED", state: current, currentAgent: stage, nextState: next ?? undefined, reason: entry.reason };
+    }
     return { kind: "RUNNING", state: current, currentAgent: stage, nextState: next ?? undefined };
   }
 
   if (next) {
-    const gate = checkGate(current, next, task.gateContext);
+    const gate = checkGate(current, next, gateContextFor(task.gateContext, task.approvals));
     if (!gate.allowed) {
       return {
         kind: "WAITING_FOR_HUMAN",
@@ -174,12 +212,12 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
   return { kind: "BLOCKED", state: current, reason: task.blockedReason ?? "no forward state available" };
 }
 
-/** Dependency ids that have not reached DEPLOYED — a missing task counts as unmet, never as satisfied. */
+/** Dependency ids that are not Done (`isTaskDone`) — a missing task counts as unmet, never as satisfied. */
 export function unmetDependencies(task: PersistedTask, allTasks: readonly PersistedTask[]): string[] {
   const byId = new Map(allTasks.map((t) => [t.taskId, t]));
   const satisfied = (id: string, ancestors: Set<string>): boolean => {
     const dependency = byId.get(id);
-    if (!dependency || dependency.cancelled || dependency.paused || dependency.machine.current !== TaskState.DEPLOYED || ancestors.has(id)) return false;
+    if (!dependency || dependency.cancelled || dependency.paused || !isTaskDone(dependency) || ancestors.has(id)) return false;
     return dependency.dependsOn.every(dep => satisfied(dep, new Set([...ancestors, id])));
   };
   return task.dependsOn.filter(id => !satisfied(id, new Set([task.taskId])));

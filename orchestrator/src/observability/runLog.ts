@@ -73,12 +73,20 @@ export interface RunRecord {
   /** The verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
   qa_mode: "FULL" | "TARGETED" | null;
   /** Orthogonal model-reasoning effort selected by the deterministic risk gate. */
-  qa_effort: "skip" | "lightweight" | "full" | null;
+  qa_effort: "lightweight" | "full" | null;
   /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
   deterministic_gate: "enabled" | "disabled" | null;
   document_gate: "enabled" | "disabled" | null;
   /** Source snapshot captured for a QA/security verdict; null when absent. */
   verification_fingerprint?: ChangeSetFingerprint | null;
+  /** V13 TASK-005 — sha256 of the `contracts/<stage>.yaml` bytes resolved and enforced before this attempt started. Absent for historical rows; null for an attempt refused before a contract resolved. */
+  contract_digest?: string | null;
+  /** V13 TASK-014 — the executor attempt id the port minted for this run, bound to task/stage before any spawn. Null when the run was refused before an attempt existed. */
+  attempt_id?: string | null;
+  /** V13 TASK-014 — the runtime's native session reference, lifted from its own output by the adapter. Null when the runtime echoes none. */
+  session_ref?: string | null;
+  /** V13 TASK-016 — the executor version the availability probe reported for the runtime this attempt ran on. Null when the probe named none. */
+  runtime_version?: string | null;
 }
 
 export interface RunOutcome {
@@ -125,10 +133,14 @@ export interface RunOutcome {
   context_tool_output_chars?: number;
   context_reserve_chars?: number;
   qa_mode?: "FULL" | "TARGETED";
-  qa_effort?: "skip" | "lightweight" | "full";
+  qa_effort?: "lightweight" | "full";
   deterministic_gate?: "enabled" | "disabled";
   document_gate?: "enabled" | "disabled";
   verification_fingerprint?: ChangeSetFingerprint;
+  contract_digest?: string;
+  attempt_id?: string;
+  session_ref?: string;
+  runtime_version?: string;
 }
 
 const NOT_REPORTED = "not reported";
@@ -233,10 +245,28 @@ export class RunLog {
       qa_effort: params.outcome.qa_effort ?? null,
       deterministic_gate: params.outcome.deterministic_gate ?? null,
       document_gate: params.outcome.document_gate ?? null,
+      contract_digest: params.outcome.contract_digest ?? null,
+      attempt_id: params.outcome.attempt_id ?? null,
+      session_ref: params.outcome.session_ref ?? null,
+      runtime_version: params.outcome.runtime_version ?? null,
       ...(params.outcome.verification_fingerprint ? { verification_fingerprint: params.outcome.verification_fingerprint } : {}),
     };
     this.records.push(entry);
     return entry;
+  }
+
+  /** How many runs this log holds — the mark `truncate` rolls back to. */
+  size(): number {
+    return this.records.length;
+  }
+
+  /**
+   * Drops every run recorded after `size()` returned `length`. Used only by
+   * the orchestrator's atomic unit, so a run whose store transaction rolled
+   * back is not still counted against the budget in memory.
+   */
+  truncate(length: number): void {
+    this.records.length = Math.min(this.records.length, length);
   }
 
   runsForTask(taskId: string): RunRecord[] {

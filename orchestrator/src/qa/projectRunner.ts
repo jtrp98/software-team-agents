@@ -32,6 +32,16 @@ const CHECK_FOR: Record<DeterministicCheckId, string> = {
 };
 
 /**
+ * V13 TASK-017/018 — the checks this runner can never execute. Integration is
+ * deliberately the QA round's surface (running the same suite twice from two
+ * layers would lie about coverage), so a required `integration-tests` check is
+ * recorded as runnerless — visible, non-blocking at the sweep, and enforced by
+ * the QA strategy — rather than "missing", which would block every stage on
+ * evidence no sweep can ever produce.
+ */
+export const SWEEP_RUNNERLESS_CHECKS: readonly DeterministicCheckId[] = ["integration-tests"];
+
+/**
  * Turns a Target's configured scripts into the injected deterministic runner.
  *
  * The framework static gate is preferred: it returns all script results in
@@ -139,9 +149,10 @@ export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRu
           status: result.exitCode === 0 && !result.timedOut ? "PASS" : "FAIL",
           durationMs: now() - started,
           outputSummary: summary(result.stdout, result.stderr) || (result.timedOut ? `${check} timed out` : `${check} exited ${result.exitCode ?? "unknown"}`),
+          exitCode: result.exitCode,
         };
       } catch (error) {
-        return { id, status: "FAIL", durationMs: now() - started, outputSummary: `could not run ${check}: ${error instanceof Error ? error.message : String(error)}` };
+        return { id, status: "FAIL", durationMs: now() - started, outputSummary: `could not run ${check}: ${error instanceof Error ? error.message : String(error)}`, exitCode: null };
       }
     }
 
@@ -160,9 +171,10 @@ export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRu
         status: result.exitCode === 0 && !result.timedOut ? "PASS" : "FAIL",
         durationMs: now() - started,
         outputSummary: summary(result.stdout, result.stderr) || (result.timedOut ? `${check} timed out` : `${check} exited ${result.exitCode ?? "unknown"}`),
+        exitCode: result.exitCode,
       };
     } catch (error) {
-      return { id, status: "FAIL", durationMs: now() - started, outputSummary: `could not run ${check}: ${error instanceof Error ? error.message : String(error)}` };
+      return { id, status: "FAIL", durationMs: now() - started, outputSummary: `could not run ${check}: ${error instanceof Error ? error.message : String(error)}`, exitCode: null };
     }
   };
 }

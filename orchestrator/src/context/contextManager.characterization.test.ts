@@ -7,6 +7,7 @@ import { CONTEXT_POLICY } from "./contextSelection.js";
 import { CATEGORY_TO_DOC, ContextManager, type DocKind, keepDesignSection, selectDocContext, type ContextRequest } from "./contextManager.js";
 
 const SECURITY_FIXTURE_BYTES = 1_024;
+const REVIEW_FIXTURE_BYTES = 1_024;
 
 function fixedDocument(seed: string, bytes: number): string {
   if (seed.length > bytes) throw new Error(`fixture seed exceeds fixed size ${bytes}`);
@@ -21,10 +22,18 @@ function createCharacterizationFixture(): { root: string; moduleName: string } {
     fixedDocument("# Security\n\n## Findings\nPinned security finding.\n\n", SECURITY_FIXTURE_BYTES),
     "utf8",
   );
+  fs.writeFileSync(
+    path.join(moduleDir, "review.md"),
+    fixedDocument(
+      "# review.md — fixture\n\n## Open Findings — all phases\nNone.\n\n## Review Round 1 — T\n**Verdict:** ✅ Approved\n\n## Review Round 2 — T\n**Verdict:** ✅ Approved\n\n## Reviewed\n- src/a.ts\n",
+      REVIEW_FIXTURE_BYTES,
+    ),
+    "utf8",
+  );
   expect(fs.readFileSync(path.join(moduleDir, "design.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.design);
   expect(fs.readFileSync(path.join(moduleDir, "plan.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.plan);
   expect(fs.readFileSync(path.join(moduleDir, "requirement.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.requirement);
-  expect(fs.readFileSync(path.join(moduleDir, "review.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.review);
+  expect(fs.readFileSync(path.join(moduleDir, "qa.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.qa);
   expect(fs.readFileSync(path.join(moduleDir, "test-plan.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.testPlan);
   expect(fs.readFileSync(path.join(moduleDir, "security.md"), "utf8").length).toBe(SECURITY_FIXTURE_BYTES);
   return fixture;
@@ -79,7 +88,16 @@ const PLAN = {
   skipped: ["Phase 2: Reporting"],
   unknownSections: [],
 };
-const REVIEW = { bytesBefore: 3_400, bytesAfter: 3_402, savedPct: -0, kept: ["Open Issues", "Round 1"], skipped: [], unknownSections: [] };
+const QA_DOC = { bytesBefore: 3_400, bytesAfter: 3_402, savedPct: -0, kept: ["Open Issues", "Round 1"], skipped: [], unknownSections: [] };
+// review.md keeps the findings table and the current round onward; the earlier round is skipped.
+const REVIEW_DOC = {
+  bytesBefore: REVIEW_FIXTURE_BYTES,
+  bytesAfter: 980,
+  savedPct: 4,
+  kept: ["Open Findings — all phases", "Review Round 2 — T", "Reviewed"],
+  skipped: ["Review Round 1 — T"],
+  unknownSections: [],
+};
 const TEST_PLAN = { bytesBefore: 1_200, bytesAfter: 1_200, savedPct: 0, kept: ["Coverage"], skipped: [], unknownSections: [] };
 const SECURITY = { bytesBefore: SECURITY_FIXTURE_BYTES, bytesAfter: SECURITY_FIXTURE_BYTES, savedPct: 0, kept: ["Findings"], skipped: [], unknownSections: [] };
 // system-analyst reads design.md whole (owns it, amends in full) — not a slice.
@@ -96,10 +114,10 @@ const CHARACTERIZATION: Record<string, unknown> = {
   "setup:design": DESIGN,
   "business-analyst:requirement": REQUIREMENT_IN_FULL,
   "business-analyst:design": DESIGN,
-  "business-analyst:review": REVIEW,
+  "business-analyst:qa": QA_DOC,
   "system-analyst:requirement": REQUIREMENT_IN_FULL,
   "system-analyst:design": DESIGN_IN_FULL,
-  "system-analyst:review": REVIEW,
+  "system-analyst:qa": QA_DOC,
   "project-manager:design": DESIGN_WITH_DATA_MODEL,
   "project-manager:requirement": REQUIREMENT,
   "test-planner:requirement": REQUIREMENT,
@@ -111,21 +129,29 @@ const CHARACTERIZATION: Record<string, unknown> = {
   "backend-engineer:design": DESIGN,
   "backend-engineer:requirement": REQUIREMENT,
   "backend-engineer:test-plan": TEST_PLAN,
-  "backend-engineer:review": REVIEW,
+  "backend-engineer:review": REVIEW_DOC,
+  "backend-engineer:qa": QA_DOC,
   "frontend-engineer:plan": PLAN,
   "frontend-engineer:design": DESIGN,
   "frontend-engineer:requirement": REQUIREMENT,
   "frontend-engineer:test-plan": TEST_PLAN,
-  "frontend-engineer:review": REVIEW,
+  "frontend-engineer:review": REVIEW_DOC,
+  "frontend-engineer:qa": QA_DOC,
+  "reviewer:requirement": REQUIREMENT,
+  "reviewer:design": DESIGN,
+  "reviewer:plan": PLAN,
+  "reviewer:test-plan": TEST_PLAN,
+  "reviewer:review": REVIEW_DOC,
   "qa-engineer:requirement": REQUIREMENT,
   "qa-engineer:design": DESIGN_WITH_DATA_MODEL,
   "qa-engineer:plan": PLAN,
   "qa-engineer:test-plan": TEST_PLAN,
-  "qa-engineer:review": REVIEW,
+  "qa-engineer:review": REVIEW_DOC,
+  "qa-engineer:qa": QA_DOC,
   "security:requirement": REQUIREMENT,
   "security:design": DESIGN,
-  "security:review": REVIEW,
-  "devops:review": REVIEW,
+  "security:qa": QA_DOC,
+  "devops:qa": QA_DOC,
   "devops:security": SECURITY,
   "devops:plan": PLAN,
   "devops:design": DESIGN,
@@ -135,9 +161,10 @@ const CHARACTERIZATION: Record<string, unknown> = {
   "project-manager:aggregate": { bytesBefore: 79_000, bytesAfter: 18_621, savedPct: 76 },
   "test-planner:aggregate": { bytesBefore: 96_000, bytesAfter: 14_591, savedPct: 85 },
   "uxui-designer:aggregate": { bytesBefore: 79_000, bytesAfter: 13_604, savedPct: 83 },
-  "backend-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 19_193, savedPct: 81 },
-  "frontend-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 19_193, savedPct: 81 },
-  "qa-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 24_210, savedPct: 76 },
+  "backend-engineer:aggregate": { bytesBefore: 101_624, bytesAfter: 20_173, savedPct: 80 },
+  "frontend-engineer:aggregate": { bytesBefore: 101_624, bytesAfter: 20_173, savedPct: 80 },
+  "reviewer:aggregate": { bytesBefore: 98_224, bytesAfter: 16_771, savedPct: 83 },
+  "qa-engineer:aggregate": { bytesBefore: 101_624, bytesAfter: 25_190, savedPct: 75 },
   "security:aggregate": { bytesBefore: 82_400, bytesAfter: 17_006, savedPct: 79 },
   "devops:aggregate": { bytesBefore: 88_424, bytesAfter: 18_700, savedPct: 79 },
 };

@@ -74,6 +74,7 @@ export const PROMPT_BUDGETS: Record<string, number> = {
   "uxui-designer.md": AGENT_PROMPT_TARGET,
   "backend-engineer.md": AGENT_PROMPT_TARGET,
   "frontend-engineer.md": AGENT_PROMPT_TARGET,
+  "reviewer.md": AGENT_PROMPT_TARGET,
   "business-analyst.md": AGENT_PROMPT_TARGET,
   "project-manager.md": AGENT_PROMPT_TARGET,
   // Documented design-contract allowance.

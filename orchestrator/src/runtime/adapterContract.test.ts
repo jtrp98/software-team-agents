@@ -2,7 +2,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
@@ -11,6 +11,10 @@ import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS } from "./runtimeAdapter.js";
 import type { RuntimeAdapter, RuntimeAgentRequest, SpawnSync } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+
+vi.mock("../gates/humanChannelConfig.js", () => ({
+  approvalChannelDir: () => path.join(os.tmpdir(), "sta-test-approval-channel"),
+}));
 
 /**
  * OFF04 — the Runtime port's contract, stated once and applied to every
@@ -188,8 +192,11 @@ describe("an unreachable runtime is UNAVAILABLE, never a throw", () => {
 
   it("OpenCodeAdapter maps a failed spawn to UNAVAILABLE", async () => {
     const adapter = new OpenCodeAdapter({ projectRoot, spawnSync: enoentSpawn() });
-    // The binding must exist or the adapter fails fast before ever spawning.
+    // The binding must exist or the adapter fails fast before ever spawning,
+    // and so must the sta-guards plugin — V13 TASK-014 refuses a run whose
+    // workspace lacks it (allow-all default posture) before any spawn.
     await adapter.workspace.writeFile(adapter.binding.definitionPath("qa-engineer"), "role text");
+    await adapter.workspace.writeFile(adapter.binding.guardConfigPath!, "export const StaGuards = async () => ({});\n");
     const result = await adapter.executeAgent(requestFor(adapter));
     expect(result.status).toBe("UNAVAILABLE");
   });

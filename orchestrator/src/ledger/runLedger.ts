@@ -142,6 +142,12 @@ export const LedgerAttemptSchema = z.strictObject({
   tier: text.nullable(),
   /** Adapter/config identity, so a rebuilt binary cannot silently resume someone else's contract. */
   adapter_version: text,
+  /**
+   * V13 TASK-016 — the executor version the availability probe reported when
+   * this attempt was selected. Pinned: dispatch and resume refuse a runtime
+   * that now reports anything else. Null only when the probe named no version.
+   */
+  runtime_version: text.nullable(),
   config_hash: sha256,
   plan_hash: sha256,
   base_revision: revision,
@@ -188,14 +194,6 @@ export const LedgerEventSchema = z.strictObject({
 });
 export type LedgerEvent = z.infer<typeof LedgerEventSchema>;
 export type NewLedgerEvent = z.input<typeof LedgerEventSchema>;
-
-export interface LedgerReadiness {
-  /** Frozen order, filtered to tasks whose dependencies are all settled. */
-  ready: string[];
-  waiting: Array<{ task_id: string; waiting_on: string[] }>;
-  blocked: string[];
-  settled: string[];
-}
 
 export class LedgerConflictError extends Error {
   constructor(message: string) {
@@ -254,13 +252,19 @@ export interface RunLedger {
   registerTasks(tasks: readonly LedgerTask[]): void;
   readTasks(runIdValue: string): LedgerTask[];
   readTask(runIdValue: string, taskId: string): LedgerTask | null;
-  setTaskStatus(
+
+  /**
+   * V13 TASK-007 — writes the engine's projection of one task
+   * (`ledgerTaskStatusFromPersisted`). A projection is not a transition: it
+   * follows whatever the engine's persisted state says, so the task-status
+   * transition table does not apply; an unchanged status writes nothing.
+   */
+  projectTaskStatus(
     runIdValue: string,
     taskId: string,
     to: LedgerTaskStatus,
-    options?: { reason?: string; actor?: string },
+    options?: { reason?: string },
   ): LedgerTask;
-  readiness(runIdValue: string): LedgerReadiness;
 
   /** Write-once by `attempt_id`; a replay with identical bytes is accepted, a changed one refuses. */
   freezeAttempt(attempt: LedgerAttempt): void;
@@ -284,7 +288,7 @@ export interface RunLedger {
   eventsForRun(runIdValue: string): LedgerEvent[];
 
   /** Read-through to the authorities that already own these facts. */
-  retriesFor(taskId: string): { qa: number; security: number } | null;
+  retriesFor(taskId: string): { review: number; qa: number; security: number } | null;
   approvalsFor(taskId: string): readonly ApprovalRecord[] | null;
   findingsFor(taskId: string): readonly Finding[];
 

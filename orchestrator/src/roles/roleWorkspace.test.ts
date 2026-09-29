@@ -5,28 +5,14 @@ import { afterAll, describe, expect, it } from "vitest";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { UNIVERSAL_DENY, canWritePath } from "../agents/pathPermissions.js";
 import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
-import { RESERVED_DIRS, writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
-import type { KnowledgeItem, KnowledgeItemOf, RequirementPayload } from "../knowledge/knowledgeModel.js";
+import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
+import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { SAMPLE_NOW, sampleKnowledge } from "../knowledge/sampleKnowledge.js";
-import { USAGE, parseArgs, runCli } from "../cli.js";
-import {
-  AcknowledgementError,
-  PROJECT_WIDE_DIR,
-  ROLES_DIRNAME,
-  RoleWorkspaceError,
-  acknowledge,
-  checkRoleWorkspaces,
-  dependenciesOf,
-  emptyWorkspace,
-  laneView,
-  listRoleWorkspaceFiles,
-  loadRoleWorkspace,
-  readRoleWorkspaceFile,
-  relativePathForWorkspace,
-  renderRoleWorkspace,
-  roleWorkspacePath,
-  writeRoleWorkspace,
-} from "./roleWorkspace.js";
+import { USAGE, runCli } from "../cli.js";
+import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { defaultStateDbPath } from "../store/stateView.js";
+import { laneItemDigest } from "./laneDecisions.js";
+import { type RoleWorkspace, dependenciesOf, emptyWorkspace, laneView } from "./roleWorkspace.js";
 
 const NOW = "2026-08-21T10:00:00Z";
 const LATER = "2026-08-21T18:00:00Z";
@@ -50,6 +36,20 @@ function bumped(id: string, items: KnowledgeItem[] = sampleKnowledge()): Knowled
   return items.map((i) => (i.id === id ? { ...i, version: i.version + 1, updated_at: LATER } : i));
 }
 
+/**
+ * The projection a trusted acknowledgement decision produces (`laneDecisions.ts`
+ * builds it from the lane ledger): the current version and digest of each id.
+ * `laneView` only reads it, so a test can hand it one directly.
+ */
+function acknowledged(workspace: RoleWorkspace, kb: KnowledgeBase, ids: string[], by: string, at: string): RoleWorkspace {
+  const byId = new Map(workspace.seen.map((ref) => [ref.id, ref]));
+  for (const id of ids) {
+    const item = kb.get(id)!;
+    byId.set(id, { id, version: item.version, digest: laneItemDigest(item, os.tmpdir()), at, by });
+  }
+  return { ...workspace, seen: [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : 1)), updated_at: at };
+}
+
 afterAll(() => {
   for (const root of roots) {
     try {
@@ -58,17 +58,6 @@ afterAll(() => {
       /* left for the OS */
     }
   }
-});
-
-describe("relativePathForWorkspace (T99)", () => {
-  it("puts a project-wide lane under _project/, the same convention items use", () => {
-    expect(relativePathForWorkspace("ba", null)).toBe(`${ROLES_DIRNAME}/${PROJECT_WIDE_DIR}/ba.yaml`);
-    expect(relativePathForWorkspace("dev", "sales-crm")).toBe(`${ROLES_DIRNAME}/sales-crm/dev.yaml`);
-  });
-
-  it("is a reserved directory, so the knowledge item walk skips it", () => {
-    expect(RESERVED_DIRS).toContain(ROLES_DIRNAME);
-  });
 });
 
 describe("dependenciesOf", () => {
@@ -115,7 +104,7 @@ describe("laneView", () => {
   });
 
   it("goes quiet once everything it depends on is acknowledged", () => {
-    const ws = acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["API-shifts.list", "DES-003"], "Jaturapat", NOW);
+    const ws = acknowledged(emptyWorkspace("dev", "sales-crm", NOW), kb, ["API-shifts.list", "DES-003"], "Jaturapat", NOW);
     const view = laneView(ws, kb);
     expect(view.unseen).toEqual([]);
     expect(view.stale).toEqual([]);
@@ -127,12 +116,12 @@ describe("laneView", () => {
 
   /** SA amends the design while DEV is mid-task. */
   it("reports a dependency that moved while the lane was working", () => {
-    const ws = acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["API-shifts.list", "DES-003"], "Jaturapat", NOW);
+    const ws = acknowledged(emptyWorkspace("dev", "sales-crm", NOW), kb, ["API-shifts.list", "DES-003"], "Jaturapat", NOW);
     const after = new KnowledgeBase(bumped("DES-003"));
 
     const view = laneView(ws, after);
     expect(view.stale).toEqual([
-      { id: "DES-003", version: 1, at: NOW, by: "Jaturapat", currentVersion: 2, reason: "behind" },
+      expect.objectContaining({ id: "DES-003", version: 1, at: NOW, by: "Jaturapat", currentVersion: 2, reason: "behind" }),
     ]);
     expect(view.status).toBe("behind");
   });
@@ -144,7 +133,7 @@ describe("laneView", () => {
    */
   it("catches up when the lane acknowledges after the change", () => {
     const after = new KnowledgeBase(bumped("DES-003"));
-    const ws = acknowledge(emptyWorkspace("dev", "sales-crm", NOW), after, ["DES-003"], "Jaturapat", LATER);
+    const ws = acknowledged(emptyWorkspace("dev", "sales-crm", NOW), after, ["DES-003"], "Jaturapat", LATER);
 
     expect(ws.seen.find((r) => r.id === "DES-003")?.version).toBe(2);
     expect(laneView(ws, after).stale).toEqual([]);
@@ -161,7 +150,7 @@ describe("laneView", () => {
   it("says behind even while its own work is waiting on a person", () => {
     const items = bumped("REQ-003").map((i) => (i.id === "DES-003" ? { ...i, status: "reviewed" as const } : i));
     const after = new KnowledgeBase(items);
-    const ws = acknowledge(emptyWorkspace("sa", "sales-crm", NOW), new KnowledgeBase(sampleKnowledge()), ["REQ-003"], "Nan", NOW);
+    const ws = acknowledged(emptyWorkspace("sa", "sales-crm", NOW), new KnowledgeBase(sampleKnowledge()), ["REQ-003"], "Nan", NOW);
 
     const view = laneView(ws, after);
     expect(view.awaitingApproval).toEqual(["DES-003"]);
@@ -174,7 +163,7 @@ describe("laneView", () => {
   });
 
   it("reports an acknowledgement that is no longer a dependency, without removing it", () => {
-    const ws = acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["DES-003", "REQ-003"], "Jaturapat", NOW);
+    const ws = acknowledged(emptyWorkspace("dev", "sales-crm", NOW), kb, ["DES-003", "REQ-003"], "Jaturapat", NOW);
     const view = laneView(ws, kb);
     // REQ-003 is not something a dev-lane item points at.
     expect(view.orphanedSeen).toEqual(["REQ-003"]);
@@ -183,242 +172,18 @@ describe("laneView", () => {
 
   /** Reading must never mark anything read — see the module header. */
   it("does not touch the watermark", () => {
-    const before = acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["DES-003"], "Jaturapat", NOW);
+    const before = acknowledged(emptyWorkspace("dev", "sales-crm", NOW), kb, ["DES-003"], "Jaturapat", NOW);
     const snapshot = JSON.stringify(before);
     laneView(before, new KnowledgeBase(bumped("DES-003")));
     expect(JSON.stringify(before)).toBe(snapshot);
   });
 });
 
-describe("acknowledge", () => {
-  const kb = new KnowledgeBase(sampleKnowledge());
-  const base = emptyWorkspace("dev", "sales-crm", NOW);
-
-  it("refuses an acknowledgement with nobody attached", () => {
-    expect(() => acknowledge(base, kb, ["DES-003"], "   ", NOW)).toThrow(AcknowledgementError);
-    expect(() => acknowledge(base, kb, ["DES-003"], "", NOW)).toThrow(/name of the person/);
-  });
-
-  it("refuses an empty list rather than recording a person doing nothing", () => {
-    expect(() => acknowledge(base, kb, [], "Jaturapat", NOW)).toThrow(/nothing to acknowledge/);
-  });
-
-  it("refuses an id no knowledge item has", () => {
-    expect(() => acknowledge(base, kb, ["REQ-999"], "Jaturapat", NOW)).toThrow(/REQ-999/);
-  });
-
-  it("takes the version from the knowledge base, not from the caller", () => {
-    const ws = acknowledge(base, new KnowledgeBase(bumped("DES-003")), ["DES-003"], "Jaturapat", NOW);
-    expect(ws.seen).toEqual([{ id: "DES-003", version: 2, at: NOW, by: "Jaturapat" }]);
-  });
-
-  it("replaces an existing entry instead of appending a second one", () => {
-    const once = acknowledge(base, kb, ["DES-003"], "Jaturapat", NOW);
-    const twice = acknowledge(once, new KnowledgeBase(bumped("DES-003")), ["DES-003"], "Nan", LATER);
-    expect(twice.seen).toEqual([{ id: "DES-003", version: 2, at: LATER, by: "Nan" }]);
-  });
-
-  it("keeps seen sorted by id, so two people's diffs merge", () => {
-    const ws = acknowledge(base, kb, ["DES-003", "API-shifts.list"], "Jaturapat", NOW);
-    expect(ws.seen.map((r) => r.id)).toEqual(["API-shifts.list", "DES-003"]);
-  });
-
-  it("does not mutate the workspace it was given", () => {
-    acknowledge(base, kb, ["DES-003"], "Jaturapat", NOW);
-    expect(base.seen).toEqual([]);
-    expect(base.updated_at).toBe(NOW);
-  });
-});
-
-describe("the store", () => {
-  it("round-trips through YAML", () => {
-    const root = project();
-    const kb = KnowledgeBase.load(root);
-    const ws = acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["DES-003"], "Jaturapat", NOW);
-
-    writeRoleWorkspace(ws, root);
-    expect(loadRoleWorkspace("dev", "sales-crm", root)).toEqual(ws);
-    expect(fs.existsSync(roleWorkspacePath("dev", "sales-crm", root))).toBe(true);
-  });
-
-  it("treats a missing file and an empty lane as the same thing", () => {
-    const root = project();
-    expect(loadRoleWorkspace("ba", "sales-crm", root, NOW)).toEqual(emptyWorkspace("ba", "sales-crm", NOW));
-  });
-
-  it("writes a project-wide lane under _project/", () => {
-    const root = project();
-    writeRoleWorkspace(emptyWorkspace("sa", null, NOW), root);
-    expect(listRoleWorkspaceFiles(root)).toEqual([`${ROLES_DIRNAME}/${PROJECT_WIDE_DIR}/sa.yaml`]);
-    expect(loadRoleWorkspace("sa", null, root).module).toBeNull();
-  });
-
-  it("reads one named file, and says which file when it cannot", () => {
-    const root = project();
-    expect(() => readRoleWorkspaceFile(roleWorkspacePath("dev", "sales-crm", root))).toThrow(/no file at/);
-  });
-
-  it("refuses a file that acknowledges one item twice", () => {
-    const root = project([], {
-      [`knowledge/${ROLES_DIRNAME}/sales-crm/dev.yaml`]: renderRoleWorkspace({
-        schema_version: 1,
-        lane: "dev",
-        module: "sales-crm",
-        seen: [
-          { id: "DES-003", version: 1, at: NOW, by: "Jaturapat" },
-          { id: "DES-003", version: 2, at: LATER, by: "Nan" },
-        ],
-        updated_at: LATER,
-      }),
-    });
-    expect(() => loadRoleWorkspace("dev", "sales-crm", root)).toThrow(/more than once/);
-  });
-
-  it("names an unresolved merge as a merge, not as a YAML typo", () => {
-    const root = project([], {
-      [`knowledge/${ROLES_DIRNAME}/sales-crm/dev.yaml`]: "lane: dev\n<<<<<<< HEAD\nmodule: a\n=======\nmodule: b\n>>>>>>> x\n",
-    });
-    expect(() => loadRoleWorkspace("dev", "sales-crm", root)).toThrow(/conflict marker/);
-  });
-
-  it("rejects an unknown field rather than silently dropping it", () => {
-    const root = project([], {
-      [`knowledge/${ROLES_DIRNAME}/sales-crm/dev.yaml`]:
-        "schema_version: 1\nlane: dev\nmodule: sales-crm\nseen: []\nupdated_at: 2026-08-21T10:00:00Z\napprovals: []\n",
-    });
-    // `approvals` does not exist as a field yet — a slot that validated
-    // nothing would look enforced and would not be.
-    expect(() => loadRoleWorkspace("dev", "sales-crm", root)).toThrow(/approvals/);
-  });
-
-  it("rejects an acknowledgement with no name in it, at the schema level too", () => {
-    const root = project([], {
-      [`knowledge/${ROLES_DIRNAME}/sales-crm/dev.yaml`]:
-        "schema_version: 1\nlane: dev\nmodule: sales-crm\nupdated_at: 2026-08-21T10:00:00Z\n" +
-        'seen:\n  - id: DES-003\n    version: 1\n    at: 2026-08-21T10:00:00Z\n    by: ""\n',
-    });
-    expect(() => loadRoleWorkspace("dev", "sales-crm", root)).toThrow(RoleWorkspaceError);
-  });
-});
-
-describe("checkRoleWorkspaces", () => {
-  it("reports no _roles/ as a note, not a problem", () => {
-    const result = checkRoleWorkspaces(project());
-    expect(result.ok).toBe(true);
-    expect(result.notes.join(" ")).toMatch(/no role workspace has been opened yet/);
-  });
-
-  it("passes a lane that is fully caught up", () => {
-    const root = project();
-    const kb = KnowledgeBase.load(root);
-    writeRoleWorkspace(
-      acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["API-shifts.list", "DES-003"], "Jaturapat", NOW),
-      root,
-    );
-    const result = checkRoleWorkspaces(root);
-    expect(result.problems).toEqual([]);
-    expect(result.ok).toBe(true);
-  });
-
-  it("reports a behind lane as a note — being told is the check working", () => {
-    const root = project(bumped("DES-003"));
-    const before = new KnowledgeBase(sampleKnowledge());
-    writeRoleWorkspace(acknowledge(emptyWorkspace("dev", "sales-crm", NOW), before, ["DES-003"], "Jaturapat", NOW), root);
-
-    const result = checkRoleWorkspaces(root);
-    expect(result.ok).toBe(true);
-    expect(result.notes.join(" ")).toMatch(/DEV on sales-crm is behind: 1 changed, 1 never acknowledged/);
-  });
-
-  it("fails a watermark pointing at an item that no longer exists", () => {
-    const root = project(sampleKnowledge().filter((i) => i.id !== "DES-003"));
-    fs.mkdirSync(path.join(root, "knowledge", ROLES_DIRNAME, "sales-crm"), { recursive: true });
-    fs.writeFileSync(
-      path.join(root, "knowledge", ROLES_DIRNAME, "sales-crm", "dev.yaml"),
-      renderRoleWorkspace({
-        schema_version: 1,
-        lane: "dev",
-        module: "sales-crm",
-        seen: [{ id: "DES-003", version: 1, at: NOW, by: "Jaturapat" }],
-        updated_at: NOW,
-      }),
-      "utf8",
-    );
-
-    const result = checkRoleWorkspaces(root);
-    expect(result.ok).toBe(false);
-    expect(result.problems.join(" ")).toMatch(/acknowledges DES-003, which no longer exists/);
-  });
-
-  it("fails a watermark claiming a version the item never reached", () => {
-    const root = project();
-    writeRoleWorkspace(
-      {
-        schema_version: 1,
-        lane: "dev",
-        module: "sales-crm",
-        seen: [{ id: "DES-003", version: 9, at: NOW, by: "Jaturapat" }],
-        updated_at: NOW,
-      },
-      root,
-    );
-    const result = checkRoleWorkspaces(root);
-    expect(result.ok).toBe(false);
-    expect(result.problems.join(" ")).toMatch(/only reached v1 — the two are not talking about the same item/);
-  });
-
-  it("fails a file whose contents disagree with its own path", () => {
-    const root = project([], {
-      // A dev-lane file sitting where the ba lane's file belongs.
-      [`knowledge/${ROLES_DIRNAME}/sales-crm/ba.yaml`]: renderRoleWorkspace(emptyWorkspace("dev", "sales-crm", NOW)),
-    });
-    const result = checkRoleWorkspaces(root);
-    expect(result.ok).toBe(false);
-    expect(result.problems.join(" ")).toMatch(/belongs at knowledge\/_roles\/sales-crm\/dev\.yaml/);
-  });
-
-  it("fails a file that is not one of the three lanes", () => {
-    const root = project([], {
-      [`knowledge/${ROLES_DIRNAME}/sales-crm/pm.yaml`]: renderRoleWorkspace(emptyWorkspace("sa", "sales-crm", NOW)),
-    });
-    const result = checkRoleWorkspaces(root);
-    expect(result.ok).toBe(false);
-    expect(result.problems.join(" ")).toMatch(/"pm\.yaml" is not one of ba\.yaml, sa\.yaml, uxui\.yaml, dev\.yaml/);
-  });
-
-  it("fails a loose file sitting directly under _roles/", () => {
-    const root = project([], { [`knowledge/${ROLES_DIRNAME}/notes.md`]: "stray\n" });
-    const result = checkRoleWorkspaces(root);
-    expect(result.ok).toBe(false);
-    expect(result.problems.join(" ")).toMatch(/belongs to no lane/);
-  });
-
+describe("knowledge/_roles/** stays behind the guard floor", () => {
   /**
-   * Two ways to reach this, and the note must not assume the wrong one: a
-   * leftover acknowledgement, or a handoff the lane accepted before writing
-   * anything that cites it — which is the normal state right after `roles ack`.
-   */
-  it("reports an acknowledgement nothing points at, without telling anyone to delete it", () => {
-    const root = project();
-    const kb = KnowledgeBase.load(root);
-    writeRoleWorkspace(acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["REQ-003"], "Jaturapat", NOW), root);
-
-    const result = checkRoleWorkspaces(root);
-    expect(result.ok).toBe(true);
-    expect(result.notes.join(" ")).toMatch(/acknowledges REQ-003, which nothing this lane owns points at/);
-    expect(result.notes.join(" ")).not.toMatch(/safe to drop/);
-  });
-
-  it("passes against this repo", () => {
-    expect(checkRoleWorkspaces(defaultProjectRoot()).ok).toBe(true);
-  });
-});
-
-describe("no agent may write a role workspace", () => {
-  /**
-   * The floor, not a per-contract rule: an agent that could write one of these
-   * could mark a change acknowledged on a person's behalf, which is exactly what
-   * the human-in-the-loop design forbids.
+   * Nothing reads these files any more (V13 TASK-028): lane authority is the
+   * lane ledger. The floor stays so no agent can leave a file there that a
+   * person might mistake for a sign-off.
    */
   it("is in UNIVERSAL_DENY", () => {
     expect(UNIVERSAL_DENY).toContain("knowledge/_roles/**");
@@ -449,42 +214,6 @@ describe("no agent may write a role workspace", () => {
   });
 });
 
-describe("runCli --check-roles (T99)", () => {
-  it("reports a clean project and exits 0", async () => {
-    const root = project();
-    const logged: string[] = [];
-    const realLog = console.log;
-    console.log = (...args: unknown[]) => void logged.push(args.join(" "));
-    try {
-      expect(await runCli(["--check-roles", "--project-root", root], root)).toBe(0);
-    } finally {
-      console.log = realLog;
-    }
-    expect(logged.join("\n")).toMatch(/every role workspace agrees with knowledge\//);
-  });
-
-  it("exits 1 and names the problem", async () => {
-    const root = project([], { [`knowledge/${ROLES_DIRNAME}/sales-crm/pm.yaml`]: "schema_version: 1\n" });
-    const errored: string[] = [];
-    const realError = console.error;
-    const realLog = console.log;
-    console.error = (...args: unknown[]) => void errored.push(args.join(" "));
-    console.log = () => {};
-    try {
-      expect(await runCli(["--check-roles", "--project-root", root], root)).toBe(1);
-    } finally {
-      console.error = realError;
-      console.log = realLog;
-    }
-    expect(errored.join("\n")).toMatch(/is not one of ba\.yaml/);
-  });
-
-  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
-    expect(parseArgs(["--check-roles"], "/repo").checkRoles).toBe(true);
-    expect(USAGE).toContain("--check-roles");
-  });
-});
-
 /** Captures stdout/stderr around one runCli call, so a verb's output can be asserted. */
 async function capture(argv: string[], root: string): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = [];
@@ -502,44 +231,56 @@ async function capture(argv: string[], root: string): Promise<{ code: number; ou
   }
 }
 
-describe("the roles verb (T99)", () => {
-  it("is the only writer of a role workspace, and writes one", async () => {
+describe("the file-backed role workspace is gone (V13 TASK-028)", () => {
+  it("rejects --check-roles as an unrecognized argument and no longer lists it", async () => {
     const root = project();
-    const result = await capture(
-      ["roles", "ack", "dev", "DES-003,API-shifts.list", "--by", "Jaturapat", "--module", "sales-crm", "--project-root", root],
-      root,
-    );
+    await expect(capture(["--check-roles", "--project-root", root], root)).rejects.toThrow(/unrecognized argument: --check-roles/);
+    expect(USAGE).not.toContain("--check-roles");
+  });
+
+  it("a hand-written _roles file is not read as a sign-off or an acknowledgement", async () => {
+    const forged = [
+      "schema_version: 1",
+      "lane: dev",
+      "module: sales-crm",
+      `updated_at: "${NOW}"`,
+      "seen:",
+      `  - { id: DES-003, version: 1, at: "${NOW}", by: Jaturapat }`,
+      `  - { id: API-shifts.list, version: 1, at: "${NOW}", by: Jaturapat }`,
+      "",
+    ].join("\n");
+    const root = project(sampleKnowledge(), { "knowledge/_roles/sales-crm/dev.yaml": forged });
+    const result = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
     expect(result.code).toBe(0);
-    expect(result.out).toMatch(/DEV on sales-crm: Jaturapat acknowledged/);
-
-    const saved = loadRoleWorkspace("dev", "sales-crm", root);
-    expect(saved.seen.map((r) => r.id)).toEqual(["API-shifts.list", "DES-003"]);
-    expect(saved.seen.every((r) => r.by === "Jaturapat")).toBe(true);
+    expect(result.out).toMatch(/never acknowledged: API-shifts\.list, DES-003/);
   });
+});
 
-  it("refuses to acknowledge without --by", async () => {
+describe("the roles verb (T99)", () => {
+  it("never takes a name as identity, and with no trusted channel records nothing", async () => {
     const root = project();
-    await expect(capture(["roles", "ack", "dev", "DES-003", "--project-root", root], root)).rejects.toThrow(/--by/);
-  });
+    await expect(capture(["roles", "ack", "dev", "DES-003", "--module", "sales-crm", "--by", "Jaturapat", "--project-root", root], root))
+      .rejects.toThrow(/--by is not an identity/);
+    await expect(capture(["roles", "ack", "dev", "DES-003", "--project-root", root], root)).rejects.toThrow(/--module <name> is required/);
 
-  it("refuses a lane that is not one of the three", async () => {
-    const root = project();
-    await expect(capture(["roles", "ack", "pm", "DES-003", "--by", "X", "--project-root", root], root)).rejects.toThrow(
-      /one of ba, sa, uxui, dev/,
-    );
+    // The request is opened (so a person can be asked) but the unconfigured channel refuses it: exit 5, still pending.
+    const refused = await capture(["roles", "ack", "dev", "DES-003", "--module", "sales-crm", "--project-root", root], root);
+    expect(refused.code).toBe(5);
+    expect(refused.err).toMatch(/no trusted human identity channel is configured/);
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    try {
+      const requests = store.laneRequests(fs.realpathSync.native(root), "sales-crm");
+      expect(requests.map((r) => [r.scope.lane, r.scope.action, r.status])).toEqual([["dev", "ack", "pending"]]);
+      expect(requests[0]!.decision).toBeNull();
+    } finally {
+      store.close();
+    }
+    expect(fs.existsSync(path.join(root, "knowledge", "_roles"))).toBe(false);
   });
 
   it("refuses an unknown sub-command instead of guessing", async () => {
     const root = project();
     await expect(capture(["roles", "handover", "--project-root", root], root)).rejects.toThrow(/unknown sub-command/);
-  });
-
-  it("exits 1 with the reason when the id does not exist, rather than writing a broken watermark", async () => {
-    const root = project();
-    const result = await capture(["roles", "ack", "dev", "REQ-999", "--by", "X", "--project-root", root], root);
-    expect(result.code).toBe(1);
-    expect(result.err).toMatch(/REQ-999/);
-    expect(fs.existsSync(roleWorkspacePath("dev", "sales-crm", root))).toBe(false);
   });
 
   it("shows every lane of every module when --module is omitted", async () => {
@@ -570,21 +311,6 @@ describe("the roles verb (T99)", () => {
     expect(result.out).not.toMatch(/no lane workflow defined/);
   });
 
-  it("goes quiet for a lane that has caught up", async () => {
-    const root = project();
-    await capture(
-      ["roles", "ack", "dev", "DES-003", "API-shifts.list", "--by", "Jaturapat", "--module", "sales-crm", "--project-root", root],
-      root,
-    );
-    const result = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    // DEV is the last lane printed, so everything after its heading is its own detail.
-    const devSection = result.out.slice(result.out.indexOf("DEV"));
-    expect(devSection).toMatch(/deps: up-to-date/);
-    expect(devSection).not.toMatch(/never acknowledged/);
-    // SA is still behind, and that must keep showing — catching one lane up is not catching all of them up.
-    expect(result.out).toMatch(/SA.*deps: behind/);
-  });
-
   it("says so rather than printing an empty table when there is no knowledge at all", async () => {
     const root = project([]);
     const result = await capture(["roles", "--project-root", root], root);
@@ -594,91 +320,22 @@ describe("the roles verb (T99)", () => {
 
   it("is listed in the usage text", () => {
     expect(USAGE).toContain("sta roles");
-    expect(USAGE).toContain("roles ack");
+    expect(USAGE).toContain("roles inbox");
   });
 });
 
 describe("the roles sub-commands for T103-T107", () => {
-  /** Walks the BA lane the way a person would, and checks each gate refuses to be skipped. */
-  it("runs a whole lane from review to signed-off handoff", async () => {
+  it("fails closed for every free-form human status command", async () => {
     const root = project();
-
-    // RULE-007 is draft. Approving it before review is refused.
-    const early = await capture(["roles", "approve", "RULE-007", "--by", "Jaturapat", "--project-root", root], root);
-    expect(early.code).toBe(1);
-    expect(early.err).toMatch(/cannot go draft -> approved/);
-
-    const reviewed = await capture(["roles", "review", "RULE-007", "--as", "system-analyst", "--project-root", root], root);
-    expect(reviewed.code).toBe(0);
-    // The checklist is what makes "reviewed" mean the same thing twice.
-    expect(reviewed.out).toMatch(/It confirmed:/);
-    expect(reviewed.out).toMatch(/enforcement` says where it is actually held/);
-
-    expect((await capture(["roles", "approve", "RULE-007", "--by", "Jaturapat", "--project-root", root], root)).code).toBe(0);
-
-    // Everything approved, but the lane gate is still shut.
-    const beforeSignoff = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    expect(beforeSignoff.out).toMatch(/BA\s+awaiting-signoff/);
-
-    const signoff = await capture(["roles", "signoff", "ba", "--by", "Jaturapat", "--module", "sales-crm", "--project-root", root], root);
-    expect(signoff.code).toBe(0);
-    expect(signoff.out).toMatch(/BA on sales-crm: Jaturapat signed off REQ-003, RULE-007/);
-
-    const after = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    expect(after.out).toMatch(/BA\s+ready/);
-    expect(after.out).toMatch(/sta roles ack sa REQ-003,RULE-007/);
-  });
-
-  it("refuses a review by the owner, and by a role that cannot see the kind", async () => {
-    const root = project();
-    const byOwner = await capture(["roles", "review", "RULE-007", "--as", "business-analyst", "--project-root", root], root);
-    expect(byOwner.code).toBe(1);
-    expect(byOwner.err).toMatch(/owns RULE-007 and cannot review it/);
-
-    const blind = await capture(["roles", "review", "RULE-007", "--as", "devops", "--project-root", root], root);
-    expect(blind.code).toBe(1);
-    expect(blind.err).toMatch(/does not see business-rule items/);
-  });
-
-  it("refuses a sign-off with no name, and one over a standing blocker", async () => {
-    const root = project();
-    await expect(
-      capture(["roles", "signoff", "ba", "--module", "sales-crm", "--project-root", root], root),
-    ).rejects.toThrow(/--by <name> is required/);
-
-    // Approve REQ-003's sibling and strip REQ-003's acceptance criteria: a blocker.
-    const kb = KnowledgeBase.load(root);
-    const req = kb.get("REQ-003") as KnowledgeItemOf<"requirement">;
-    writeKnowledgeItem(
-      { ...req, version: req.version + 1, payload: { ...(req.payload as RequirementPayload), acceptance_criteria: [] } },
-      root,
-    );
-    const rule = kb.get("RULE-007") as KnowledgeItem;
-    writeKnowledgeItem({ ...rule, status: "approved", version: rule.version + 1 }, root);
-
-    const blocked = await capture(["roles", "signoff", "ba", "--by", "X", "--module", "sales-crm", "--project-root", root], root);
-    expect(blocked.code).toBe(1);
-    expect(blocked.err).toMatch(/cannot be signed off while these stand/);
-    expect(blocked.err).toMatch(/no acceptance criteria/);
-  });
-
-  it("records a rejection as an answer that stops the lane", async () => {
-    const root = project();
-    const kb = KnowledgeBase.load(root);
-    const rule = kb.get("RULE-007") as KnowledgeItem;
-    writeKnowledgeItem({ ...rule, status: "approved", version: rule.version + 1 }, root);
-
-    const rejected = await capture(
-      ["roles", "signoff", "ba", "--reject", "--by", "Nan", "--note", "scope is too wide", "--module", "sales-crm", "--project-root", root],
-      root,
-    );
-    expect(rejected.code).toBe(0);
-    expect(rejected.out).toMatch(/Nan rejected/);
-
-    const after = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    expect(after.out).toMatch(/BA\s+rejected/);
-    expect(after.out).toMatch(/scope is too wide/);
-    expect(after.out).toMatch(/a rejection is an answer, not an absence/);
+    const before = KnowledgeBase.load(root).get("RULE-007");
+    for (const command of [["review", "RULE-007"], ["approve", "RULE-007"], ["signoff", "ba"], ["ack", "sa", "REQ-003"]]) {
+      await expect(capture(["roles", ...command, "--module", "sales-crm", "--by", "forged person", "--project-root", root], root))
+        .rejects.toThrow(/--by is not an identity/);
+    }
+    await expect(capture(["roles", "review", "RULE-007", "--project-root", root], root)).rejects.toThrow(/trusted human decision channel is unavailable/);
+    await expect(capture(["roles", "approve", "RULE-007", "--project-root", root], root)).rejects.toThrow(/through its lane's sign-off/);
+    expect(KnowledgeBase.load(root).get("RULE-007")).toEqual(before);
+    expect(fs.existsSync(path.join(root, "knowledge", "_roles"))).toBe(false);
   });
 
   it("shows an inbox per lane, and every lane is asked", async () => {
@@ -724,7 +381,7 @@ describe("the roles sub-commands for T103-T107", () => {
   });
 
   it("lists every sub-command in the usage text", () => {
-    for (const sub of ["roles ack", "roles signoff", "roles review", "roles approve", "roles inbox", "roles impact", "roles context"]) {
+    for (const sub of ["roles inbox", "roles impact", "roles context"]) {
       expect(USAGE).toContain(sub);
     }
   });

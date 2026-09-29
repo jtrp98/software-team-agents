@@ -53,7 +53,8 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     level: "supported",
     unattendedTargetWrites: true,
     claim:
-      "headless pipeline, hooks/guards and exit checks verified end to end; the default runtime for `sta run` and interactive launches, and certified for unattended Target writes — V10's workspace-lane collapse does not move this boundary, because certification follows verified enforcement rather than which workspace a session launches from",
+      "headless pipeline and hooks were verified. V13 TASK-031: every headless run launches the whole `claude` process inside Codex's Windows elevated restricted-token sandbox (`codex sandbox`) with a per-run profile — broad read, the approval channel an exact OS read/write deny, writes only at packet-authorized paths with VCS and runtime-binding directories read-only, a per-run `CLAUDE_CONFIG_DIR`/`TEMP`/`CODEX_HOME` deleted after the run, and OS network disabled with a loopback CONNECT proxy that tunnels only api.anthropic.com:443 — live-verified on Claude Code 2.1.283 with codex-cli 0.158.0 (R14F: glob, variable, encoded and junction reads/writes of a decoy approval directory denied; direct egress and non-allowlisted hosts denied; workspace reads/writes allowed; production adapter run OK). " +
+      "This headless path is certified for unattended Target writes on Windows only; it requires a Codex install and a person-provisioned login in the environment (`claude setup-token`), and exit checks run fail-closed through the provider-neutral ExitCheckRunner. V10 does not change this status",
   },
   codex: {
     level: "supported",
@@ -61,8 +62,8 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     claim:
       `interactive sessions and the headless adapter are verified on real Codex 0.154.0/0.155.1 installs, including sandbox/approval parsing, JSONL, output-schema and cached-token normalisation. ` +
       `Interactive guard coverage (once synced): ${codexCoverageWithHooks().detail}. ` +
-      `Headless enforcement is the per-run native permission profile — broad reads, writes only at packet-authorized paths, network disabled, packet-generated execpolicy plus OS deny rules for resolved Git executables — live-verified end to end on a real install (round three, 2026-09-23: outside-workspace write denied, in-workspace write allowed, read-only refused everything, network unreachable at DNS level), and exit checks run fail-closed after process exit through the provider-neutral ExitCheckRunner, which caught a real red typecheck with file and line. ` +
-      `This headless path is certified for unattended Target writes and is what \`supported\` scopes; interactive Codex receives no per-run profile, stays unguarded, needs \`--allow-unguarded-runtime\` and is limited to analysis/proposal, and the \`.codex/hooks.json\` payload remains compatibility wiring for that surface that is never claimed as headless enforcement. ` +
+      `Headless enforcement is the per-run native permission profile — broad reads except an OS-enforced approval-channel read/write deny, writes only at packet-authorized paths, network disabled, packet-generated execpolicy plus OS deny rules for resolved Git executables — live-verified with the adapter profile on Codex 0.155.0-alpha.16.4 (TASK-027 R14C: glob, variable and encoded reads/writes of a decoy approval directory denied; workspace reads/writes allowed), and exit checks run fail-closed after process exit through the provider-neutral ExitCheckRunner. ` +
+      `This headless path is certified for unattended Target writes and is what \`supported\` scopes; interactive Codex receives no per-run profile and stays unguarded, so a V13 direct-mode launch refuses it (no acknowledgement bypass remains — V13 TASK-012) and it is limited to analysis/proposal through STA dispatch, and the \`.codex/hooks.json\` payload remains compatibility wiring for that surface that is never claimed as headless enforcement. ` +
       `V10 does not change this status`,
   },
   opencode: {
@@ -70,26 +71,27 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     unattendedTargetWrites: false,
     claim:
       `spike-proven on 1.18.21 (probe, headless run, guards report); native exit hooks are absent, so the provider-neutral fail-closed ExitCheckRunner verifies requested exit checks after a successful process exit; other versions' tool arg-shapes are unverified. ` +
-      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. Analysis/proposal only; partial guards do not certify unattended Target writes. ` +
+      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. The headless adapter implements the V13 executor lifecycle (fresh-session resume, honest cancel accounting, evidence with changed files and the native session reference); production role dispatch is refused before spawn under V13 TASK-027 a1 because no OS approval isolation boundary is verified. Unattended Target writes are not certified. ` +
       `V10 does not change this status: a session launched from the Knowledge workspace inherits the same partial coverage on Target paths`,
   },
   antigravity: {
     level: "supported",
-    unattendedTargetWrites: true,
+    unattendedTargetWrites: false,
     claim:
       `interactive sessions and the headless adapter are verified on real agy installs with the machine-global bridge hook (~/.gemini/config/hooks.json). ` +
       `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}. ` +
       `Headless guarded writes enforce PreToolUse path permissions and the universal floor in-band via the bridge hook. ` +
-      `This headless path is certified for unattended Target writes; pipeline and guard integration are verified end to end. Provider-neutral exit checks run after successful headless execution. V10 does not change this status`,
+      `The V13 TASK-027 a1 approval isolation boundary is absent: production role dispatch is refused before spawn, including analysis/proposal; unattended Target writes are not certified. Provider-neutral exit checks cover completed runs. V10 does not change this status`,
   },
   zcode: {
     level: "experimental",
     unattendedTargetWrites: false,
     claim:
-      `There is no CLI and no headless pipeline, so \`sta run --runtime zcode\` refuses as unregistered-for-execution and there is no launch path. ` +
-      `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`); unattended Target-write stages stay refused. ` +
-      `Per-role Target/Knowledge write bounds apply to a role-play session only when it declares its role through \`software-team-agents session-role\` (\`.workflow/session-role.json\`); ` +
-      `an undeclared session keeps the universal floor alone, and read permissions stay instruction-level. ` +
+      `The ZCode install bundles its agent CLI (\`resources/glm/zcode.cjs\`, headless \`-p --json\`), which the governed ZcodeAdapter drives through the V13 executor lifecycle (V13 TASK-015): fresh-session resume, honest cancel accounting, evidence with the native session id and run-changed files, and a post-run write check that turns any write outside the grant into ERROR. ` +
+      `A guarded run is refused before spawn unless the synced \`.zcode/config.json\` hooks are all persistently trusted (the headless engine skips untrusted project hooks; trust is a person's \`zcode hooks trust review\`); an explicit model or effort is refused (no per-run flag), and a packet too long for the Windows command line is refused, never truncated. ` +
+      `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`); production role dispatch is refused before spawn under V13 TASK-027 a1 because no OS approval isolation boundary is verified. Unattended Target-write stages stay refused. ` +
+      `Per-role Target/Knowledge write bounds apply to a direct-mode session only through a STA-issued scoped attempt grant (\`sta grant issue\` writing \`.workflow/attempt-grant.json\` — V13 TASK-012); ` +
+      `an ungranted session keeps the universal floor plus the governed-artifact denial, and read permissions stay instruction-level. ` +
       `Guard coverage (once synced): ${zcodeCoverageWithSyncedPayload().detail}. ` +
       `V10 does not change this status: a desktop-only runtime has no headless surface for the lane collapse to change`,
   },

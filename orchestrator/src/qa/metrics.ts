@@ -7,7 +7,7 @@ import type { RunRecord } from "../observability/runLog.js";
  * Everything here is derived from records that already exist: a QA round's
  * tokens/cost/duration/context size are logged per run, and `qa_mode` (this
  * optimization's addition) makes TARGETED vs FULL a queryable fact instead
- * of prose in review.md. Nothing in this module blocks or fails when usage
+ * of prose in qa.md. Nothing in this module blocks or fails when usage
  * data is absent — nulls stay null and the aggregate says "not reported",
  * which is true.
  *
@@ -216,6 +216,8 @@ const CATEGORY_BY_AGENT: Partial<Record<AgentStage, UsageCategory>> = {
   [AgentStage.BUSINESS_ANALYST]: "BA",
   [AgentStage.SYSTEM_ANALYST]: "SA",
   [AgentStage.PROJECT_MANAGER]: "PM",
+  // Review is verification spend, reported with QA and security rather than as DEV work.
+  [AgentStage.REVIEWER]: "QA",
   [AgentStage.QA_ENGINEER]: "QA",
   [AgentStage.SECURITY]: "QA",
 };

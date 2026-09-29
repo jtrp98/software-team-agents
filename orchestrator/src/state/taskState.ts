@@ -21,6 +21,9 @@ export const STAGE_TO_STATE: Partial<Record<AgentStage, TaskState>> = {
   [AgentStage.UXUI_DESIGNER]: TaskState.IMPLEMENTATION,
   [AgentStage.BACKEND_ENGINEER]: TaskState.IMPLEMENTATION,
   [AgentStage.FRONTEND_ENGINEER]: TaskState.IMPLEMENTATION,
+  // Its own state, between the last code-producing stage and QA (V13 TASK-006):
+  // a review verdict is a gate of its own, with its own failure loop.
+  [AgentStage.REVIEWER]: TaskState.REVIEW,
   [AgentStage.QA_ENGINEER]: TaskState.QA,
   [AgentStage.SECURITY]: TaskState.SECURITY,
 };
@@ -88,8 +91,8 @@ export function initTaskMachine(
 
 /**
  * Valid next states from the machine's current state: the next state in its
- * forward sequence, plus the fixed failure transition if current is QA or
- * SECURITY. BLOCKED is always a structurally valid next state from a _FAILED
+ * forward sequence, plus the fixed failure transition if current is REVIEW,
+ * QA or SECURITY. BLOCKED is always a structurally valid next state from a _FAILED
  * state — retry-count policy is what actually decides whether a given failure
  * loops back to IMPLEMENTATION or gets forced to BLOCKED; this function only
  * says both are legal moves, never chooses between them.
@@ -99,6 +102,15 @@ export function nextStates(machine: TaskMachine): TaskState[] {
   const idx = sequence.indexOf(current);
   const hasImplementation = sequence.includes(TaskState.IMPLEMENTATION);
 
+  if (current === TaskState.REVIEW) {
+    const next = idx >= 0 && idx + 1 < sequence.length ? [sequence[idx + 1]] : [];
+    return [...next, TaskState.REVIEW_FAILED];
+  }
+  if (current === TaskState.REVIEW_FAILED) {
+    return hasImplementation
+      ? [TaskState.IMPLEMENTATION, TaskState.BLOCKED]
+      : [TaskState.BLOCKED];
+  }
   if (current === TaskState.QA) {
     const next = idx >= 0 && idx + 1 < sequence.length ? [sequence[idx + 1]] : [];
     return [...next, TaskState.QA_FAILED];
@@ -131,13 +143,13 @@ export function canTransition(machine: TaskMachine, to: TaskState): boolean {
 
 /**
  * The next state to move to on a success path — i.e. nextStates() with the
- * QA/SECURITY failure branches filtered out. Used by the orchestrator to drive
+ * REVIEW/QA/SECURITY failure branches filtered out. Used by the orchestrator to drive
  * normal forward progress; failure transitions are never decided here, only by
- * retry policy explicitly choosing QA_FAILED/SECURITY_FAILED.
+ * retry policy explicitly choosing REVIEW_FAILED/QA_FAILED/SECURITY_FAILED.
  */
 export function forwardState(machine: TaskMachine): TaskState | null {
   const candidates = nextStates(machine).filter(
-    (s) => s !== TaskState.QA_FAILED && s !== TaskState.SECURITY_FAILED,
+    (s) => s !== TaskState.REVIEW_FAILED && s !== TaskState.QA_FAILED && s !== TaskState.SECURITY_FAILED,
   );
   return candidates[0] ?? null;
 }
@@ -198,7 +210,7 @@ export function recoverTo(machine: TaskMachine, to: TaskState): TaskMachine {
   }
 
   const currentIdx = machine.sequence.indexOf(machine.current);
-  // A failed state (QA_FAILED/SECURITY_FAILED) is not in `sequence`, so index -1
+  // A failed state (REVIEW_FAILED/QA_FAILED/SECURITY_FAILED) is not in `sequence`, so index -1
   // means "off the forward path" — recovering from there is exactly the case
   // this exists for, and any earlier state qualifies.
   if (currentIdx !== -1 && targetIdx >= currentIdx) {

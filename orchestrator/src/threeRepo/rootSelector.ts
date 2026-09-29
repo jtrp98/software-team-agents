@@ -15,10 +15,10 @@ import type { KnowledgeRootIdentity } from "../store/taskStore.js";
  * The central Knowledge-root selector (DR §3). Every command resolves its
  * Knowledge root through `resolveInstallationRoot` — exactly one root leaves
  * per invocation, never the roots map. The read-side helper
- * (`resolveSelectedKnowledgeRootOrLegacy`) encodes the one rule the inventory's
+ * (`resolveSelectedKnowledgeRoot`) encodes the one rule the inventory's
  * fail-open sites (A8/A10/A12/A15) kept getting differently wrong: an
  * installation file that exists but cannot be read stops the command, and only
- * a *missing* installation file lets the legacy single-repo fallback stand.
+ * a *missing* installation file lets the fallback stand.
  */
 
 export interface SelectedKnowledgeRoot {
@@ -118,7 +118,7 @@ export function matchInstalledKnowledgeRootPath(config: InstallationConfig, requ
  * when the installation file is absent. A file that exists but cannot be
  * loaded throws — the inventory's silent degradations hid a broken
  * installation behind someone else's docs. */
-export function resolveSelectedKnowledgeRootOrLegacy(projectRoot: string, requestedName?: string, configPath?: string): string {
+export function resolveSelectedKnowledgeRoot(projectRoot: string, requestedName?: string, configPath?: string): string {
   const resolvedConfigPath = configPath ?? defaultInstallationConfigPath();
   let config: InstallationConfig;
   try {

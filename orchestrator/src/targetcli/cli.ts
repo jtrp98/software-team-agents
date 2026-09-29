@@ -10,7 +10,6 @@ import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotIni
 import { installedFrameworkVersion } from "./version.js";
 import { runSession, type RuntimeName } from "./devCommand.js";
 import { applyCleanup, CleanupUnmanagedWorkspaceError, planCleanup, renderCleanupPlan, reportCleanupResult } from "./cleanupCommand.js";
-import { runSessionRoleCommand } from "./sessionRole.js";
 import { extractRootSelectorFlag } from "../threeRepo/rootSelector.js";
 
 /**
@@ -41,25 +40,19 @@ export const TARGET_USAGE =
   "  open      preflight, then launch an agent runtime from this Knowledge workspace\n" +
   "  cleanup   move this workspace's Framework payload into a backup and un-manage it (V10):\n" +
   "            manifest-tracked files only, overrides kept, reversible via sta rollback\n" +
-  "  session-role set <role> | clear | show\n" +
-  "            declare the role a desktop role-play session (ZCode) is playing, so per-role\n" +
-  "            contract enforcement applies without an orchestrator (V12)\n" +
   "\n" +
   "options:\n" +
   "  --target-root <path>   operate on <path> instead of the current directory\n" +
   "  --root <name>          init/sync/status/open: read the named Knowledge root from\n" +
   "                         installation.yaml (default when omitted)\n" +
-  "  --role <name>          retired: accepted and ignored — nothing keys off a recorded\n" +
-  "                         role anymore (old configs still open untouched)\n" +
   "  --stack <name>         init/sync: explicitly resolve ambiguous Target stack evidence\n" +
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         open: refuse to run when managed assets are outdated\n" +
   "  --runtime <name>       open: claude (default), codex, opencode or antigravity — guard coverage\n" +
-  "                         differs per runtime (claude: enforced, codex: unguarded, opencode: partial,\n" +
-  "                         antigravity: unguarded); run\n" +
-  "                         `sta runtimes` for the coverage detail behind each verdict\n" +
-  "  --allow-unguarded-runtime  open: deliberately launch a runtime that enforces no guard\n" +
+  "                         differs per runtime (claude: enforced, opencode: partial when the guard\n" +
+  "                         plugin is present); run `sta runtimes` for the coverage detail behind\n" +
+  "                         each verdict, and `sta grant issue` for a governed direct-mode attempt\n" +
   "  --dry-run              cleanup: print the plan and touch nothing\n" +
   "  --yes                  cleanup: the human confirmation — move the payload for real\n" +
   "  --json                 status: machine-readable output\n" +
@@ -67,15 +60,9 @@ export const TARGET_USAGE =
   "  --version              show the installed Framework version\n";
 
 export interface TargetCliArgs {
-  command?: "init" | "sync" | "status" | "open" | "cleanup" | "session-role";
+  command?: "init" | "sync" | "status" | "open" | "cleanup";
   targetRoot?: string;
-  /** `--role` value, accepted for command-line compatibility and ignored (V10 TASK-026). */
-  retiredRole?: string;
   stack?: string;
-  /** session-role: which action to perform. */
-  sessionRoleAction?: "set" | "clear" | "show";
-  /** session-role set: the agent role to declare. */
-  sessionRoleName?: string;
   /** `--root <name>` — the named Knowledge root this command reads from (DR §4). */
   rootName?: string;
   force: boolean;
@@ -83,8 +70,6 @@ export interface TargetCliArgs {
   autoSync: boolean;
   runtime: RuntimeName;
   runtimeSelections: RuntimeName[];
-  /** Explicit acceptance of a runtime that enforces no guard. */
-  allowUnguardedRuntime: boolean;
   /** cleanup: plan only, no mutation. */
   dryRun: boolean;
   /** cleanup: the explicit human confirmation that the payload may move. */
@@ -97,7 +82,7 @@ export interface TargetCliArgs {
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
   const { requestedName, rest } = extractRootSelectorFlag(argv);
-  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], allowUnguardedRuntime: false, dryRun: false, yes: false, json: false, help: false, version: false, rootName: requestedName };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], dryRun: false, yes: false, json: false, help: false, version: false, rootName: requestedName };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     switch (arg) {
@@ -106,16 +91,8 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
       case "status":
       case "open":
       case "cleanup":
-      case "session-role":
         if (args.command) throw new Error(`only one command may be given (got both ${args.command} and ${arg})`);
         args.command = arg;
-        break;
-      case "set":
-      case "clear":
-      case "show":
-        if (args.command !== "session-role") throw new Error(`unrecognized argument: ${arg}`);
-        if (args.sessionRoleAction) throw new Error(`session-role: only one action may be given (got both ${args.sessionRoleAction} and ${arg})`);
-        args.sessionRoleAction = arg;
         break;
       case "dev":
       case "ba":
@@ -125,14 +102,6 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         args.targetRoot = rest[++i];
         if (!args.targetRoot) throw new Error("--target-root requires a path");
         break;
-      case "--role": {
-        // Accepted and ignored: nothing keys off a recorded role anymore
-        // (V10 TASK-021 kept old configs readable; V10 TASK-026 retires the flag).
-        const value = rest[++i];
-        if (!value) throw new Error("--role requires a value");
-        args.retiredRole = value;
-        break;
-      }
       case "--stack":
         args.stack = rest[++i];
         if (!args.stack) throw new Error("--stack requires a profile name");
@@ -155,9 +124,6 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         args.runtimeSelections.push(value);
         break;
       }
-      case "--allow-unguarded-runtime":
-        args.allowUnguardedRuntime = true;
-        break;
       case "--dry-run":
         args.dryRun = true;
         break;
@@ -175,10 +141,6 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         args.version = true;
         break;
       default:
-        if (args.command === "session-role" && args.sessionRoleAction === "set" && !args.sessionRoleName) {
-          args.sessionRoleName = arg;
-          break;
-        }
         throw new Error(`unrecognized argument: ${arg}`);
     }
   }
@@ -209,11 +171,6 @@ export async function runTargetCli(
       return 64;
     }
     throw e;
-  }
-  if (args.retiredRole) {
-    console.error(
-      `[software-team-agents] WARNING: --role is retired and ignored (got --role ${args.retiredRole}) — a workspace records what its markers and config say; nothing keys off a recorded role anymore`,
-    );
   }
   if (args.help || (!args.command && !args.version)) {
     console.log(TARGET_USAGE);
@@ -337,31 +294,9 @@ export async function runTargetCli(
           templatesDir: path.join(frameworkRoot, "templates"),
           runtime: args.runtime,
           autoSync: args.autoSync,
-          allowUnguardedRuntime: args.allowUnguardedRuntime,
           installationConfigPath: options.installationConfigPath,
           rootName: args.rootName,
         });
-      }
-
-      case "session-role": {
-        // Declares (or clears) the role a desktop role-play session is playing —
-        // the one writer of `.workflow/session-role.json`, which the guard hooks
-        // fall back to when no orchestrator set STA_ROLE. An initialized
-        // workspace is required because the declaration is runtime state of a
-        // managed workspace, like everything else under `.workflow/`.
-        const manifest = requireInitialized(targetRootArg);
-        void manifest;
-        if (!args.sessionRoleAction) {
-          console.error("[software-team-agents] session-role needs an action: `session-role set <role>`, `session-role clear` or `session-role show`");
-          return 64;
-        }
-        if (args.sessionRoleAction === "set" && !args.sessionRoleName) {
-          console.error("[software-team-agents] session-role set: a role is required (e.g. `session-role set backend-engineer`)");
-          return 64;
-        }
-        const result = runSessionRoleCommand({ targetRoot: targetRootArg, action: args.sessionRoleAction, role: args.sessionRoleName });
-        console.log(`[software-team-agents] ${result.message}`);
-        return 0;
       }
 
       case "cleanup": {

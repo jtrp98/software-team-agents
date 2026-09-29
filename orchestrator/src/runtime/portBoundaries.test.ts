@@ -22,7 +22,15 @@ import { describe, expect, it } from "vitest";
 const ADAPTER_MODULES = ["claudeCodeAdapter.js", "codexAdapter.js", "mockAdapter.js"];
 
 /** Files allowed to name a concrete adapter. The composition root is the only production entry. */
-const ALLOWED_IMPORTERS = new Set(["cli/composition/runtimeRegistry.ts"]);
+const ALLOWED_IMPORTERS = new Set([
+  "cli/composition/runtimeRegistry.ts",
+  // TASK-027 a1: the production dispatch composition verifies the concrete
+  // Codex spawn profile; runtimeExecutor itself still knows only the port.
+  "cli/composition/approvalIsolation.ts",
+  // TASK-030: this fixture composes a Codex identity only inside CLI tests;
+  // the reverse import is rejected below so no production path can call it.
+  "cli/verbs/boundedRunFixture.testSupport.ts",
+]);
 
 const SRC_ROOT = path.resolve(__dirname, "..");
 
@@ -53,6 +61,18 @@ describe("runtime port boundary", () => {
         if (base.endsWith(".test.ts")) continue; // tests may construct anything
         if (ALLOWED_IMPORTERS.has(rel)) continue;
         violations.push(`${rel} imports ${mod}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("production code cannot import the bounded-run executor fixture", () => {
+    const violations: string[] = [];
+    for (const file of walk(SRC_ROOT)) {
+      const base = path.basename(file);
+      if (base.endsWith(".test.ts") || base.endsWith(".testSupport.ts")) continue;
+      if (/from\s+"[^"]*boundedRunFixture\.testSupport\.js"/.test(fs.readFileSync(file, "utf8"))) {
+        violations.push(path.relative(SRC_ROOT, file).replace(/\\/g, "/"));
       }
     }
     expect(violations).toEqual([]);

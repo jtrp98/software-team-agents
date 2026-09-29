@@ -5,7 +5,7 @@ description: Business rule change with no schema impact - BA and SA amend, proje
 trigger:
   kind: signal
   signal: touchesBusinessRuleOnly
-  priority: 3
+  priority: 4
 level: MEDIUM
 requires_human_approval: false
 steps:
@@ -19,6 +19,7 @@ steps:
     when: touchesFrontend
   - agent: frontend-engineer
     when: touchesFrontend
+  - agent: reviewer
   - agent: qa-engineer
   - agent: security
     when: touchesSensitiveArea

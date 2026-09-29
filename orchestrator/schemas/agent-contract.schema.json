@@ -98,7 +98,7 @@
               "requirements-normalization", "requirements-interview", "feasibility-analysis", "schema-design", "task-phasing",
               "scaffolding", "rest-api", "grpc", "database-access", "auth", "ui", "testing", "test-strategy",
               "ux-analysis",
-              "verification", "security-audit", "deployment", "migration", "ci", "triage", "approval"
+              "code-review", "verification", "security-audit", "deployment", "migration", "ci", "triage", "approval"
             ]
           }
         }
@@ -122,6 +122,7 @@
         "uxui-designer",
         "backend-engineer",
         "frontend-engineer",
+        "reviewer",
         "qa-engineer",
         "security",
         "devops"
@@ -136,6 +137,7 @@
         "test-plan",
         "ux-design",
         "qa-report",
+        "review-report",
         "security-report",
         "handoff",
         "backend-code",
@@ -154,6 +156,8 @@
         "DESIGN",
         "PLAN",
         "IMPLEMENTATION",
+        "REVIEW",
+        "REVIEW_FAILED",
         "QA",
         "QA_FAILED",
         "SECURITY",

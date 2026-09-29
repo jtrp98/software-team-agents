@@ -25,6 +25,7 @@ function fixtureRoot(): string {
     "roles:",
     "  backend-engineer: { sensitive: redacted }",
     "  frontend-engineer: { sensitive: redacted }",
+    "  reviewer: { sensitive: redacted }",
     "  qa-engineer: { sensitive: redacted }",
     "  security: { sensitive: redacted }",
     "  devops: { sensitive: redacted }",

@@ -5,10 +5,10 @@ description: Data model change - routes through system-analyst, schema confirmat
 trigger:
   kind: signal
   signal: touchesSchema
-  # Below `feature` (priority 1): a brand-new feature/module that also needs new
+  # Ranked below `feature`: a brand-new feature/module that also needs new
   # tables must run the full BA normalization/interview step first — this pipeline is for
   # schema work on something that already exists.
-  priority: 2
+  priority: 3
 level: LARGE_CRITICAL
 requires_human_approval: true
 steps:
@@ -21,6 +21,7 @@ steps:
     when: touchesFrontend
   - agent: frontend-engineer
     when: touchesFrontend
+  - agent: reviewer
   - agent: qa-engineer
   - agent: security
     when: always_sensitive

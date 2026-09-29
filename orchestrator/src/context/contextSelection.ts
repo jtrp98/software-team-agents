@@ -4,7 +4,8 @@ import { ArtifactType } from "../artifacts/schemas.js";
 /**
  * Four context classes, each a behaviour that lives elsewhere in this codebase
  * (not a data structure of its own):
- *   MANDATORY — always assembled for a stage (buildPrompt header, this policy's
+ *   MANDATORY — always assembled for a stage (the packet header that
+ *     `buildPromptParts` renders, this policy's
  *     `reads`, status.md pointers).
  *   TASK_SPECIFIC — module docs sliced to the run (ContextManager/selectDocContext).
  *   ON_DEMAND — never preloaded, only pointed to (renderSlicedDocs), so a stage
@@ -32,6 +33,7 @@ export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   ArtifactType.DESIGN,
   ArtifactType.PLAN,
   ArtifactType.TEST_PLAN,
+  ArtifactType.REVIEW_REPORT,
   ArtifactType.QA_REPORT,
   ArtifactType.SECURITY_REPORT,
   ArtifactType.HANDOFF,
@@ -76,6 +78,8 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.DESIGN,
     ArtifactType.REQUIREMENTS,
     ArtifactType.TEST_PLAN,
+    // The reviewer's open findings are what a REVIEW_FAILED round sends back to fix.
+    ArtifactType.REVIEW_REPORT,
     ArtifactType.QA_REPORT,
     "backend-code",
     "knowledge-brief",
@@ -85,7 +89,20 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.DESIGN,
     ArtifactType.REQUIREMENTS,
     ArtifactType.TEST_PLAN,
+    ArtifactType.REVIEW_REPORT,
     ArtifactType.QA_REPORT,
+    "frontend-code",
+    "knowledge-brief",
+  ]),
+  // Reads the implementation, never QA's or security's verdicts — a review
+  // that starts from someone else's conclusion is not independent of it.
+  [AgentStage.REVIEWER]: policy([
+    ArtifactType.REQUIREMENTS,
+    ArtifactType.DESIGN,
+    ArtifactType.PLAN,
+    ArtifactType.TEST_PLAN,
+    ArtifactType.REVIEW_REPORT,
+    "backend-code",
     "frontend-code",
     "knowledge-brief",
   ]),
@@ -94,6 +111,8 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.DESIGN,
     ArtifactType.PLAN,
     ArtifactType.TEST_PLAN,
+    // Read-only input: the reviewer owns review.md, QA only reads its findings.
+    ArtifactType.REVIEW_REPORT,
     ArtifactType.QA_REPORT,
     "backend-code",
     "frontend-code",

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,6 +13,12 @@ import {
 } from "./codexAdapter.js";
 import { NO_GUARDS, type RuntimeGuards, type RuntimeWorkRoot } from "./runtimeAdapter.js";
 import type { SpawnSync } from "./claudeCodeAdapter.js";
+
+// The host sandbox can report uv_os_get_passwd ENOMEM; keep adapter fixtures
+// independent of the account database while production still resolves it.
+vi.mock("../gates/humanChannelConfig.js", () => ({
+  approvalChannelDir: () => path.join(os.tmpdir(), "sta-test-approval-channel"),
+}));
 
 function tmpProject(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "codex-adapter-"));
@@ -107,16 +113,11 @@ describe("CodexAdapter.executeAgent", () => {
     expect(refused.diagnostics.join(" ")).toContain("configured Codex tier catalogue");
   });
 
-  it("maps autonomy onto sandbox modes and uses the non-interactive approval policy accepted by codex exec", async () => {
+  it("uses the native root-read profile and non-interactive policy for every autonomy", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");
-    const table: Array<["read-only" | "propose" | "edit" | "full", string]> = [
-      ["read-only", "read-only"],
-      ["propose", "workspace-write"],
-      ["edit", "workspace-write"],
-      ["full", "danger-full-access"],
-    ];
-    for (const [autonomy, sandbox] of table) {
+    const autonomies = ["read-only", "propose", "edit", "full"] as const;
+    for (const autonomy of autonomies) {
       let capturedArgs: string[] = [];
       const spawnSync: SpawnSync = (_cmd, args) => {
         capturedArgs = args;
@@ -124,10 +125,13 @@ describe("CodexAdapter.executeAgent", () => {
       };
       const adapter = new CodexAdapter({ projectRoot, spawnSync });
       await adapter.executeAgent(baseRequest({ cwd: projectRoot, autonomy }));
-      expect(capturedArgs[capturedArgs.indexOf("--sandbox") + 1]).toBe(sandbox);
+      expect(capturedArgs).not.toContain("--sandbox");
+      expect(capturedArgs).toContain("--strict-config");
       expect(capturedArgs).not.toContain("--ask-for-approval");
       const configValues = capturedArgs.flatMap((arg, index) => arg === "--config" ? [capturedArgs[index + 1]] : []);
       expect(configValues).toContain('approval_policy="never"');
+      expect(configValues).toContain('default_permissions="sta_run"');
+      expect(configValues.join("\n")).toContain('\":root\" = \"read\"');
     }
   });
 
@@ -539,19 +543,21 @@ describe("Codex per-run permission profile", () => {
 
   it("builds broad-read/narrow-write config, keeps protected paths read-only, and never maps guarded full to danger-full-access", () => {
     const root = tmpProject();
+    const protectedDir = path.join(root, "approval-channel");
     const invocation = codexPermissionInvocationFor({
       cwd: root,
       autonomy: "full",
       guards: { writeAllow: ["**"], writeDeny: [".git/**", "contracts/**"], forbidCommands: [], exitChecks: [] },
-    }, "win32");
+    }, protectedDir);
     const configs = invocation.args.flatMap((arg, index) => arg === "--config" ? [invocation.args[index + 1]] : []);
 
     expect(invocation.args).not.toContain("--dangerously-bypass-hook-trust");
     expect(invocation.args).not.toContain("--ignore-user-config");
     expect(invocation.args).not.toContain("--sandbox");
     expect(invocation.args).not.toContain("danger-full-access");
-    expect(configs).toContain('windows.sandbox="elevated"');
+    if (process.platform === "win32") expect(configs).toContain('windows.sandbox="elevated"');
     expect(configs.join("\n")).toContain('":root" = "read"');
+    expect(configs.join("\n")).toContain(`${JSON.stringify(protectedDir)} = "deny"`);
     expect(configs.join("\n")).toContain('"." = "write"');
     expect(configs.join("\n")).toContain('".git" = "read"');
     expect(configs.join("\n")).toContain('"contracts" = "read"');

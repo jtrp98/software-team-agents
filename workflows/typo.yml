@@ -5,7 +5,7 @@ description: Copy or styling change only - engineer alone, no QA stage.
 trigger:
   kind: signal
   signal: isTypoOrCopyOnly
-  priority: 6
+  priority: 7
 level: TRIVIAL
 requires_human_approval: false
 steps:

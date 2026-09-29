@@ -1,11 +1,13 @@
+import * as os from "node:os";
 import { describe, expect, it } from "vitest";
 import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { sampleKnowledge } from "../knowledge/sampleKnowledge.js";
 import { ROLE_LANES, type RoleLane, laneOf } from "./roleLane.js";
 import { type RoleWorkspace, emptyWorkspace } from "./roleWorkspace.js";
-import { recordSignoff } from "./roleApproval.js";
-import { lanesAffectedBy, notificationsFor, propagate } from "./changePropagation.js";
+import { ApprovalType } from "../gates/approval.js";
+import { laneItemRefs } from "./laneDecisions.js";
+import { lanesAffectedBy, notificationsFor as notificationsForLane, propagate as propagateLanes } from "./changePropagation.js";
 
 const NOW = "2026-08-21T10:00:00Z";
 
@@ -16,7 +18,32 @@ function bump(id: string, items: KnowledgeItem[] = sampleKnowledge()): Knowledge
 function ws(lane: RoleLane, seen: Record<string, number> = {}): RoleWorkspace {
   return {
     ...emptyWorkspace(lane, "sales-crm", NOW),
-    seen: Object.entries(seen).map(([id, version]) => ({ id, version, at: NOW, by: "Nan" })),
+    seen: Object.entries(seen).map(([id, version]) => ({ id, version, digest: "0".repeat(64), at: NOW, by: "Nan" })),
+  };
+}
+
+const refsOf = (items: KnowledgeItem[]) => laneItemRefs(items, os.tmpdir());
+const notificationsFor = (lane: RoleLane, module: string | null, kb: KnowledgeBase, workspace: RoleWorkspace) =>
+  notificationsForLane(lane, module, kb, workspace, refsOf);
+const propagate = (module: string | null, kb: KnowledgeBase, workspaces: (lane: RoleLane) => RoleWorkspace) =>
+  propagateLanes(module, kb, workspaces, refsOf);
+
+/** The projection of one trusted BA sign-off decision over `items` (`laneDecisions.ts` builds it from the ledger). */
+function signedOff(workspace: RoleWorkspace, items: KnowledgeItem[]): RoleWorkspace {
+  return {
+    ...workspace,
+    signoffs: [
+      {
+        type: ApprovalType.BA_SIGNOFF,
+        status: "approved",
+        items: refsOf(items),
+        at: NOW,
+        by: "github-user:1001",
+        note: null,
+        requestId: `apr_${"0".repeat(32)}`,
+        decisionId: "test-decision-1",
+      },
+    ],
   };
 }
 
@@ -84,12 +111,7 @@ describe("notificationsFor — sign-off invalidation", () => {
       laneOf(i.owner) === "ba" && i.module === "sales-crm" ? ({ ...i, status: "approved" } as KnowledgeItem) : i,
     );
     const before = new KnowledgeBase(approvedBase);
-    const signed = recordSignoff(ws("ba"), {
-      approved: before.query({ module: "sales-crm" }).filter((i) => laneOf(i.owner) === "ba"),
-      approve: true,
-      by: "Jaturapat",
-      now: NOW,
-    });
+    const signed = signedOff(ws("ba"), before.query({ module: "sales-crm" }).filter((i) => laneOf(i.owner) === "ba"));
 
     const after = new KnowledgeBase(bump("REQ-003", approvedBase));
     const notifications = notificationsFor("ba", "sales-crm", after, signed);
@@ -103,12 +125,7 @@ describe("notificationsFor — sign-off invalidation", () => {
       laneOf(i.owner) === "ba" && i.module === "sales-crm" ? ({ ...i, status: "approved" } as KnowledgeItem) : i,
     );
     const before = new KnowledgeBase(approvedBase);
-    const signed = recordSignoff(ws("ba"), {
-      approved: before.query({ module: "sales-crm" }).filter((i) => laneOf(i.owner) === "ba"),
-      approve: true,
-      by: "Jaturapat",
-      now: NOW,
-    });
+    const signed = signedOff(ws("ba"), before.query({ module: "sales-crm" }).filter((i) => laneOf(i.owner) === "ba"));
     const after = new KnowledgeBase(bump("REQ-003", approvedBase));
     expect(notificationsFor("ba", "sales-crm", after, signed)[0].reason).toBe("signoff-invalidated");
   });

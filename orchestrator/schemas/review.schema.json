@@ -1,15 +1,34 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://software-team-agents.local/schemas/review.schema.json",
-  "title": "review.md structural summary (T53)",
-  "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a review.md — presence of the sections .claude/agents/qa-engineer.md's Output template requires, plus at least one Review Outcome (T51 reads its `**Status:**` line to generate status.md).",
+  "title": "review.md structural summary (V13 TASK-006)",
+  "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a review.md — the sections .claude/agents/reviewer.md's Output template requires. parseReviewReport() reads the current round's literal verdict line; a review.md without one reads as FAIL.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["hasOpenIssues", "hasVerificationSummary", "hasChangeLog", "reviewOutcomeCount"],
+  "required": [
+    "hasOpenFindings",
+    "hasReviewed",
+    "reviewRoundCount",
+    "verdictLineCount"
+  ],
   "properties": {
-    "hasOpenIssues": { "const": true, "description": "## Open Issues — all phases" },
-    "hasVerificationSummary": { "const": true, "description": "## Verification Summary (current round)" },
-    "hasChangeLog": { "const": true, "description": "## Change Log" },
-    "reviewOutcomeCount": { "type": "integer", "minimum": 1, "description": "count of `## Review Outcome — <phase>` sections — a review.md with none has never recorded a verdict" }
+    "hasOpenFindings": {
+      "const": true,
+      "description": "## Open Findings — all phases"
+    },
+    "hasReviewed": {
+      "const": true,
+      "description": "## Reviewed — the files the reviewer actually read"
+    },
+    "reviewRoundCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "count of `## Review Round <n> — <task-id>` sections"
+    },
+    "verdictLineCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "count of literal `**Verdict:** ✅ Approved` / `**Verdict:** ❌ Changes requested` lines"
+    }
   }
 }

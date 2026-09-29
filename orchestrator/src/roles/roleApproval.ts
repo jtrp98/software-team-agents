@@ -1,44 +1,37 @@
-import { ApprovalType } from "../gates/approval.js";
-import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
+import { LANE_SIGNOFF_TYPE, type LaneItemRef } from "../gates/laneApproval.js";
 import type { RoleLane } from "./roleLane.js";
-import type { LaneSignoff, RoleWorkspace, SignoffItemRef } from "./roleWorkspace.js";
+import type { LaneSignoff, RoleWorkspace } from "./roleWorkspace.js";
 
 /**
  * Each lane's own approval gate — the point where the person in that lane
  * says "this is done, the next lane may start".
  *
- * This is not the same as approving an item: `ownership.ts` already makes a
- * *single item* binding (`reviewed -> approved`, a person only), which
- * answers "is this requirement true". It does not answer "is the BA lane
- * finished with this module" — a lane can have every item approved and
- * still be mid-thought, about to add two more. The second question is the
- * one that gates a handoff.
+ * Human decision 3 (R14B) folds the two questions into one act: "is this
+ * requirement binding" (`reviewed -> approved`) is answered by the lane
+ * sign-off that covers the item, and "is the BA lane finished with this
+ * module" by the same decision. An item's `status: approved` in its file is
+ * not an answer to either — `laneDecisions.ts` reads it as `reviewed` unless
+ * a current sign-off covers it.
  *
- * The gate each lane carries reuses `ApprovalType` rather than inventing a
- * new set of names. The task ledger already has stable identities for BA
- * confirmation/interview handling, schema confirmation and deploy; a
- * second enum would be two names for one rule.
+ * Since V13 TASK-028 the answer is a trusted human decision in STA's lane
+ * ledger (`laneApproval.ts`), under the lane's own gate type
+ * (`LANE_SIGNOFF_TYPE`: `ba-signoff`, `sa-signoff`, `uxui-signoff`,
+ * `dev-signoff`) with its own approver list, and the same decision is what
+ * makes the covered items binding. `RoleWorkspace.signoffs` is the projection
+ * of those decisions; nothing writes a sign-off anywhere else.
  *
  * There is deliberately no `pending` state stored here. A lane whose items
  * are all approved and which has no current sign-off is at stage
  * `awaiting-signoff`, computed from the same two facts every time — storing
  * it as well would be a second source of truth.
  *
- * A sign-off names versions rather than being a status flag, because
- * otherwise it outlives what it approved: sign off on REQ-003 v4, amend it
- * to v5, and a status-only record would still read "approved". Recording
- * `{id, version}` makes the sign-off go stale by arithmetic the moment its
- * subject changes, and the lane returns to `awaiting-signoff` with the
- * changed ids named.
+ * A sign-off names versions and content digests rather than being a status
+ * flag, because otherwise it outlives what it approved: sign off on REQ-003
+ * v4, amend it to v5 (or edit it without bumping), and a status-only record
+ * would still read "approved". Recording `{id, version, digest}` makes the
+ * sign-off go stale by arithmetic the moment its subject changes, and the lane
+ * returns to `awaiting-signoff` with the changed ids named.
  */
-
-/** Which stable human-approval identity this lane reuses for sign-off. */
-export const APPROVAL_TYPE_OF_LANE: Record<RoleLane, ApprovalType> = {
-  ba: ApprovalType.REQUIREMENT_INTERVIEW,
-  sa: ApprovalType.SCHEMA_CONFIRMATION,
-  uxui: ApprovalType.UXUI_SIGNOFF,
-  dev: ApprovalType.DEPLOY,
-};
 
 export type SignoffState =
   /** Nothing has ever been signed off for this lane. */
@@ -64,12 +57,6 @@ export function currentSignoff(workspace: RoleWorkspace): LaneSignoff | null {
   return signoffs.length === 0 ? null : signoffs[signoffs.length - 1];
 }
 
-export function itemRefs(items: KnowledgeItem[]): SignoffItemRef[] {
-  return items
-    .map((item) => ({ id: item.id, version: item.version }))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-}
-
 /**
  * Whether the lane's sign-off still stands against what is approved right now.
  *
@@ -78,12 +65,12 @@ export function itemRefs(items: KnowledgeItem[]): SignoffItemRef[] {
  * rejection that survived its subject being fixed would be unrevisitable
  * without an override.
  */
-export function signoffVerdict(workspace: RoleWorkspace, approved: KnowledgeItem[]): SignoffVerdict {
+export function signoffVerdict(workspace: RoleWorkspace, current: readonly LaneItemRef[]): SignoffVerdict {
   const signoff = currentSignoff(workspace);
   if (!signoff) return { state: "none", signoff: null, changed: [] };
 
-  const now = new Map(itemRefs(approved).map((ref) => [ref.id, ref.version]));
-  const then = new Map(signoff.items.map((ref) => [ref.id, ref.version]));
+  const now = new Map(current.map((ref) => [ref.id, `${ref.version}:${ref.digest}`]));
+  const then = new Map(signoff.items.map((ref) => [ref.id, `${ref.version}:${ref.digest}`]));
 
   const changed = [...new Set([...now.keys(), ...then.keys()])]
     .filter((id) => now.get(id) !== then.get(id))
@@ -93,74 +80,19 @@ export function signoffVerdict(workspace: RoleWorkspace, approved: KnowledgeItem
   return { state: signoff.status === "approved" ? "current" : "rejected", signoff, changed: [] };
 }
 
-export class SignoffError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SignoffError";
-  }
-}
-
-export interface RecordSignoffParams {
-  approved: KnowledgeItem[];
-  approve: boolean;
-  by: string;
-  note?: string;
-  now: string;
-}
-
-/**
- * Appends the person's answer. Never replaces an earlier one — the history is
- * the record of how many times this lane was sent back, which is the thing
- * worth keeping.
- *
- * Refuses an unnamed signer for the same reason `acknowledge()` does: a
- * sign-off with nobody attached is an agent approving on a person's behalf, and
- * this file exists to make that impossible rather than discouraged.
- *
- * Signing off on nothing is refused too. An empty approval reads as "the lane is
- * done" while covering no item at all, so the next amendment would not make it
- * stale and it would stand forever.
- */
-export function recordSignoff(
-  workspace: RoleWorkspace,
-  { approved, approve, by, note, now }: RecordSignoffParams,
-): RoleWorkspace {
-  if (by.trim() === "") {
-    throw new SignoffError(
-      "a sign-off needs the name of the person making it — this gate exists precisely so that no agent can pass it",
-    );
-  }
-  if (approved.length === 0) {
-    throw new SignoffError(
-      "this lane has nothing approved to sign off on — an empty sign-off covers no item, so nothing would ever make it stale",
-    );
-  }
-
-  const signoff: LaneSignoff = {
-    type: APPROVAL_TYPE_OF_LANE[workspace.lane],
-    status: approve ? "approved" : "rejected",
-    items: itemRefs(approved),
-    at: now,
-    by,
-    note: note ?? null,
-  };
-
-  return { ...workspace, signoffs: [...(workspace.signoffs ?? []), signoff], updated_at: now };
-}
-
 /** One line describing where the gate stands, for `sta roles` and for a handoff message. */
 export function describeSignoff(verdict: SignoffVerdict, lane: RoleLane): string {
   switch (verdict.state) {
     case "none":
-      return `nobody has signed off the ${lane.toUpperCase()} lane yet (gate: ${APPROVAL_TYPE_OF_LANE[lane]})`;
+      return `nobody has signed off the ${lane.toUpperCase()} lane yet (gate: ${LANE_SIGNOFF_TYPE[lane]})`;
     case "current":
-      return `signed off by ${verdict.signoff?.by} on ${verdict.signoff?.at.slice(0, 10)}`;
+      return `signed off by ${verdict.signoff?.by ?? "unknown actor (host does not expose identity)"} on ${verdict.signoff?.at.slice(0, 10)}`;
     case "stale":
       return (
-        `the sign-off by ${verdict.signoff?.by} no longer covers what is approved — ${verdict.changed.join(", ")} ` +
+        `the sign-off by ${verdict.signoff?.by ?? "unknown actor (host does not expose identity)"} no longer covers what is approved — ${verdict.changed.join(", ")} ` +
         "changed since, so it has to be looked at again"
       );
     case "rejected":
-      return `rejected by ${verdict.signoff?.by}${verdict.signoff?.note ? `: ${verdict.signoff.note}` : ""}`;
+      return `rejected by ${verdict.signoff?.by ?? "unknown actor (host does not expose identity)"}${verdict.signoff?.note ? `: ${verdict.signoff.note}` : ""}`;
   }
 }

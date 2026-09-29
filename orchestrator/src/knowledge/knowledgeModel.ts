@@ -302,10 +302,6 @@ const SCHEMA_PATH = path.resolve(
   "knowledge-item.schema.json",
 );
 
-export function knowledgeItemSchemaPath(): string {
-  return SCHEMA_PATH;
-}
-
 export class KnowledgeItemError extends Error {
   constructor(
     public readonly label: string,
@@ -399,8 +395,4 @@ export function validateKnowledgeItem(data: unknown, label: string): KnowledgeIt
   const problems = checkKnowledgeItem(data);
   if (problems.length > 0) throw new KnowledgeItemError(label, problems);
   return data as KnowledgeItem;
-}
-
-export function isKnowledgeKind(value: string): value is KnowledgeKind {
-  return (KNOWLEDGE_KINDS as readonly string[]).includes(value);
 }

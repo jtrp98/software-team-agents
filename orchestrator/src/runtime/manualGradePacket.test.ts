@@ -2,14 +2,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ExecutionPacketSchema, LegacyExecutionPacketSchema } from "../artifacts/schemas.js";
+import { ExecutionPacketSchema } from "../artifacts/schemas.js";
 import { stableHash, contentHash, renderPacketText } from "../artifacts/executionPacket.js";
 import { assertRuntimeTaskFresh, buildRuntimeTask } from "../orchestrator/runtimeTask.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { parseCanonicalPlan, renderCanonicalTasks } from "../docs/planTask.js";
 import { AgentStage } from "../types.js";
-import { writeExecutionPacket, readExecutionPacket, readExecutionPacketForAudit } from "../state/runtimeArtifacts.js";
+import { writeExecutionPacket, readExecutionPacket } from "../state/runtimeArtifacts.js";
 import { compileExecutionPacket } from "./agentRunAssembly.js";
 import { FIXTURE_REVISION, packetFixture, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 
@@ -96,12 +96,11 @@ describe("T-V8-004 manual-grade packet", () => {
     expect(() => readExecutionPacket(first.path)).toThrow(/diverges|hash drift/);
   });
 
-  it("legacy packets are audit-only; thin plans and missing semantics never collapse to a description", () => {
+  it("legacy packets are not supported; thin plans and missing semantics never collapse to a description", () => {
     const dir = root(), text = "old packet";
-    const legacy = LegacyExecutionPacketSchema.parse({ text, task_id: "T-OLD", stage: "backend-engineer", role: "backend-engineer", acceptance_criteria: [], required_verification: [], stop_conditions: [], scope: { allow: [], deny: [] }, sources: [], composition: { static_chars: text.length, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0 }, budgetComposition: { base: text.length, task: 0, safety: 0, docs: 0, knowledge: 0, code: 0, tool_output: 0, reserve: 0 } });
+    const legacy = { text, task_id: "T-OLD", stage: "backend-engineer", role: "backend-engineer", acceptance_criteria: [], required_verification: [], stop_conditions: [], scope: { allow: [], deny: [] }, sources: [] };
     const file = path.join(dir, "old.json"); fs.writeFileSync(file, JSON.stringify(legacy));
-    expect(readExecutionPacketForAudit(file)).toEqual(legacy);
-    expect(() => readExecutionPacket(file)).toThrow(/audit-only/);
+    expect(() => readExecutionPacket(file)).toThrow(/legacy execution packet is no longer supported/);
     const task = runtimeTaskFixture(dir);
     fs.writeFileSync(task.plan_source, "## Phase 1\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| T-PACKET — description | pending | backend-engineer | — |\n");
     expect(() => buildRuntimeTask({ taskId: "T-PACKET", workflow: "bugfix", projectRoot: defaultProjectRoot(), docsRoot: dir, moduleName: "packet-fixture", classification: classifyTask({ isClearBugFix: true, touchesBackend: true }), taskText: "description" })).toThrow(/current canonical PlanTask format 1/);

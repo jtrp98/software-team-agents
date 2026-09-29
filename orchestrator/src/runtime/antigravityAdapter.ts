@@ -2,8 +2,17 @@ import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_pr
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AGY_HOOKS_PATH } from "./bindingGenerator.js";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { SingleShotLifecycle } from "./singleShotLifecycle.js";
+import type {
+  ExecutorAttemptRef,
+  ExecutorCancelOutcome,
+  ExecutorEvidence,
+  ExecutorPort,
+  PreparedExecutorAttempt,
+} from "./executorPort.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentRequest,
@@ -42,7 +51,7 @@ import type {
  * - `NAMED_AGENTS` — `agy agents` stayed `[]` under both project-scoped
  *   directory conventions tried, and `--agent <unknown>` applied no persona and
  *   printed no warning (§2). Role delivery folds the definition into the
- *   prompt, as `apiAdapter.ts` does.
+ *   prompt.
  * - `COST_REPORTING` — the envelope's `usage` carries token counts only, with
  *   no cost field (§1b), so `RuntimeUsage.costUsd` stays undefined rather than
  *   claiming a run was free.
@@ -56,6 +65,13 @@ export const ANTIGRAVITY_BINARY = "agy" as const;
 const ANTIGRAVITY_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.MODEL_SELECTION,
   RuntimeCapability.STRUCTURED_RESULT,
+  // V13 TASK-014 — the lifecycle implemented through `SingleShotLifecycle`:
+  // fresh-session resume from the persisted attempt journal, honest cancel
+  // accounting, and evidence computed from the spawn and the work-root
+  // snapshots around it.
+  RuntimeCapability.ATTEMPT_RESUME,
+  RuntimeCapability.ATTEMPT_CANCEL,
+  RuntimeCapability.EVIDENCE_COLLECTION,
 ];
 
 /**
@@ -108,9 +124,11 @@ export interface AntigravityAdapterOptions {
   guardConfigPath?: string | null;
   /** Optional override for machine-global agents store root; defaults to ~/.gemini/config/agents if present. */
   agentsStoreRoot?: string | null;
+  /** Injectable for tests; roots the lifecycle's attempt journal instead of the OS temp dir default. */
+  journalRoot?: string;
 }
 
-export class AntigravityAdapter implements RuntimeAdapter {
+export class AntigravityAdapter implements ExecutorPort {
   readonly id = ANTIGRAVITY_RUNTIME_ID;
   readonly displayName = "Antigravity";
   readonly binding: RuntimeBinding;
@@ -122,14 +140,16 @@ export class AntigravityAdapter implements RuntimeAdapter {
   private readonly defaultTimeoutMs: number;
   private readonly guardConfigPath: string | null;
   private readonly agentsStoreRoot: string | null;
+  /** V13 TASK-014 — the lifecycle port, over this adapter's one spawn-and-parse implementation. */
+  private readonly lifecycle: SingleShotLifecycle;
 
   constructor(opts: AntigravityAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
     this.spawn = opts.spawnSync ?? (nodeSpawnSync as unknown as SpawnSync);
     this.defaultTimeoutMs = opts.timeoutMs ?? 30 * 60_000;
     this.models = new Set(opts.models ?? []);
-
-    this.guardConfigPath = opts.guardConfigPath ?? null;
+    const workspaceHook = path.join(opts.projectRoot, AGY_HOOKS_PATH);
+    this.guardConfigPath = opts.guardConfigPath !== undefined ? opts.guardConfigPath : (fs.existsSync(workspaceHook) ? workspaceHook : null);
     this.agentsStoreRoot = opts.agentsStoreRoot ?? null;
 
     const caps = new Set<RuntimeCapability>(ANTIGRAVITY_CAPABILITIES);
@@ -147,6 +167,36 @@ export class AntigravityAdapter implements RuntimeAdapter {
       definitionPath: (role) => `.claude/agents/${role}.md`,
       guardConfigPath: this.guardConfigPath,
     };
+
+    this.lifecycle = new SingleShotLifecycle(this.id, {
+      run: (req) => this.executeAgent(req),
+      sessionRefFrom: (result) => {
+        const envelope = result.raw as AgyEnvelope | null | undefined;
+        return typeof envelope?.conversation_id === "string" && envelope.conversation_id.length > 0 ? envelope.conversation_id : undefined;
+      },
+      journalRoot: opts.journalRoot,
+    });
+  }
+
+  // V13 TASK-014 — the lifecycle port, delegating to the shared single-shot
+  // implementation over `executeAgent`.
+  prepare(req: RuntimeAgentRequest): Promise<PreparedExecutorAttempt> {
+    return this.lifecycle.prepare(req);
+  }
+  execute(attempt: PreparedExecutorAttempt): Promise<RuntimeAgentResult> {
+    return this.lifecycle.execute(attempt);
+  }
+  resume(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult> {
+    return this.lifecycle.resume(ref);
+  }
+  cancel(ref: ExecutorAttemptRef): Promise<ExecutorCancelOutcome> {
+    return this.lifecycle.cancel(ref);
+  }
+  collectResult(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult | null> {
+    return this.lifecycle.collectResult(ref);
+  }
+  collectEvidence(ref: ExecutorAttemptRef): Promise<ExecutorEvidence> {
+    return this.lifecycle.collectEvidence(ref);
   }
 
   async probe(): Promise<RuntimeProbe> {
@@ -177,7 +227,18 @@ export class AntigravityAdapter implements RuntimeAdapter {
     }
 
     const diagnostics: string[] = [];
-    const args = ["-p", `${roleDefinition.trim()}\n\n${req.prompt}`, "--output-format", "json"];
+    const args: string[] = [];
+    if (req.cwd) {
+      args.push("--add-dir", req.cwd);
+    }
+    if (req.workRoots) {
+      for (const wr of req.workRoots) {
+        if (wr.path && wr.path !== req.cwd) {
+          args.push("--add-dir", wr.path);
+        }
+      }
+    }
+    args.push("-p", `${roleDefinition.trim()}\n\n${req.prompt}`, "--output-format", "json");
 
     if (req.model && req.modelExplicit) {
       // `RuntimeAgentRequest.modelExplicit` contracts for refusal over
@@ -308,7 +369,7 @@ function guardReportFor(requested: RuntimeGuards, guardConfigPath?: string | nul
       enforced,
       unenforced,
       reason: unenforced.length > 0
-        ? "PreToolUse hooks enforced in-band via machine-global bridge; exit checks verified post-hoc by provider-neutral ExitCheckRunner"
+        ? "PreToolUse hooks enforced in-band; exit checks verified post-hoc by provider-neutral ExitCheckRunner"
         : undefined,
     };
   }
@@ -320,7 +381,7 @@ function guardReportFor(requested: RuntimeGuards, guardConfigPath?: string | nul
     enforced: [],
     unenforced,
     reason:
-      "agy reads PreToolUse hooks only from the machine-global ~/.gemini/config/hooks.json; the workspace's own .agents/hooks.json is never consulted, so writes, git and exit checks are covered post-hoc by the orchestrator and the QA round, never by this runtime",
+      "no guard configuration path found; run software-team-agents sync to generate .agents/hooks.json or configure machine-global hooks",
   };
 }
 

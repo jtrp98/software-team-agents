@@ -10,7 +10,8 @@ import type {
 } from "../knowledge/knowledgeModel.js";
 import { ALLOWED_OWNERS } from "../knowledge/ownership.js";
 import { LANE_LABEL, type RoleLane, laneOf, rolesInLane } from "./roleLane.js";
-import { type RoleWorkspace, loadRoleWorkspace } from "./roleWorkspace.js";
+import type { LaneItemRef } from "../gates/laneApproval.js";
+import type { RoleWorkspace } from "./roleWorkspace.js";
 import { type SignoffVerdict, describeSignoff, signoffVerdict } from "./roleApproval.js";
 
 /**
@@ -23,18 +24,17 @@ import { type SignoffVerdict, describeSignoff, signoffVerdict } from "./roleAppr
  * being something the next lane may rely on. A project has one
  * `workflows/feature.yml`; it has three of these, running at their own pace.
  *
- * The stage is derived from `ownership.ts`, not stored: that module already
- * fixes the only path a piece of knowledge can take — `draft` -> `reviewed`
- * (by somebody who is not its owner) -> `approved` (by a person, never an
- * agent). So a lane's stage is not a new state machine, it is a reading of
- * where its own items currently sit on that one. Storing it would create a
- * second answer free to disagree with the items themselves — the same reason
- * `roleWorkspace.ts` stores only the watermark.
+ * The stage is derived, not stored: a reading of where the lane's own items
+ * sit on `draft` -> `reviewed` -> `approved`, where `approved` is whatever the
+ * lane ledger says (V13 TASK-028, `laneDecisions.ts`): an item is approved
+ * exactly when the lane's current sign-off — one trusted human decision —
+ * covers it. Callers pass a Knowledge base whose statuses were already
+ * governed that way; a file's own `status: approved` never reaches here.
  *
  * The handoff is not a new mechanism either: "BA hands off to SA" means BA's
- * requirements are `approved`, and the SA lane has acknowledged them (its
- * watermark). Both halves already exist, so this file reports the handoff
- * rather than performing one. Nothing here writes.
+ * requirements are approved by the BA sign-off, and the SA lane's person has
+ * acknowledged those exact versions (a second decision). This file reports
+ * the handoff rather than performing one. Nothing here writes.
  *
  * Blockers vs. carries: a blocker means the next lane must not start. A
  * carry means it may start and has something to resolve first. The
@@ -52,9 +52,11 @@ export type RoleWorkflowStage =
   | "intake"
   /** At least one owned item is `draft` — somebody other than its owner has to review it. */
   | "drafting"
-  /** Everything owned is `reviewed` or better, and at least one is waiting on a person (item level). */
-  | "awaiting-approval"
-  /** Every item is approved, but nobody has signed the lane itself off yet — or what they signed has changed since. */
+  /**
+   * Everything owned is `reviewed` or better, and the lane is not signed off
+   * over exactly that — nobody has signed it yet, or what they signed changed
+   * since. The sign-off is also what makes the reviewed items binding.
+   */
   | "awaiting-signoff"
   /** The person in this lane said no. An answer, not an absence — it blocks until they are asked again. */
   | "rejected"
@@ -342,8 +344,11 @@ function ids(items: KnowledgeItem[]): string[] {
   return items.map((i) => i.id).sort();
 }
 
-/** How this state reaches the *receiving* lane's watermark. Passed in rather than read from disk here, so the function stays pure and a test can supply an in-memory lane. */
+/** How this state reaches each lane's projected watermark and sign-offs (`laneDecisions.ts`). Passed in so the function stays pure. */
 export type WorkspaceLookup = (lane: RoleLane) => RoleWorkspace;
+
+/** The `{id, version, digest}` of items as a lane decision would record them (`laneDecisions.ts` `laneItemRefs`). */
+export type LaneRefsOf = (items: KnowledgeItem[]) => LaneItemRef[];
 
 /**
  * Where the lane stands right now, worked out from `knowledge/` and the
@@ -356,20 +361,26 @@ export function roleWorkflowState(
   module: string | null,
   kb: KnowledgeBase,
   workspaces: WorkspaceLookup,
+  refsOf: LaneRefsOf,
 ): RoleWorkflowState {
   const owned = itemsOwnedBy(spec.lane, module, kb);
   const draft = owned.filter((i) => i.status === "draft");
   const reviewed = owned.filter((i) => i.status === "reviewed");
   const approved = owned.filter((i) => i.status === "approved");
+  // What a sign-off would cover now: everything past draft. Lane blockers are
+  // judged on this set so a person is never asked to sign off unusable work.
+  const candidates = [...reviewed, ...approved];
   const hasPrimary = owned.some((i) => i.kind === spec.primaryKind);
 
+  const laneBlockers = spec.blockers(candidates, kb);
   const blockers = [
     ...ids([...draft, ...reviewed]).map(
       (id) => `${id} is not approved — the next lane must not build on knowledge nobody accepted as binding`,
     ),
-    ...spec.blockers(approved, kb),
+    ...laneBlockers,
   ];
-  const carries = spec.carries(approved, kb);
+  // Carries travel with what the sign-off hands over, so the person signing sees them too.
+  const carries = spec.carries(candidates, kb);
 
   const target = spec.handoffTo;
   // The target lane is caught up on these ids exactly when its own watermark
@@ -380,8 +391,8 @@ export function roleWorkflowState(
     target !== null &&
     approved.length > 0 &&
     (() => {
-      const seen = new Map(workspaces(target).seen.map((ref) => [ref.id, ref.version]));
-      return approved.every((item) => seen.get(item.id) === item.version);
+      const seen = new Map(workspaces(target).seen.map((ref) => [ref.id, `${ref.version}:${ref.digest}`]));
+      return refsOf(approved).every((ref) => seen.get(ref.id) === `${ref.version}:${ref.digest}`);
     })();
 
   const handoff: Handoff = {
@@ -392,26 +403,23 @@ export function roleWorkflowState(
     acknowledgedByTarget,
   };
 
-  // The lane's own gate sits after every item is approved and before `ready`:
-  // item-level approval says each fact is binding, the sign-off says the lane is finished.
-  const signoff = signoffVerdict(workspaces(spec.lane), approved);
+  // The lane's own gate: one decision says the facts are binding and the lane is finished.
+  const signoff = signoffVerdict(workspaces(spec.lane), refsOf(candidates));
 
   const stage: RoleWorkflowStage = !hasPrimary
     ? "intake"
     : draft.length > 0
       ? "drafting"
-      : reviewed.length > 0
-        ? "awaiting-approval"
-        : blockers.length > 0
-          ? // Blockers outrank the gate deliberately: asking a person to sign off
-            // work that is already known to be unusable wastes the one step in
-            // this pipeline that cannot be automated.
-            "blocked"
-          : signoff.state === "rejected"
-            ? "rejected"
-            : signoff.state === "current"
-              ? "ready"
-              : "awaiting-signoff";
+      : laneBlockers.length > 0
+        ? // Blockers outrank the gate deliberately: asking a person to sign off
+          // work that is already known to be unusable wastes the one step in
+          // this pipeline that cannot be automated.
+          "blocked"
+        : signoff.state === "rejected"
+          ? "rejected"
+          : signoff.state === "current"
+            ? "ready"
+            : "awaiting-signoff";
 
   return {
     lane: spec.lane,
@@ -432,11 +440,6 @@ export function roleWorkflowState(
     signoff,
     handoff,
   };
-}
-
-/** The lookup a real run uses: each lane's watermark, read off disk under one project root. */
-export function workspacesUnder(projectRoot: string, module: string | null, now: string): WorkspaceLookup {
-  return (lane) => loadRoleWorkspace(lane, module, projectRoot, now);
 }
 
 interface StageFacts {
@@ -467,13 +470,6 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
           "approve (an owner marking its own work reviewed records that nothing happened)",
       };
 
-    case "awaiting-approval":
-      return {
-        actor: "human",
-        agent: null,
-        what: `${ids(facts.reviewed).join(", ")} are reviewed and waiting on a person — ${spec.humanGate}`,
-      };
-
     case "blocked":
       return { actor: "human", agent: null, what: facts.blockers.join("; ") };
 
@@ -481,11 +477,11 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
       const because =
         facts.signoff.state === "stale"
           ? `${describeSignoff(facts.signoff, spec.lane)}`
-          : `everything this lane owns is approved and nobody has signed the lane off — ${spec.humanGate}`;
+          : `${ids([...facts.reviewed, ...facts.approved]).join(", ")} wait on the lane sign-off, which also makes them binding — ${spec.humanGate}`;
       return {
         actor: "human",
         agent: null,
-        what: `${because}. Record it with \`sta roles signoff ${spec.lane} --by <name>\`.`,
+        what: `${because}. A person signs the lane off through the trusted human decision channel (\`sta roles signoff ${spec.lane}\`).`,
       };
     }
 
@@ -515,7 +511,8 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
         agent: null,
         what:
           `hand off to ${LANE_LABEL[spec.handoffTo]}: ${ids(facts.approved).join(", ")} are approved. ` +
-          `Record it with \`sta roles ack ${spec.handoffTo} ${ids(facts.approved).join(",")} --by <name>\`.${carried}`,
+          `The ${LANE_LABEL[spec.handoffTo]} lane's person acknowledges them through the trusted human decision channel ` +
+          `(\`sta roles ack ${spec.handoffTo}\`).${carried}`,
       };
     }
   }

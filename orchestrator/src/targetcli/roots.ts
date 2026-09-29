@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadInstallationConfig, defaultInstallationConfigPath } from "../threeRepo/installation.js";
-import { resolveSelectedKnowledgeRootOrLegacy } from "../threeRepo/rootSelector.js";
+import { resolveSelectedKnowledgeRoot } from "../threeRepo/rootSelector.js";
 
 /**
  * The root model for Target-first execution. Three roots, three
@@ -51,7 +51,7 @@ export function resolveContextDocsRoot(
 ): string {
   const knowledgeRoot = env.STA_KNOWLEDGE_ROOT?.trim();
   if (knowledgeRoot) return path.resolve(knowledgeRoot);
-  return resolveSelectedKnowledgeRootOrLegacy(projectRoot, requestedRootName);
+  return resolveSelectedKnowledgeRoot(projectRoot, requestedRootName);
 }
 
 /**

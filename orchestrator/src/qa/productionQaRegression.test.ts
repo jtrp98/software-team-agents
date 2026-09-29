@@ -10,6 +10,8 @@ import { LocalWorkspace } from "../runtime/localWorkspace.js";
 import { withQaOptimization } from "./optimized.js";
 import { createProjectRunner } from "./projectRunner.js";
 import { createPostDevVerificationHook } from "./verificationHook.js";
+import { persistedSweep } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -28,7 +30,7 @@ describe("production deterministic QA regression", () => {
     fs.writeFileSync(path.join(root, "run-typecheck.cjs"), `const { spawnSync } = require('node:child_process'); process.exit(spawnSync(process.execPath, [${JSON.stringify(tsc)}, '-p', 'tsconfig.json'], { stdio: 'inherit' }).status ?? 1);`);
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { typecheck: "node run-typecheck.cjs" } }));
 
-    const orchestrator = new Orchestrator("T-REAL-TSC", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orchestrator = new Orchestrator("T-REAL-TSC", classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
     let qaModelCalls = 0;
     const verification = createPostDevVerificationHook({
       inner: async (req) => {
@@ -40,13 +42,12 @@ describe("production deterministic QA regression", () => {
         status: "full-order",
         levels: ["lint", "typecheck", "unit", "integration", "build"],
         reason: "fixture",
-        enforcement: "warn",
+        enforcement: "enforce",
       }),
     });
     const execute = withQaOptimization({
       inner: verification.executor,
       changedFiles: () => ["broken.ts"],
-      deterministicVerification: verification.verificationFor,
     });
 
     await orchestrator.step(execute);
@@ -58,7 +59,9 @@ describe("production deterministic QA regression", () => {
     expect(devRun.deterministic_gate).toBe("enabled");
   });
 
-  it("an all-skipped Target still invokes QA instead of manufacturing a green result", async () => {
+  it("blocks Dev on an all-skipped Target instead of manufacturing a green result (V13 TASK-017)", async () => {
+    // A required check that produced no evidence blocks the stage; nothing
+    // downstream - not QA, not a generated PASS - may paper over its absence.
     const verification = createPostDevVerificationHook({
       inner: async () => ({ outcome: { tokens: 7, cost: 0, result: "PASS" } }),
       deterministicRunner: () => createProjectRunner({
@@ -72,21 +75,16 @@ describe("production deterministic QA regression", () => {
         status: "full-order",
         levels: ["lint", "typecheck", "unit", "integration", "build"],
         reason: "fixture",
-        enforcement: "warn",
+        enforcement: "enforce",
       }),
     });
     const devRequest = { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SKIP", context: [] };
     const devResult = await verification.executor(devRequest);
-    expect(devResult.outcome.result).toBe("PASS");
-    expect(verification.verificationFor(devRequest)?.status).toBe("skipped");
-
-    const execute = withQaOptimization({
-      inner: verification.executor,
-      changedFiles: () => ["src/unknown.ts"],
-      deterministicVerification: verification.verificationFor,
-    });
-    const result = await execute({ stage: AgentStage.QA_ENGINEER, taskId: "T-SKIP", context: [] });
-    expect(result.outcome.result).toBe("PASS");
-    expect(result.outcome.tokens).toBe(7);
+    expect(devResult.outcome.result).toBe("FAIL");
+    expect(devResult.deterministicVerification).toMatchObject({ passed: false, status: "skipped" });
+    // lint/typecheck/unit-tests/build are all required and all unconfigured;
+    // integration is recorded as runnerless (the sweep can never run it).
+    expect(devResult.deterministicVerification?.missingRequired).toEqual(["lint", "typecheck", "unit-tests", "build"]);
+    expect(devResult.deterministicVerification?.runnerless).toEqual(["integration-tests"]);
   });
 });

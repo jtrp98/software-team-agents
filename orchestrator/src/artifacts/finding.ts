@@ -18,8 +18,8 @@ import type { StructuredFailure } from "../orchestrator/failure.js";
  * defect itself (task, category, owner, expected/observed, files) —
  * deliberately excluding `run_id`/`attempt`/`packet_hash`, so the *same*
  * defect recurring across attempts (or reported twice in one round) resolves
- * to the *same* id, and a rewritten `review.md`/`security.md` or an archive
- * move (`review.md` -> `review/phase-N.md`) cannot mint a new one for an issue
+ * to the *same* id, and a rewritten `qa.md`/`security.md` or an archive
+ * move (`qa.md` -> `qa/phase-N.md`) cannot mint a new one for an issue
  * nobody touched. `run_id`/`attempt`/`packet_hash` still live on the record —
  * they answer "which attempt raised this", a different question from "which
  * defect is this".

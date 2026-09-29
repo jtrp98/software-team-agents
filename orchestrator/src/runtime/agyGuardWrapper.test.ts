@@ -66,12 +66,12 @@ function writeCall(filePath: string, tool = "write_to_file"): string {
   return JSON.stringify({ tool_name: tool, tool_info: { parameters: { TargetFile: filePath } } });
 }
 
-const QA_CONTRACT = 'permissions:\n  write: ["review.md", "review/**"]\n  deny: ["_docs/**"]\n  read: ["**"]\n';
+const QA_CONTRACT = 'permissions:\n  write: ["qa.md", "qa/**"]\n  deny: ["_docs/**"]\n  read: ["**"]\n';
 
 describe("AGY guard wrapper — allow is emitted on exactly one path", () => {
   it("allows a write the role's contract grants", () => {
     const root = workspace({ role: "dev", contracts: { "qa-engineer": QA_CONTRACT } });
-    const verdict = invoke(WRAPPER, root, writeCall("review.md"), { STA_ROLE: "qa-engineer" });
+    const verdict = invoke(WRAPPER, root, writeCall("qa.md"), { STA_ROLE: "qa-engineer" });
     expect(verdict.allowed).toBe(true);
   });
 
@@ -94,9 +94,12 @@ describe("AGY guard wrapper — allow is emitted on exactly one path", () => {
     expect(verdict.allowed).toBe(false);
     expect(verdict.reason).toMatch(/Framework payload/);
 
-    // V10 TASK-021: the same workspace no longer refuses a Knowledge artifact
-    // for being `role: dev` — that ban is stage-bound now (TASK-012).
-    expect(invoke(WRAPPER, root, writeCall("_docs/module/billing/design.md")).allowed).toBe(true);
+    // V13 TASK-012: the same workspace's governed artifact tree is refused to
+    // an unassigned session on the floor — the recorded role still decides
+    // nothing, and a session claim grants nothing either.
+    const unassigned = invoke(WRAPPER, root, writeCall("_docs/module/billing/design.md"));
+    expect(unassigned.allowed).toBe(false);
+    expect(unassigned.reason).toMatch(/STA dispatch/);
   });
 
   it("denies a write that resolves outside the workspace root", () => {
@@ -164,7 +167,7 @@ describe("AGY guard wrapper — every non-allow path withholds the payload", () 
     );
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "commonjs" }), "utf8");
 
-    const verdict = invoke(broken, root, writeCall("review.md"), { STA_ROLE: "qa-engineer" });
+    const verdict = invoke(broken, root, writeCall("qa.md"), { STA_ROLE: "qa-engineer" });
     expect(verdict.allowed).toBe(false);
     expect(verdict.stdout).not.toContain('"allow"');
   });
@@ -173,7 +176,7 @@ describe("AGY guard wrapper — every non-allow path withholds the payload", () 
     const root = workspace();
     const broken = path.join(root, "unloadable-guard.js");
     fs.writeFileSync(broken, "this is not valid javascript ((( \n", "utf8");
-    const verdict = invoke(broken, root, writeCall("review.md"));
+    const verdict = invoke(broken, root, writeCall("qa.md"));
     expect(verdict.allowed).toBe(false);
     expect(verdict.stdout.trim()).toBe("");
   });

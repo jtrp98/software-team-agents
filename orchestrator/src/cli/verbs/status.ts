@@ -4,26 +4,36 @@ import { RunLog } from "../../observability/runLog.js";
 import { LEGACY_RUN_RECORD_NOTICE, observeRuns } from "../../run/observability.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import type { RunLedger } from "../../ledger/runLedger.js";
+import type { TaskStore } from "../../store/taskStore.js";
+import { engineViewOfRun } from "../../engine/boundedRunService.js";
 import { flagValue, openStore, positionalArg } from "../support.js";
 
 /**
- * T-V10-031 — bounded-run blocks a gated task and keeps going, so the gate that
- * ended a run is no longer the whole story. The reason lives on the `TASK_STATUS`
- * event, not the task record, which is why this reads events rather than tasks.
+ * T-V10-031 — a bounded run keeps going past a gated task, so the gate that
+ * ended a run is not the whole story. V13 TASK-007: this is the *engine's*
+ * projection of each run task (`engineViewOfRun`, the same guard the run is
+ * driven with) — never the ledger's own task status, which is only a
+ * projection written from the same engine state and cannot disagree with it.
  */
-export function renderBlockedLedgerTasks(ledger: RunLedger, only?: string): string[] {
+export function renderBoundedRunTasksAwaitingHuman(ledger: RunLedger, store: TaskStore, only?: string): string[] {
   const lines: string[] = [];
   for (const run of ledger.listRuns()) {
-    const blocked = ledger.readTasks(run.run_id).filter((task) => task.status === "BLOCKED" && (!only || task.task_id === only));
-    if (blocked.length === 0) continue;
-    const reasons = new Map<string, string>();
-    for (const event of ledger.eventsForRun(run.run_id)) {
-      if (event.kind === "TASK_STATUS" && event.to === "BLOCKED" && event.task_id && event.reason) reasons.set(event.task_id, event.reason);
-    }
-    lines.push(`[orchestrator] bounded run ${run.run_id} (${run.status}) module=${run.module}: ${blocked.length} task(s) awaiting a human decision`);
-    for (const task of blocked) {
-      lines.push(`[orchestrator]   ⛔ ${task.task_id}: ${reasons.get(task.task_id) ?? "blocked without a recorded reason"}`);
-      lines.push(`[orchestrator]      unblock with \`sta approve ${task.task_id}\``);
+    if (run.status === "CANCELLED" || run.status === "REFUSED" || run.status === "STALE") continue;
+    const views = engineViewOfRun(ledger, store, run).filter((item) => (!only || item.task.task_id === only));
+    if (views.length === 0) continue;
+    const done = views.filter((item) => item.status === "DONE").length;
+    const awaiting = views.filter((item) => item.status === "BLOCKED");
+    // A completed run whose every task the engine verifies has nothing to say.
+    if (run.status === "COMPLETED" && done === views.length) continue;
+    lines.push(
+      `[orchestrator] bounded run ${run.run_id} (${run.status}) module=${run.module}: ` +
+        `${done}/${views.length} task(s) verified done by the engine, ${awaiting.length} awaiting a human decision`,
+    );
+    for (const item of awaiting) {
+      lines.push(`[orchestrator]   ⛔ ${item.task.task_id}: ${item.reason}`);
+      lines.push(item.view?.kind === "WAITING_FOR_HUMAN"
+        ? `[orchestrator]      answer the pending request with \`sta approve ${item.task.task_id}\``
+        : `[orchestrator]      see \`sta status ${item.task.task_id}\` for what a person must do`);
     }
   }
   return lines;
@@ -48,7 +58,7 @@ export async function runStatusVerb(rest: string[], defaultProjectRoot: string):
     const ledger = new SqliteRunLedger(store, { projectRoot });
     if (!taskId) {
       printListing(registry);
-      for (const line of renderBlockedLedgerTasks(ledger)) console.log(line);
+      for (const line of renderBoundedRunTasksAwaitingHuman(ledger, store)) console.log(line);
       // T-V8-029 — `.workflow/wave-runs/` is legacy: the retired wave runner was
       // its only writer, so anything here predates V8. Say so on every line
       // rather than letting an unfinished old record read as a live run.
@@ -68,12 +78,13 @@ export async function runStatusVerb(rest: string[], defaultProjectRoot: string):
       console.error(`[orchestrator] no such task: ${taskId}`);
       return 1;
     }
-    const status = describeStatus(task, store.listTasks());
+    // The same guard every engine this registry opens asks, so `status` and a run never disagree.
+    const status = describeStatus(task, store.listTasks(), { stageEntryGuard: registry.stageEntryGuard });
     const agent = status.currentAgent ? ` agent=${status.currentAgent}` : "";
     console.log(`[orchestrator] task ${taskId}: ${status.kind} at ${status.state}${agent}`);
     if (status.reason) console.log(`[orchestrator]   ${status.reason}`);
     if (status.waitingOn?.length) console.log(`[orchestrator]   waiting on: ${status.waitingOn.join(", ")}`);
-    for (const line of renderBlockedLedgerTasks(ledger, taskId)) console.log(line);
+    for (const line of renderBoundedRunTasksAwaitingHuman(ledger, store, taskId)) console.log(line);
     const runs = store.runsForTask(taskId);
     if (runs.length > 0) console.log(new RunLog(runs).summary(taskId));
     return 0;

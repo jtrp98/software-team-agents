@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import SqliteDatabase from "./sqliteDatabase.js";
+import { ApprovalDecisionError } from "../gates/approval.js";
+import { parseLaneRecord, type LaneApprovalRecord } from "../gates/laneApproval.js";
 import type { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
 import type { ChangeSetFingerprint } from "../qa/changeSource.js";
@@ -16,6 +18,12 @@ import {
   type PersistedTask,
   type TaskStore,
 } from "./taskStore.js";
+import {
+  EvidenceCorruptError,
+  checkEvidenceAppend,
+  parseStoredEvidence,
+  type EvidenceRecord,
+} from "../evidence/evidenceStore.js";
 
 /**
  * The real store: one local SQLite file, no server, no daemon.
@@ -39,7 +47,7 @@ import {
 // the new field back as null ("not recorded"), nothing is guessed and nothing is lost. A
 // migration that would need to reinterpret or rewrite existing data does not go in this list (see
 // MIGRATIONS below), and an unknown version refuses to open rather than risk misreading it.
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 22;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -101,7 +109,8 @@ CREATE TABLE IF NOT EXISTS runs (
   context_code_chars         INTEGER,
   context_tool_output_chars  INTEGER,
   context_reserve_chars      INTEGER,
-  verification_fingerprint   TEXT
+  verification_fingerprint   TEXT,
+  contract_digest            TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
@@ -168,6 +177,49 @@ CREATE TABLE IF NOT EXISTS ledger_events (
 CREATE INDEX IF NOT EXISTS ledger_events_run ON ledger_events (run_id, id);
 `;
 
+/**
+ * V13 TASK-002 evidence DDL. Same file and transaction as `tasks`, so a state
+ * change and the evidence justifying it commit together. `record` is the whole
+ * validated `EvidenceRecord`; the columns beside it exist to be queried.
+ */
+export const EVIDENCE_DDL = `
+CREATE TABLE IF NOT EXISTS evidence (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  evidence_id TEXT NOT NULL UNIQUE,
+  task_id     TEXT NOT NULL,
+  stage       TEXT NOT NULL,
+  attempt     INTEGER NOT NULL,
+  kind        TEXT NOT NULL,
+  digest      TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  record      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS evidence_task ON evidence (task_id, seq);
+`;
+
+/**
+ * V13 TASK-028: the lane ledger — lane sign-offs and acknowledgements as
+ * pending requests and trusted decisions. Not task-scoped: a lane act is about
+ * one module's knowledge under one Knowledge root. `record` is the whole
+ * validated `LaneApprovalRecord`; the columns beside it exist to be queried,
+ * and `decision_id` is UNIQUE so one channel decision can never be applied to
+ * two requests.
+ */
+export const LANE_DECISIONS_DDL = `
+CREATE TABLE IF NOT EXISTS lane_decisions (
+  seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id     TEXT NOT NULL UNIQUE,
+  knowledge_root TEXT NOT NULL,
+  module         TEXT NOT NULL,
+  lane           TEXT NOT NULL,
+  action         TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  decision_id    TEXT UNIQUE,
+  record         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lane_decisions_module ON lane_decisions (knowledge_root, module, seq);
+`;
+
 /** Named once so the DDL above and the migration below cannot drift apart. */
 const EVENT_AUDIT_COLUMNS = ["actor", "reason", "input", "output", "decision"] as const;
 
@@ -205,6 +257,11 @@ export class DatabaseUnavailableError extends Error {
     );
     this.name = "DatabaseUnavailableError";
   }
+}
+
+interface EvidenceRow {
+  evidence_id: string;
+  record: string;
 }
 
 interface TaskRow {
@@ -265,6 +322,7 @@ interface RunRow {
   context_tool_output_chars: number | null;
   context_reserve_chars: number | null;
   verification_fingerprint: string | null;
+  contract_digest: string | null;
 }
 
 interface EventRow {
@@ -424,7 +482,42 @@ const MIGRATIONS: Record<number, (db: SqliteDatabase) => void> = {
     // journal instead.
     db.exec(LEDGER_DDL);
   },
+  19: (db) => {
+    // V13 TASK-002: a new, empty table. No historical byte is read or
+    // reinterpreted; a task written before it simply has no evidence, and the
+    // transition guard therefore refuses to advance it (fail closed) rather
+    // than trusting a cursor that no record justifies.
+    db.exec(EVIDENCE_DDL);
+  },
+  20: (db) => {
+    // V13 TASK-005: a historical run never resolved (or recorded) a role
+    // contract digest before dispatch; null is the only truthful backfill.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("contract_digest")) db.exec("ALTER TABLE runs ADD COLUMN contract_digest TEXT");
+  },
+  21: (db) => {
+    // V13 TASK-028: a new, empty table. Nothing is imported from
+    // `knowledge/_roles/**`: those files were never authenticated, so a lane
+    // with no decision here is unsigned and unacknowledged — which blocks
+    // (fail closed) until a person decides through the trusted channel.
+    db.exec(LANE_DECISIONS_DDL);
+  },
 };
+
+interface LaneDecisionRow {
+  request_id: string;
+  record: string;
+}
+
+function laneRecordFromRow(row: LaneDecisionRow): LaneApprovalRecord {
+  let data: unknown;
+  try {
+    data = JSON.parse(row.record);
+  } catch (error) {
+    throw new ApprovalDecisionError("untrusted-decision", `stored lane request ${row.request_id} is not JSON (${(error as Error).message})`);
+  }
+  return parseLaneRecord(row.request_id, data);
+}
 
 export class SqliteTaskStore implements TaskStore {
   private readonly db: SqliteDatabase;
@@ -467,6 +560,8 @@ export class SqliteTaskStore implements TaskStore {
       this.db.pragma("journal_mode = WAL");
       this.db.exec(DDL);
       this.db.exec(LEDGER_DDL);
+      this.db.exec(EVIDENCE_DDL);
+      this.db.exec(LANE_DECISIONS_DDL);
 
       const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
       if (found === 0) {
@@ -590,8 +685,8 @@ export class SqliteTaskStore implements TaskStore {
     if (this.readOnly) throw new Error("state database was opened read-only");
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, context_chars, estimated_input_tokens, prompt_version, effort, requested_effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, context_chars, estimated_input_tokens, prompt_version, effort, requested_effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint, contract_digest)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -646,6 +741,7 @@ export class SqliteTaskStore implements TaskStore {
         record.context_tool_output_chars,
         record.context_reserve_chars,
         record.verification_fingerprint ? JSON.stringify(record.verification_fingerprint) : null,
+        record.contract_digest ?? null,
       );
   }
 
@@ -682,7 +778,7 @@ export class SqliteTaskStore implements TaskStore {
       context_chars: r.context_chars,
       estimated_input_tokens: r.estimated_input_tokens,
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
-      qa_effort: r.qa_effort === "skip" || r.qa_effort === "lightweight" || r.qa_effort === "full" ? r.qa_effort : null,
+      qa_effort: r.qa_effort === "lightweight" || r.qa_effort === "full" ? r.qa_effort : null,
       deterministic_gate: r.deterministic_gate === "enabled" || r.deterministic_gate === "disabled" ? r.deterministic_gate : null,
         document_gate: r.document_gate === "enabled" || r.document_gate === "disabled" ? r.document_gate : null,
       runtime: r.runtime,
@@ -712,6 +808,7 @@ export class SqliteTaskStore implements TaskStore {
       context_code_chars: r.context_code_chars,
       context_tool_output_chars: r.context_tool_output_chars,
       context_reserve_chars: r.context_reserve_chars,
+      contract_digest: r.contract_digest,
       ...(r.verification_fingerprint === null ? {} : { verification_fingerprint: parseVerificationFingerprint(r.verification_fingerprint) }),
     };
   }
@@ -737,6 +834,56 @@ export class SqliteTaskStore implements TaskStore {
       );
   }
 
+  appendEvidence(record: EvidenceRecord): EvidenceRecord {
+    if (this.readOnly) throw new Error("state database was opened read-only");
+    const stored = parseStoredEvidence(record.evidenceId, JSON.parse(JSON.stringify(record)));
+    const existing = this.loadEvidence(stored.evidenceId);
+    const hasRef = this.db.prepare("SELECT 1 FROM evidence WHERE evidence_id = ? AND task_id = ?");
+    const write = checkEvidenceAppend(stored, existing, (ref) => hasRef.get(ref, stored.taskId) !== undefined);
+    if (write) {
+      this.db
+        .prepare(
+          `INSERT INTO evidence (evidence_id, task_id, stage, attempt, kind, digest, recorded_at, record)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          stored.evidenceId,
+          stored.taskId,
+          stored.stage,
+          stored.attempt,
+          stored.kind,
+          stored.digest,
+          stored.recordedAt,
+          JSON.stringify(stored),
+        );
+    }
+    return existing ?? stored;
+  }
+
+  loadEvidence(evidenceId: string): EvidenceRecord | null {
+    const row = this.db.prepare("SELECT evidence_id, record FROM evidence WHERE evidence_id = ?").get(evidenceId) as
+      | EvidenceRow
+      | undefined;
+    return row ? this.evidenceFromRow(row) : null;
+  }
+
+  evidenceForTask(taskId: string): EvidenceRecord[] {
+    const rows = this.db
+      .prepare("SELECT evidence_id, record FROM evidence WHERE task_id = ? ORDER BY seq ASC")
+      .all(taskId) as unknown as EvidenceRow[];
+    return rows.map((r) => this.evidenceFromRow(r));
+  }
+
+  private evidenceFromRow(row: EvidenceRow): EvidenceRecord {
+    let data: unknown;
+    try {
+      data = JSON.parse(row.record);
+    } catch (error) {
+      throw new EvidenceCorruptError(row.evidence_id, `record is not JSON (${(error as Error).message})`);
+    }
+    return parseStoredEvidence(row.evidence_id, data);
+  }
+
   eventsForTask(taskId: string): PersistedEvent[] {
     const rows = this.db.prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id ASC").all(taskId) as unknown as EventRow[];
     return rows.map((r) =>
@@ -752,6 +899,57 @@ export class SqliteTaskStore implements TaskStore {
         decision: r.decision,
       }),
     );
+  }
+
+  insertLaneRequest(record: LaneApprovalRecord): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
+    const stored = parseLaneRecord(record.requestId, JSON.parse(JSON.stringify(record)));
+    this.db
+      .prepare(
+        `INSERT INTO lane_decisions (request_id, knowledge_root, module, lane, action, status, decision_id, record)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        stored.requestId,
+        stored.scope.knowledgeRoot,
+        stored.scope.module,
+        stored.scope.lane,
+        stored.scope.action,
+        stored.status,
+        stored.decision?.decisionId ?? null,
+        JSON.stringify(stored),
+      );
+  }
+
+  updateLaneRequest(record: LaneApprovalRecord): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
+    const stored = parseLaneRecord(record.requestId, JSON.parse(JSON.stringify(record)));
+    const existing = this.loadLaneRequest(stored.requestId);
+    if (!existing) throw new Error(`lane request ${stored.requestId} was never opened`);
+    if (JSON.stringify(existing.scope) !== JSON.stringify(stored.scope) || existing.requestedAt !== stored.requestedAt) {
+      throw new Error(`lane request ${stored.requestId}: its scope is immutable once opened`);
+    }
+    this.db
+      .prepare("UPDATE lane_decisions SET status = ?, decision_id = ?, record = ? WHERE request_id = ?")
+      .run(stored.status, stored.decision?.decisionId ?? null, JSON.stringify(stored), stored.requestId);
+  }
+
+  loadLaneRequest(requestId: string): LaneApprovalRecord | null {
+    const row = this.db.prepare("SELECT request_id, record FROM lane_decisions WHERE request_id = ?").get(requestId) as
+      | LaneDecisionRow
+      | undefined;
+    return row ? laneRecordFromRow(row) : null;
+  }
+
+  laneRequests(knowledgeRoot: string, module: string): LaneApprovalRecord[] {
+    const rows = this.db
+      .prepare("SELECT request_id, record FROM lane_decisions WHERE knowledge_root = ? AND module = ? ORDER BY seq ASC")
+      .all(knowledgeRoot, module) as unknown as LaneDecisionRow[];
+    return rows.map(laneRecordFromRow);
+  }
+
+  laneDecisionIdExists(decisionId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM lane_decisions WHERE decision_id = ?").get(decisionId) !== undefined;
   }
 
   close(): void {

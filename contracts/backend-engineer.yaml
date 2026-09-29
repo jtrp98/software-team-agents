@@ -5,7 +5,7 @@ agent:
   description: Implements API and database code from design.md's contract and plan.md's tasks.
 input:
   required: [plan, design, requirements]
-  optional: [test-plan, qa-report, backend-code]
+  optional: [test-plan, review-report, qa-report, backend-code]
 output:
   required: [backend-code]
 constraints:
@@ -29,9 +29,9 @@ permissions:
   # resolved from the Target's recorded `stack.profile` and merged with these globs at run time. A workspace with no recorded
   # stack resolves `stacks/node`, which carries the Node/Prisma globs this contract used to hold.
   # `--check-contracts` fails if a stack-shaped glob is added back here.
-  read: [".claude/agents/backend-engineer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "README.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/test-plan.md", "_docs/status-archive.md", "_docs/status.md"]
+  read: [".claude/agents/backend-engineer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "README.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/qa.md", "_docs/module/*/test-plan.md", "_docs/status-archive.md", "_docs/status.md"]
   write: ["README.md", "_docs/status.md", "_docs/status-archive.md"]
-  deny: ["_docs/module/**", ".claude/**", "contracts/**"]
+  deny: ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/**", ".claude/**", "contracts/**"]
 tools: [Write, Edit, Read, Glob, Grep, Bash]
 states: [IMPLEMENTATION]
 capability:

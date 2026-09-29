@@ -29,9 +29,10 @@ function item(status: KnowledgeStatus, owner = AgentStage.BUSINESS_ANALYST) {
 }
 
 describe("who may own what", () => {
-  it("lets a person own anything", () => {
+  it("keeps human decisions separate from role-owned work", () => {
     expect(mayOwn("decision", AgentStage.HUMAN)).toBe(true);
-    expect(mayOwn("db-schema", AgentStage.HUMAN)).toBe(true);
+    expect(mayOwn("db-schema", AgentStage.HUMAN)).toBe(false);
+    expect(mayOwn("requirement", AgentStage.HUMAN)).toBe(false);
   });
 
   it("keeps each kind with the role that does that work", () => {
@@ -179,11 +180,9 @@ describe("ownership reaches --check-knowledge", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("fails the check when an item is owned by a role that does not do that kind of work", () => {
-    writeKnowledgeItem(item("draft", AgentStage.DEVOPS), root);
-    const report = checkKnowledge(root);
-    expect(report.ok).toBe(false);
-    expect(report.problems.join("\n")).toContain("which does not own requirement items");
+  it("refuses to commit an item owned by a role that does not do that kind of work", () => {
+    expect(() => writeKnowledgeItem(item("draft", AgentStage.DEVOPS), root)).toThrow(/cannot own requirement/);
+    expect(() => writeKnowledgeItem(item("draft", AgentStage.HUMAN), root, { force: true })).toThrow(/cannot own requirement/);
   });
 
   it("passes for an owner the kind allows", () => {

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentStage } from "../types.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
@@ -10,11 +10,17 @@ import { createRuntimeExecutor } from "./runtimeExecutor.js";
 import { MockRuntimeAdapter } from "./mockAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
 import { AntigravityAdapter } from "./antigravityAdapter.js";
-import { ApiAdapter } from "./apiAdapter.js";
+import { ZcodeAdapter, managedZcodeHooks } from "./zcodeAdapter.js";
+import { renderZcodeConfigJson } from "./bindingGenerator.js";
 import { NO_GUARDS, type RuntimeAdapter, type RuntimeAgentRequest, type RuntimeGuardReport, type RuntimeWorkRoot, type SpawnSync } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
+
+vi.mock("../gates/humanChannelConfig.js", () => ({
+  approvalChannelDir: () => path.join(os.tmpdir(), "sta-test-approval-channel"),
+}));
 
 /**
  * The runtime conformance suite: one mandatory-case matrix run
@@ -106,11 +112,22 @@ interface CapturedCall {
 }
 
 /** Records every spawn and answers each binary's well-shaped success envelope. */
-function capturingSpawn(binary: "claude" | "codex" | "opencode" | "agy" | "paid-api", calls: CapturedCall[]): SpawnSync {
+function capturingSpawn(binary: "claude" | "codex" | "opencode" | "agy" | "zcode", calls: CapturedCall[]): SpawnSync {
   return ((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv; input?: string }) => {
     calls.push({ args, env: options.env, input: options.input });
     const stdout =
-      binary === "claude"
+      binary === "zcode"
+        ? args.includes("hooks")
+          ? JSON.stringify({
+              items: managedZcodeHooks().map(({ event, script }) => ({
+                event,
+                displayCommand: "node $" + "{CLAUDE_PROJECT_DIR}/.claude/hooks/" + script,
+                configuredEnabled: true,
+                trustState: "trusted_persistent",
+              })),
+            })
+          : JSON.stringify({ sessionId: "sess_conformance", response: "done", projection: { status: "completed" } })
+        : binary === "claude"
         ? JSON.stringify({ result: "done", is_error: false, usage: { input_tokens: 3, output_tokens: 4 }, total_cost_usd: 0 })
         : binary === "opencode"
           ? `${JSON.stringify({ type: "text", part: { type: "text", text: "done" } })}\n`
@@ -143,7 +160,7 @@ function enoentSpawn(): SpawnSync {
 
 interface Implementation {
   readonly id: string;
-  readonly binary: "claude" | "codex" | "opencode" | "agy" | "paid-api";
+  readonly binary: "claude" | "codex" | "opencode" | "agy" | "zcode";
   /** `resolveCommand: () => null` keeps the Windows npm-shim retry out — this suite measures surfaces, not PATH resolution. */
   readonly make: (projectRoot: string, spawn: SpawnSync) => RuntimeAdapter;
 }
@@ -170,26 +187,28 @@ const IMPLEMENTATIONS: readonly Implementation[] = [
     make: (root, spawn) => new AntigravityAdapter({ projectRoot: root, spawnSync: spawn }),
   },
   {
-    id: "paid-api",
-    binary: "paid-api",
-    make: (root, spawn) => new ApiAdapter({
-      projectRoot: root,
-      models: ["api-model"],
-      probe: async () => ({ available: true, version: "mock-api" }),
-      invoke: async (request) => {
-        const proc = spawn("paid-api", [request.role, request.prompt], {
-          cwd: request.cwd,
-          encoding: "utf8",
-          timeout: request.timeoutMs,
-          env: { ...process.env, ...request.env },
-          input: request.prompt,
-        });
-        if (proc.error) {
-          return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [proc.error.message] };
-        }
-        return { status: "OK", exitCode: 0, text: "done", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [] };
-      },
-    }),
+    // V13 TASK-015 — over a fake install tree and the synced, trusted hook payload.
+    id: "zcode",
+    binary: "zcode",
+    make: (root, spawn) => {
+      fs.mkdirSync(path.join(root, "install", "resources", "glm"), { recursive: true });
+      fs.mkdirSync(path.join(root, "install", "resources", "config", "provider"), { recursive: true });
+      fs.writeFileSync(path.join(root, "install", "resources", "glm", "zcode.cjs"), "// fake entry\n");
+      fs.writeFileSync(path.join(root, "install", "resources", "config", "provider", "zcode-builtin.json"), "{}\n");
+      fs.mkdirSync(path.join(root, "home", ".zcode", "v2"), { recursive: true });
+      fs.writeFileSync(path.join(root, "home", ".zcode", "v2", "provider_config.json"), "{}\n");
+      fs.mkdirSync(path.join(root, ".zcode"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".zcode", "config.json"), renderZcodeConfigJson());
+      return new ZcodeAdapter({
+        projectRoot: root,
+        cliEntry: path.join(root, "install", "resources", "glm", "zcode.cjs"),
+        nodePath: "node",
+        env: { USERPROFILE: path.join(root, "home"), HOME: path.join(root, "home") },
+        platform: "linux",
+        spawnSync: spawn,
+        journalRoot: path.join(root, "attempts"),
+      });
+    },
   },
 ];
 
@@ -206,6 +225,7 @@ afterAll(() => {
  */
 function writeFixture(root: string): void {
   fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
+  seedRealContracts(root);
   fs.writeFileSync(
     path.join(root, ".claude", "settings.json"),
     JSON.stringify({
@@ -265,7 +285,8 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
   // The NUL separator keeps distinct argv elements distinct — a prompt that
   // happened to contain "--agent" must not fuse with flag positions.
   const surface = calls.map((c) => c.args.join("\u0000")).join("\n");
-  const env = calls[0]?.env ?? {};
+  // The agent spawn is the last call — ZCode inspects hook trust first.
+  const env = calls.at(-1)?.env ?? {};
   const guards: RuntimeGuardReport = guardResult.guards;
 
   const preToolEnforced = guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD);
@@ -302,14 +323,14 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     {
       caseId: "role-contract-loading",
       verdict:
-        impl.id === "codex" || impl.id === "paid-api" || impl.id === "antigravity"
+        impl.id === "codex" || impl.id === "antigravity" || impl.id === "zcode"
           ? surface.includes(INSTRUCTIONS_MARKER)
             ? "PASS"
             : "FAIL"
           : surface.split("\u0000").includes("--agent") && surface.split("\u0000").includes(ROLE)
             ? "PASS"
             : "FAIL",
-      detail: impl.id === "codex" || impl.id === "paid-api" || impl.id === "antigravity" ? "role instructions folded into the prompt" : "--agent <role> names the binding entry",
+      detail: impl.id === "codex" || impl.id === "antigravity" || impl.id === "zcode" ? "role instructions folded into the prompt" : "--agent <role> names the binding entry",
     },
     { caseId: "context-injection", verdict: surface.includes(PROMPT) || calls.some((c) => c.input === PROMPT) ? "PASS" : "FAIL" },
     {
@@ -413,11 +434,14 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
           "hook-plugin-execution": "REPORTED_UNENFORCED",
           "exit-handling": "REPORTED_UNENFORCED",
         },
-        "paid-api": {
-          "allowed-write-guard": "REPORTED_UNENFORCED",
-          "forbidden-write-guard": "REPORTED_UNENFORCED",
-          "state-changing-git-protection": "REPORTED_UNENFORCED",
-          "hook-plugin-execution": "REPORTED_UNENFORCED",
+        // V13 TASK-015 — the synced payload with every STA hook trusted: the
+        // PreToolUse hooks enforce; the Stop hook's headless behaviour is
+        // unverified, so exit checks are reported unenforced for STA to cover.
+        zcode: {
+          "allowed-write-guard": "ENFORCED",
+          "forbidden-write-guard": "ENFORCED",
+          "state-changing-git-protection": "ENFORCED",
+          "hook-plugin-execution": "ENFORCED",
           "exit-handling": "REPORTED_UNENFORCED",
         },
       };
@@ -514,7 +538,7 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
       expect(observed?.STA_ROLE, adapter.id).toBe(EXECUTOR_ENV.STA_ROLE);
       expect(observed?.STA_WRITABLE_WORK_ROOTS, adapter.id).toBe(EXECUTOR_ENV.STA_WRITABLE_WORK_ROOTS);
     }
-    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity", "paid-api", "mock"]);
+    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity", "zcode", "mock"]);
   });
 
   it("reports the orchestrator-owned axes as covered elsewhere, naming the owning suites", async () => {

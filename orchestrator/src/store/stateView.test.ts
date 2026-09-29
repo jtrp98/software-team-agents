@@ -13,6 +13,7 @@ import { StateViewSchemaError } from "./stateSchema.js";
 import { MemoryTaskStore } from "./memoryStore.js";
 import { ApprovalType } from "../gates/approval.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 function task(taskId: string, overrides: Partial<PersistedTask> = {}): PersistedTask {
   const classification = classifyTask({
@@ -45,12 +46,12 @@ describe("state view", () => {
 
   it("says which agent is up and what the retry budget looks like", () => {
     const t = task("T-1");
-    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer].
-    const doc = renderAndParse([{ ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2, retries: { qa: 2, security: 0 } }]);
+    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, reviewer, qa-engineer].
+    const doc = renderAndParse([{ ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2, retries: { review: 0, qa: 2, security: 0 } }]);
 
     expect(doc.tasks[0].status).toBe("RUNNING");
     expect(doc.tasks[0].current_agent).toBe(AgentStage.BACKEND_ENGINEER);
-    expect(doc.tasks[0].retry).toEqual({ qa: 2, security: 0, max: MAX_RETRY });
+    expect(doc.tasks[0].retry).toEqual({ review: 0, qa: 2, security: 0, max: MAX_RETRY });
   });
 
   it("shows a blocked task with the reason it blocked on", () => {
@@ -148,7 +149,7 @@ describe("state view — T02 fields", () => {
     try {
       const file = path.join(dir, "state.yaml");
       const store = new MemoryTaskStore();
-      const orch = new Orchestrator("T-1", classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true }), { store });
+      const orch = new Orchestrator("T-1", classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true }), { store, stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
       await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } }));
 
       writeStateViewFromStore(file, store);
@@ -189,18 +190,17 @@ describe("approval ledger in the view (T08)", () => {
     return { ...base, approvals };
   }
 
+  const REQUEST_ID = "apr_0123456789abcdef0123456789abcdef";
   const pending: PersistedTask["approvals"] = [
     {
-      type: ApprovalType.SCHEMA_CONFIRMATION,
+      requestId: REQUEST_ID,
+      scope: { taskId: "T-1", type: ApprovalType.SCHEMA_CONFIRMATION, from: null, to: null },
       required: true,
       status: "pending",
-      from: null,
-      to: null,
       reason: "DESIGN_APPROVED required before development can start",
       requestedAt: 0,
-      decidedAt: null,
-      decidedBy: null,
-      note: null,
+      decision: null,
+      withdrawal: null,
     },
   ];
 
@@ -209,6 +209,7 @@ describe("approval ledger in the view (T08)", () => {
     expect(yaml).toContain("approval:");
     expect(yaml).toContain("type: schema-confirmation");
     expect(yaml).toContain("status: pending");
+    expect(yaml).toContain(`request_id: ${REQUEST_ID}`);
   });
 
   it("shows null when nothing is outstanding", () => {
@@ -219,11 +220,23 @@ describe("approval ledger in the view (T08)", () => {
   /** A rejection has to be visible as an answer, not as an empty gate. */
   it("keeps a rejection in the ledger with who decided it and when", () => {
     const rejected: PersistedTask["approvals"] = [
-      { ...pending[0], status: "rejected", decidedAt: 1_700_000_000_000, decidedBy: "jaturapat" },
+      {
+        ...pending[0],
+        status: "rejected",
+        decision: {
+          decisionId: "d-1",
+          approved: false,
+          actor: { kind: "human", id: "jaturapat" },
+          source: { channel: "unit-channel", evidenceRef: "r-1" },
+          decidedAt: 1_700_000_000_000,
+          note: null,
+        },
+      },
     ];
     const yaml = renderStateYaml([taskWithApprovals(rejected)], { now: 0 });
     expect(yaml).toContain("status: rejected");
     expect(yaml).toContain("decided_by: jaturapat");
+    expect(yaml).toContain("decided_via: unit-channel");
     expect(yaml).toContain("decided_at:");
     // Answered, so nothing is outstanding any more.
     expect(yaml).toContain("approval: null");

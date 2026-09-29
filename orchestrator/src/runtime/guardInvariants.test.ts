@@ -13,6 +13,7 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { compileExecutionPacket } from "./agentRunAssembly.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { createProductionRuntimeRegistry } from "../cli/composition/runtimeRegistry.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RUNTIME_ROOT = path.join(REPO_ROOT, "orchestrator", "src", "runtime");
@@ -21,6 +22,7 @@ const roots: string[] = [];
 function tempProject(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guard-invariants-"));
   roots.push(root);
+  seedRealContracts(root);
   return root;
 }
 
@@ -29,7 +31,9 @@ function concreteAdapterSources(): Array<{ file: string; source: string }> {
     .readdirSync(RUNTIME_ROOT)
     .filter((name) => name.endsWith("Adapter.ts") && name !== "runtimeAdapter.ts")
     .map((name) => ({ file: name, source: fs.readFileSync(path.join(RUNTIME_ROOT, name), "utf8") }))
-    .filter(({ source }) => /implements\s+RuntimeAdapter\b/.test(source));
+    // V13 TASK-013 — concrete adapters implement the lifecycle port, which
+    // extends RuntimeAdapter; either spelling is a concrete adapter source.
+    .filter(({ source }) => /implements\s+(?:RuntimeAdapter|ExecutorPort)\b/.test(source));
 }
 
 afterEach(() => {
@@ -43,7 +47,8 @@ describe("T-V3R-001 guardrail invariants", () => {
     for (const stage of roles) {
       const role = stage;
       const contract = contractGuards(role, REPO_ROOT);
-      const runtimeTask = runtimeTaskFixture(tempProject(), { taskId: `T-SCOPE-${role}`, stage, allow: [...contract.writeAllow, "widened/**"] });
+      const projectRoot = tempProject();
+      const runtimeTask = runtimeTaskFixture(projectRoot, { taskId: `T-SCOPE-${role}`, stage, allow: [...contract.writeAllow, "widened/**"] });
       const packet = compileExecutionPacket({
         req: { stage, taskId: runtimeTask.task_id, context: [] },
         role,
@@ -57,10 +62,12 @@ describe("T-V3R-001 guardrail invariants", () => {
       const runtime = new MockRuntimeAdapter();
       const executor = createRuntimeExecutor({
         runtime,
-        projectRoot: tempProject(),
+        projectRoot,
         moduleName: () => "phase-0",
         guards: () => contract,
         sliceModuleDocs: false,
+        packetBaseRevision: async () => FIXTURE_REVISION,
+        runtimeTask: () => runtimeTask,
       });
       await executor({ stage, taskId: `T-SCOPE-${role}`, context: [] });
       const effectiveScope = runtime.requests[0]?.guards.writeAllow;
@@ -73,11 +80,11 @@ describe("T-V3R-001 guardrail invariants", () => {
     const adapters = concreteAdapterSources();
     expect(adapters.map(({ file }) => file).sort()).toEqual([
       "antigravityAdapter.ts",
-      "apiAdapter.ts",
       "claudeCodeAdapter.ts",
       "codexAdapter.ts",
       "mockAdapter.ts",
       "openCodeAdapter.ts",
+      "zcodeAdapter.ts",
     ]);
     const forbidden = /(?:ANTHROPIC|CLAUDE|OPENAI|CODEX|OPENCODE)_(?:API_KEY|AUTH_TOKEN)|AWS_SHARED_CREDENTIALS_FILE|GOOGLE_APPLICATION_CREDENTIALS|["'`](?:\.ssh|\.aws)[\\/]|credentials\.json/gi;
     const violations = adapters.flatMap(({ file, source }) => [...source.matchAll(forbidden)].map((match) => `${file}: ${match[0]}`));
@@ -85,11 +92,12 @@ describe("T-V3R-001 guardrail invariants", () => {
   });
 
   // The paid API runtime is never offered: no config or flag can make
-  // production construction reach `ApiAdapter` any more.
+  // production construction reach `ApiAdapter` any more (ApiAdapter is deleted in V13 TASK-024).
   it("criterion 5 — the paid API runtime is never offered; ApiAdapter is unreachable from production construction", () => {
     const config = defaultStaConfig();
     expect(config.execution?.allow_paid_fallback ?? false).toBe(false);
     expect(createProductionRuntimeRegistry(REPO_ROOT).ids()).not.toContain("paid-api");
+    expect(fs.existsSync(path.join(REPO_ROOT, "orchestrator", "src", "runtime", "apiAdapter.ts"))).toBe(false);
   });
 
   // An unregistered routing target is a closed route: it must reach no
@@ -119,6 +127,9 @@ describe("T-V3R-001 guardrail invariants", () => {
       moduleName: () => "phase-0",
       guards: () => guards,
       sliceModuleDocs: false,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) =>
+        runtimeTaskFixture(refusedRoot, { taskId, stage, allow: [...guards.writeAllow], moduleName: "phase-0" }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-UNREGISTERED-GUARDS", context: [] });
     expect(refused.outcome.result).toBe("FAIL");
     expect(refused.outcome.failure_reason).toContain("missing-runtime");
@@ -134,9 +145,12 @@ describe("T-V3R-001 guardrail invariants", () => {
       moduleName: () => "phase-0",
       guards: () => guards,
       sliceModuleDocs: false,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) =>
+        runtimeTaskFixture(routedRoot, { taskId, stage, allow: [...guards.writeAllow], moduleName: "phase-0" }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-ROUTED-GUARDS", context: [] });
     expect(routed.requests).toHaveLength(1);
-    expect(routed.requests[0].guards).toBe(guards);
+    expect(routed.requests[0].guards).toEqual(guards);
     expect(guards).toEqual(before);
   });
 });

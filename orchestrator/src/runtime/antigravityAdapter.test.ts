@@ -118,8 +118,34 @@ describe("AntigravityAdapter — argv safety", () => {
     expect(args[args.indexOf("--output-format") + 1]).toBe("json");
     // No project agent store was demonstrated, so `--agent` must not appear.
     expect(args).not.toContain("--agent");
+    expect(args.indexOf("-p") + 1).toBeGreaterThan(0);
     expect(args[args.indexOf("-p") + 1]).toContain("ROLE-MARKER-7f3a");
     expect(args[args.indexOf("-p") + 1]).toContain("verify phase 1");
+  });
+
+  it("passes --add-dir for cwd and work roots so agy loads workspace hooks", async () => {
+    const root = fixture();
+    const calls: Call[] = [];
+    const adapter = new AntigravityAdapter({ projectRoot: root, spawnSync: recordingSpawn(calls) });
+    await adapter.executeAgent(
+      request(root, {
+        workRoots: [{ path: "C:/extra-work-root", access: "write", targetId: "target-extra" }],
+      }),
+    );
+    const args = calls[0]!.args;
+    expect(args).toContain("--add-dir");
+    expect(args[args.indexOf("--add-dir") + 1]).toBe(root);
+    expect(args).toContain("C:/extra-work-root");
+  });
+
+  it("automatically binds workspace hooks when .agents/hooks.json exists", async () => {
+    const root = fixture();
+    fs.mkdirSync(path.join(root, ".agents"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".agents", "hooks.json"), "{}");
+    const adapter = new AntigravityAdapter({ projectRoot: root });
+    expect(adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)).toBe(true);
+    expect(adapter.capabilities.has(RuntimeCapability.POST_TOOL_GUARD)).toBe(true);
+    expect(adapter.binding.guardConfigPath).toBe(path.join(root, ".agents", "hooks.json"));
   });
 
   it("refuses to run with no role binding rather than executing role-less", async () => {
@@ -228,7 +254,15 @@ describe("AntigravityAdapter — capability honesty", () => {
   it("declares only what a spike transcript backs", () => {
     const adapter = new AntigravityAdapter({ projectRoot: fixture() });
     expect([...adapter.capabilities].sort()).toEqual(
-      [RuntimeCapability.MODEL_SELECTION, RuntimeCapability.STRUCTURED_RESULT].sort(),
+      [
+        RuntimeCapability.MODEL_SELECTION,
+        RuntimeCapability.STRUCTURED_RESULT,
+        // V13 TASK-014 — the single-shot lifecycle implemented over the same
+        // spawn surface (fresh-session resume, cancel accounting, evidence).
+        RuntimeCapability.ATTEMPT_RESUME,
+        RuntimeCapability.ATTEMPT_CANCEL,
+        RuntimeCapability.EVIDENCE_COLLECTION,
+      ].sort(),
     );
     for (const unclaimed of [
       RuntimeCapability.PRE_TOOL_GUARD,

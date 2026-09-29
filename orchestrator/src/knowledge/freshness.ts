@@ -195,8 +195,6 @@ export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Fre
   };
 }
 
-export const NEEDS_ATTENTION: FreshnessVerdict[] = ["changed", "unavailable", "unhashable", "aging", "stale", "source-changed", "source-missing", "unknown"];
-
 /** Every item that is not simply fresh, worst first — the order somebody would work through them. */
 export function needsAttention(kb: KnowledgeBase, options: FreshnessOptions): Freshness[] {
   const rank: Record<FreshnessVerdict, number> = {

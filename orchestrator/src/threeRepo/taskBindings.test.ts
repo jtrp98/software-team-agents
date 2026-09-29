@@ -17,6 +17,7 @@ import { preflightThreeRepoTask } from "./preflight.js";
 import { figmaPatConfigured } from "./identities.js";
 import type { TargetRegistry } from "./targets.js";
 import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -174,6 +175,9 @@ describe("Phase 2 task Target bindings", () => {
     const knowledge = path.join(root, "knowledge");
     const target = path.join(root, "target");
     const config = path.join(root, "installation.yaml");
+    // V13 TASK-011: intake validates the Knowledge root as a standalone
+    // repository before any durable row exists.
+    initRepository(knowledge);
     fs.mkdirSync(path.join(knowledge, "_docs", "module", "sales"), { recursive: true });
     fs.mkdirSync(target, { recursive: true });
     fs.writeFileSync(
@@ -185,7 +189,7 @@ describe("Phase 2 task Target bindings", () => {
     const previousConfig = process.env.STA_INSTALLATION_CONFIG;
     process.env.STA_INSTALLATION_CONFIG = config;
     const store = new SqliteTaskStore(path.join(target, "state.db"));
-    const taskRegistry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(target) });
+    const taskRegistry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(target) });
     try {
       const wrongType = parseArgs(["--task-id", "wrong-type", "--module", "sales", "--bug-fix", "--frontend", "--frontend-target", "api", "--project-root", target], target);
       expect(() => openTask(taskRegistry, wrongType, "wrong-type", store)).toThrow(/type "backend"/);
@@ -333,13 +337,13 @@ describe("Phase 2 preflight", () => {
       expect(warnings).toEqual([]);
 
       fs.writeFileSync(path.join(moduleDir, "design.md"), "# Design\n\n## Targets\n\n- another-target\n");
-      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(/Target "backend".*outside module "sales"/);
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(/another-target.*not present/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("V10 TASK-008 two live Targets: every code stage writes every Target the task binds; QA/security read them all", () => {
+  it("V13 TASK-011 two live Targets: each engineer writes only its own role's Target; QA/security read them all", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-two-live-"));
     try {
       const framework = path.join(root, "framework");
@@ -361,12 +365,12 @@ describe("Phase 2 preflight", () => {
       const forBackend = preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, opts);
       expect(forBackend.workRoots).toEqual([
         { targetId: "backend", path: backendRepo, access: "write" },
-        { targetId: "frontend", path: frontendRepo, access: "write" },
+        { targetId: "frontend", path: frontendRepo, access: "read" },
       ]);
 
       const forFrontend = preflightThreeRepoTask(task, AgentStage.FRONTEND_ENGINEER, opts);
       expect(forFrontend.workRoots).toEqual([
-        { targetId: "backend", path: backendRepo, access: "write" },
+        { targetId: "backend", path: backendRepo, access: "read" },
         { targetId: "frontend", path: frontendRepo, access: "write" },
       ]);
 

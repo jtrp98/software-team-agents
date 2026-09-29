@@ -69,9 +69,42 @@ export enum RuntimeCapability {
   INTERACTIVE_PROMPTS = "interactive-prompts",
   /** More than one agent run at a time is safe against this runtime. Reserved for future file-level locking work; nothing schedules on it yet. */
   PARALLEL_EXECUTION = "parallel-execution",
+  /**
+   * V13 TASK-013 — can continue a previously started attempt from its
+   * persisted reference (`ExecutorPort.resume`), whether by native session
+   * restore or by a fresh session rebuilt from the persisted packet. An
+   * adapter that does not declare this must refuse `resume` as a typed
+   * refusal, never approximate it with a new attempt that claims the same id.
+   */
+  ATTEMPT_RESUME = "attempt-resume",
+  /**
+   * V13 TASK-013 — can stop an in-flight attempt on request
+   * (`ExecutorPort.cancel`) and report a normalized cancel outcome. Refusal
+   * is the typed answer when the runtime has no mechanism, not a silent
+   * "completed".
+   */
+  ATTEMPT_CANCEL = "attempt-cancel",
+  /**
+   * V13 TASK-013 — can produce a normalized evidence record for a finished
+   * attempt (`ExecutorPort.collectEvidence`): exit status, log/session
+   * references and the result envelope, in the port's shape rather than the
+   * runtime's own.
+   */
+  EVIDENCE_COLLECTION = "evidence-collection",
 }
 
-export const ALL_RUNTIME_CAPABILITIES: readonly RuntimeCapability[] = Object.values(RuntimeCapability);
+/**
+ * V13 TASK-016 — what makes a runtime a governed *executor* rather than just
+ * something that can run a prompt: the lifecycle port's resume, cancel and
+ * evidence operations (TASK-013). A governed write is routed only to a runtime
+ * that declares all three and implements the port; certification (the
+ * `runtimeSupport` record) is the other half, never implied by these.
+ */
+export const EXECUTOR_LIFECYCLE_CAPABILITIES: readonly RuntimeCapability[] = [
+  RuntimeCapability.ATTEMPT_RESUME,
+  RuntimeCapability.ATTEMPT_CANCEL,
+  RuntimeCapability.EVIDENCE_COLLECTION,
+];
 
 /**
  * The capabilities this framework's design depends on. A runtime missing one of

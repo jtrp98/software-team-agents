@@ -1,0 +1,27 @@
+# One task of a canonical plan.md. Business analysis, design and planning already happened -
+# that is what produced the task - so its owner engineer implements it, an independent reviewer
+# reviews it, and qa-engineer verifies it, per task. There is no set-level QA pass.
+#
+# The task's authored risk still carries its obligations: a security pass for a sensitive or
+# schema-touching change, and - for an authored schema, deployment or migration gate - the human
+# approval before Done (requires_human_approval below is the ungated case).
+workflow: plan-task
+description: Canonical plan task - owner engineer, reviewer and QA per task; BA, SA and PM already ran.
+trigger:
+  kind: signal
+  signal: isPlanTask
+  # Checked before every other signal: a plan task's schema, security and deploy facts are
+  # authored risk about already-analysed work, never a request to re-run the analysis.
+  priority: 0
+level: MEDIUM
+requires_human_approval: false
+steps:
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: reviewer
+  - agent: qa-engineer
+  - agent: security
+    when: touchesSensitiveAreaOrSchema
+    note: a schema-touching plan task gets a security pass whether or not the plan flagged one

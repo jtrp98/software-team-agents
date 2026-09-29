@@ -5,6 +5,8 @@ import { Orchestrator } from "../orchestrator/orchestrator.js";
 import type { AgentExecutor, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
+import { withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 /**
  * T-V8-015 through the real orchestrator: the route is recorded next to the
@@ -28,7 +30,7 @@ function failingQaReport(): QaReportArtifact {
 
 function executorWith(qaFailure: StructuredFailure | undefined): AgentExecutor {
   return async (req): Promise<AgentExecutorResult> => {
-    if (req.stage !== AgentStage.QA_ENGINEER) return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+    if (req.stage !== AgentStage.QA_ENGINEER) return withRequiredEvidence(req, { outcome: { tokens: 1, cost: 0, result: "PASS" } });
     return {
       outcome: { tokens: 1, cost: 0, result: "FAIL" },
       artifactType: ArtifactType.QA_REPORT,
@@ -58,9 +60,10 @@ const providerOutage: StructuredFailure = {
   requiresHuman: false,
 };
 
-/** One dev stage, then the QA round that reports the failure. Exactly one QA round, so the budget assertions are exact. */
+/** One dev stage, the review, then the QA round that reports the failure. Exactly one QA round, so the budget assertions are exact. */
 async function oneQaRound(executor: AgentExecutor) {
-  const orchestrator = new Orchestrator("T-REPAIR", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+  const orchestrator = new Orchestrator("T-REPAIR", classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
+  await orchestrator.step(executor);
   await orchestrator.step(executor);
   await orchestrator.step(executor);
   return orchestrator;
@@ -81,9 +84,10 @@ describe("orchestrator records the deterministic repair route", () => {
 
   it("halts a provider outage without consuming the defect retry, however often it repeats", async () => {
     const executor = executorWith(providerOutage);
-    const orchestrator = new Orchestrator("T-REPAIR", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orchestrator = new Orchestrator("T-REPAIR", classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
     for (let round = 0; round < 4; round++) {
-      // dev stage, then the QA round that fails on infrastructure
+      // dev stage, the review, then the QA round that fails on infrastructure
+      await orchestrator.step(executor);
       await orchestrator.step(executor);
       const status = await orchestrator.step(executor);
       expect(orchestrator.retries.qa).toBe(0);

@@ -36,6 +36,11 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     fail: "[orchestrator] workflows/*.yml and the classifier disagree:",
     notes: "none",
   },
+  "--check-workflow-roles": {
+    ok: "[orchestrator] every stage a compiled workflow plan can select has a role contract and an evidence rule.",
+    fail: "[orchestrator] a compiled workflow plan can select a stage with no role contract or no evidence rule:",
+    notes: "none",
+  },
   "--check-bindings": {
     ok: "[orchestrator] generated bindings, hook mirrors and guard-rule blocks match their sources.",
     fail: "[orchestrator] generated bindings, hook mirrors or guard-rule blocks have drifted from their sources:",
@@ -104,11 +109,6 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
   "--check-installation": {
     ok: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
     fail: "[orchestrator] installation metadata has problems:",
-    notes: "leading",
-  },
-  "--check-roles": {
-    ok: "[orchestrator] every role workspace agrees with knowledge/.",
-    fail: "[orchestrator] role workspaces have problems:",
     notes: "leading",
   },
   "--check-git-ownership": {
@@ -244,7 +244,7 @@ describe("runChecker output", () => {
 
   it("a hypothetical checker is exactly one self-contained row", () => {
     const hypothetical: CheckerDescriptor = {
-      flag: "checkRoles",
+      flag: "checkKnowledge",
       cliFlag: "--check-teapot",
       run: () => ({ ok: true, problems: [], notes: [] }),
       okMessage: "[orchestrator] teapot is a teapot.",

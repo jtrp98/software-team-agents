@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { RUNTIME_ARTIFACT_KINDS } from "../state/runtimeArtifacts.js";
 
 export type RepositoryOwner = "framework" | "knowledge" | "target";
-export type InstallMode = "legacy-project" | "three-repo";
+export type InstallMode = "three-repo";
 
 export const INSTRUCTION_PRECEDENCE = [
   "framework-managed",
@@ -175,19 +175,6 @@ function containsOneBootstrapBlock(file: string): boolean {
   }
 }
 
-/**
- * Removes the Framework-managed bootstrap block from an otherwise
- * project-owned file (e.g. a Target's `CLAUDE.md`). What is left is the
- * project's own content, if any. The block itself is Framework-authored
- * bytes and must never be treated as project content by an importer.
- */
-export function stripFrameworkManagedBlock(text: string): string {
-  const openIndex = text.indexOf(BOOTSTRAP_BLOCK_OPEN);
-  const closeIndex = text.indexOf(BOOTSTRAP_BLOCK_CLOSE);
-  if (openIndex === -1 || closeIndex === -1 || closeIndex < openIndex) return text;
-  return (text.slice(0, openIndex) + text.slice(closeIndex + BOOTSTRAP_BLOCK_CLOSE.length)).trim();
-}
-
 /** Read-only, symlink-avoiding inventory of the complete Target instruction surface. */
 export function detectInstructionSurface(options: {
   targetRoot: string;
@@ -267,17 +254,9 @@ export function ownerOfPath(relativePath: string): RepositoryOwner {
   return "framework";
 }
 
-/** Framework install/upgrade manifests may contain only framework-owned paths.
- * Legacy project mode is deliberately opt-in because its bindings share names
- * with Target instructions. */
-export function assertFrameworkManagedPaths(paths: readonly string[], mode: InstallMode = "three-repo"): void {
-  const isLegacyFrameworkInstruction = (candidate: string): boolean => {
-    const normalised = normalise(candidate);
-    return normalised === "CLAUDE.md" || normalised === "AGENTS.md" || normalised.startsWith(".claude/");
-  };
-  const forbidden = paths.filter((candidate) =>
-    ownerOfPath(candidate) !== "framework" && !(mode === "legacy-project" && isLegacyFrameworkInstruction(candidate)),
-  );
+/** Framework install/upgrade manifests may contain only framework-owned paths. */
+export function assertFrameworkManagedPaths(paths: readonly string[], _mode: InstallMode = "three-repo"): void {
+  const forbidden = paths.filter((candidate) => ownerOfPath(candidate) !== "framework");
   if (forbidden.length > 0) {
     throw new Error(`framework manifest includes project-owned path(s): ${forbidden.join(", ")}`);
   }

@@ -6,7 +6,7 @@ import { narrowSelectedContext, selectDocContext, type SelectedContext } from ".
 import { needsTraceability, traceabilityScopeFor, unavailableTrace, type TraceabilityScope } from "./traceability.js";
 
 /** The module documents this understands. `test-plan`/`security`/`deploy` have no §10 slicing rule, so they pass through whole. */
-export type DocKind = "requirement" | "design" | "plan" | "test-plan" | "review" | "security" | "deploy";
+export type DocKind = "requirement" | "design" | "plan" | "test-plan" | "review" | "qa" | "security" | "deploy";
 
 export const DOC_FILENAME: Record<DocKind, string> = {
   requirement: "requirement.md",
@@ -14,6 +14,7 @@ export const DOC_FILENAME: Record<DocKind, string> = {
   plan: "plan.md",
   "test-plan": "test-plan.md",
   review: "review.md",
+  qa: "qa.md",
   security: "security.md",
   deploy: "deploy.md",
 };
@@ -24,7 +25,8 @@ export const CATEGORY_TO_DOC: Partial<Record<ContextCategory, DocKind>> = {
   [ArtifactType.DESIGN]: "design",
   [ArtifactType.PLAN]: "plan",
   [ArtifactType.TEST_PLAN]: "test-plan",
-  [ArtifactType.QA_REPORT]: "review",
+  [ArtifactType.REVIEW_REPORT]: "review",
+  [ArtifactType.QA_REPORT]: "qa",
   [ArtifactType.SECURITY_REPORT]: "security",
 };
 
@@ -33,7 +35,8 @@ const DOC_TO_CATEGORY: Partial<Record<DocKind, ArtifactType>> = {
   design: ArtifactType.DESIGN,
   plan: ArtifactType.PLAN,
   "test-plan": ArtifactType.TEST_PLAN,
-  review: ArtifactType.QA_REPORT,
+  review: ArtifactType.REVIEW_REPORT,
+  qa: ArtifactType.QA_REPORT,
   security: ArtifactType.SECURITY_REPORT,
 };
 

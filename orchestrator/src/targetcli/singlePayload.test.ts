@@ -195,7 +195,7 @@ describe("V10 TASK-022 — one roster, so every role's renderings land in any wo
 
   it("materialises the full roster for every runtime, whichever role the workspace records", () => {
     const expected = rosterOf(REAL_TEMPLATES, ".claude/agents", ".md");
-    expect(expected.length).toBe(11);
+    expect(expected.length).toBe(12);
 
     for (const [role, ws] of [["ba", knowledgeWorkspace()], ["dev", targetWorkspace()]] as const) {
       // `dev` sync renders a stack profile; name it so the fixture does not

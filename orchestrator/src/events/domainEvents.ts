@@ -12,11 +12,13 @@ import type { RecoveryAction } from "../retry/recoveryPolicy.js";
  * AGENT_COMPLETED, check `stage === qa-engineer`, then read `outcome.result` —
  * reconstructing a fact the orchestrator already knew. The domain events also
  * carry facts the lifecycle events can't express at all: the classified
- * failure and routing decision on a failed round (QA_FAILED/SECURITY_FAILED),
- * which round passed (QA_PASSED/SECURITY_PASSED, for first-pass-rate tracking),
+ * failure and routing decision on a failed round (REVIEW_FAILED/QA_FAILED/
+ * SECURITY_FAILED), which round passed (REVIEW_PASSED/QA_PASSED/SECURITY_PASSED,
+ * for first-pass-rate tracking),
  * the actual ApprovalRecord rather than a generic "waiting" signal
  * (APPROVAL_REQUIRED, fired once per question, not on every status poll), the
- * human's answer (APPROVAL_DECIDED), and what reaching DEPLOYED cost in
+ * human's answer (APPROVAL_DECIDED) or its evidence-driven closure
+ * (APPROVAL_WITHDRAWN), and what reaching DEPLOYED cost in
  * stages/runs/tokens/time (DEPLOY_COMPLETED, alongside the bare TASK_DEPLOYED
  * transition).
  *
@@ -28,12 +30,15 @@ import type { RecoveryAction } from "../retry/recoveryPolicy.js";
 
 /** Domain event names, as values — for a switch, a queue's routing key, or an audit filter. */
 export enum DomainEventType {
+  REVIEW_PASSED = "REVIEW_PASSED",
+  REVIEW_FAILED = "REVIEW_FAILED",
   QA_PASSED = "QA_PASSED",
   QA_FAILED = "QA_FAILED",
   SECURITY_PASSED = "SECURITY_PASSED",
   SECURITY_FAILED = "SECURITY_FAILED",
   APPROVAL_REQUIRED = "APPROVAL_REQUIRED",
   APPROVAL_DECIDED = "APPROVAL_DECIDED",
+  APPROVAL_WITHDRAWN = "APPROVAL_WITHDRAWN",
   DEPLOY_COMPLETED = "DEPLOY_COMPLETED",
 }
 
@@ -61,12 +66,27 @@ export interface ApprovalRequiredEvent {
   approval: ApprovalRecord;
 }
 
+/** A trusted human decision applied to one pending request (see gates/humanDecision.ts). */
 export interface ApprovalDecidedEvent {
   taskId: string;
+  requestId: string;
   type: ApprovalType;
   approved: boolean;
-  /** Free text, or null when the caller didn't say — this pipeline has no identity system (see approval.ts). */
-  by: string | null;
+  /** Controller-reported actor; null only when the host explicitly does not expose it. */
+  actorId: string | null;
+  actorUnavailableReason?: "host-does-not-expose-actor";
+  channel: string;
+  evidenceRef: string;
+  decisionId: string;
+  note: string | null;
+}
+
+/** A pending request STA closed because trusted evidence discharged its gate. No human answered. */
+export interface ApprovalWithdrawnEvent {
+  taskId: string;
+  requestId: string;
+  type: ApprovalType;
+  reason: string;
 }
 
 /** What reaching DEPLOYED actually cost. Read off the run log, not recomputed by the listener. */
@@ -83,12 +103,15 @@ export interface DeployCompletedEvent {
 }
 
 export interface DomainEventMap {
+  REVIEW_PASSED: VerdictPassedEvent;
+  REVIEW_FAILED: VerdictFailedEvent;
   QA_PASSED: VerdictPassedEvent;
   QA_FAILED: VerdictFailedEvent;
   SECURITY_PASSED: VerdictPassedEvent;
   SECURITY_FAILED: VerdictFailedEvent;
   APPROVAL_REQUIRED: ApprovalRequiredEvent;
   APPROVAL_DECIDED: ApprovalDecidedEvent;
+  APPROVAL_WITHDRAWN: ApprovalWithdrawnEvent;
   DEPLOY_COMPLETED: DeployCompletedEvent;
 }
 
@@ -108,6 +131,7 @@ export function verdictEventFor(
   stage: AgentStage,
   passed: boolean,
 ): keyof DomainEventMap | null {
+  if (stage === AgentStage.REVIEWER) return passed ? "REVIEW_PASSED" : "REVIEW_FAILED";
   if (stage === AgentStage.QA_ENGINEER) return passed ? "QA_PASSED" : "QA_FAILED";
   if (stage === AgentStage.SECURITY) return passed ? "SECURITY_PASSED" : "SECURITY_FAILED";
   return null;

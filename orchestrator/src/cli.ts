@@ -2,10 +2,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as readline from "node:readline/promises";
 import { TEST_STRATEGY_TRIGGERS, type ClassificationInput, type TestStrategyTrigger } from "./classification/taskClassifier.js";
 import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "./classification/classificationFlags.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
+import { createRoleLaneStageGuard } from "./orchestrator/stageGuards.js";
+import { resolveHumanDecisionChannel } from "./gates/humanChannelConfig.js";
 import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
 import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
@@ -31,6 +32,7 @@ import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
 import { runChangedVerb } from "./cli/verbs/changed.js";
 import { runReportVerb } from "./cli/verbs/report.js";
 import { runBoundedRunVerb, BOUNDED_RUN_USAGE } from "./cli/verbs/boundedRun.js";
+import { runGrantVerb, GRANT_USAGE } from "./cli/verbs/grant.js";
 import { runProjectsVerb } from "./cli/verbs/projects.js";
 import { runInitVerb } from "./cli/verbs/init.js";
 import { runConfigureVerb } from "./cli/verbs/configure.js";
@@ -40,7 +42,8 @@ import { runMigrateVerb } from "./cli/verbs/migrate.js";
 import { runRollbackVerb } from "./cli/verbs/rollback.js";
 import { runListBackupsVerb } from "./cli/verbs/listBackups.js";
 import { printListing } from "./cli/rendering/taskListing.js";
-import { runTaskLoop } from "./cli/runTaskLoop.js";
+import { runTasks } from "./engine/taskRunService.js";
+import { SINGLE_TASK_POLICY } from "./engine/runPolicy.js";
 import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
 import { assertNoWorkspaceRunLock } from "./concurrency/workspaceRunLock.js";
 import { Environment, isEnvironment } from "./environment/environment.js";
@@ -49,7 +52,7 @@ import { resolveQaWorkRoots } from "./threeRepo/cliRoots.js";
 import { type TargetBindings } from "./threeRepo/taskBindings.js";
 import { readWorkPlan } from "./docs/planGraph.js";
 import { openTask } from "./cli/composition/taskIntake.js";
-import { composeProductionTaskExecutor } from "./cli/composition/taskExecutor.js";
+import { composeProductionTaskExecutor, taskExecutorOptionsFromArgs } from "./cli/composition/taskExecutor.js";
 import { askCodeIntelConsentAtRunStart } from "./cli/composition/runStartConsent.js";
 import type { CliDependencies } from "./cli/composition/runtimeRegistry.js";
 import { AgentStage } from "./types.js";
@@ -89,6 +92,8 @@ export interface CliArgs {
   checkPromptBudget: boolean;
   /** Check workflows/*.yml against the classifier and exit. Same audience. */
   checkWorkflows: boolean;
+  /** Check that every stage a compiled workflow plan can select has a loadable role contract and an evidence rule, and exit. Same audience. */
+  checkWorkflowRoles: boolean;
   /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit. */
   checkBindings: boolean;
   /** Check project.yaml and stacks/ against the agent roster and exit. Same audience. */
@@ -107,7 +112,7 @@ export interface CliArgs {
   checkRepos: boolean;
   /** Check environments.yaml, if one exists, against its schema and exit. Same audience. */
   checkEnvironments: boolean;
-  /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit. Same audience. */
+  /** Check every module's requirement/design/plan/qa/security doc structure against its schema and exit. Same audience. */
   checkDocStructure: boolean;
   /** Check every module document and `##` section against its byte ceiling and exit. Same audience. */
   checkDocSize: boolean;
@@ -117,8 +122,6 @@ export interface CliArgs {
   checkKnowledge: boolean;
   /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit. Same audience. */
   checkInstallation: boolean;
-  /** Check every role workspace under knowledge/_roles/ — each lane's watermark against the knowledge it refers to — and exit. Same audience. */
-  checkRoles: boolean;
   /** Check that only orchestrator/src/git/ can mutate Git and that remote/destructive subcommands are absent. */
   checkGitOwnership: boolean;
   /** Snapshot every framework template file into an output directory, with manifest.json, and exit. Not a --check-*: it writes, it doesn't just report. */
@@ -153,15 +156,6 @@ export interface CliArgs {
   model?: string;
   /** Operator-visible reasoning-effort override; runtime adapters validate their own vocabulary. */
   effort?: string;
-  /**
-   * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
-   * routing) is on by default for qa-engineer rounds; this flag restores the
-   * unoptimized executor behaviour for a task where someone explicitly wants it.
-   */
-  noQaOptimization: boolean;
-  /** Escape hatch for a Target whose deterministic tools are known-broken. */
-  noDeterministicGate: boolean;
-  noDocumentGate: boolean;
   /** Post-hoc task token budget. */
   tokenBudget?: number;
   /** `--root <name>` — the named Knowledge root this run reads from (DR §4). */
@@ -209,9 +203,9 @@ export function retiredWaveFlagMessage(flag: string): string {
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
-  "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
+  "  sta approve <task-id> --request <request-id> [--yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   Controller shows the pending gate in chat, then relays the human answer with its chat reference\n" +
   "  sta resume  <task-id> --module <name> [--root <name>] [--project-root <path>]   continue a task already in the store; --root must match the root frozen at intake (it is an assertion, never a re-selection)\n" +
   "  sta retry   <task-id> --module <name> [--root <name>] [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
   "  sta pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
@@ -221,10 +215,12 @@ export const USAGE =
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
   "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--views] [--json] [--root <name>] [--project-root <path>]   deterministic context, latest validated packet, or read-only generated checklist/prompt views\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
+  "  sta knowledge manifest [--json] [--project-root <knowledge-root>]   canonical discovery index: operating instructions, knowledge, artifacts, decisions, tasks + next action (exit 1 on any stale/missing reference)\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
+  `  ${GRANT_USAGE.split("\n").join("\n  ")}` +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
-  "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
+  "  sta init    --mode three-repo [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  sta configure knowledge-root <path> [--root <name>] [--default] [--config-path <path>]   bind a Knowledge root. With --root: the named-root surface (V11) — the first named operation migrates installation.yaml to v2 (`knowledge_roots` map + `default_root`); without --root: the V10 single-root form, still valid on a machine that has no v2 file and refused on one\n" +
   "  sta configure default-root --root <name> [--config-path <path>]   switch which named root new work picks when no --root is given\n" +
   "  sta transfer plan --source-root <name> --source-target <id> --destination-root <name> [--destination-target <id>]   read-only transfer plan + the approval-record template\n" +
@@ -234,16 +230,16 @@ export const USAGE =
   "  sta runtimes                                    which runtimes exist and how well each is supported\n" +
   "  sta changed [--project-root <path>] [--json]     surface working-tree changes and deterministic green/red gate status\n" +
   "  sta report  [--output <path>] [--module <name>] [--root <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
-  `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then DEV -> verification -> checkpoint -> coherent QA/repair to a chosen boundary\n` +
-  "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
+  `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then every task through the one task engine (owner engineer + checkpoint -> reviewer -> QA [-> security]) to a chosen boundary\n` +
+  "  sta upgrade --mode three-repo [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/\n" +
-  "  sta roles ack <ba|sa|uxui|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
-  "  sta roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate\n" +
-  "  sta roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist\n" +
-  "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only\n" +
+  "  sta roles signoff <ba|sa|uxui|dev> --module <name> [--request <request-id> --yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   Controller asks in chat, then relays the human lane sign-off\n" +
+  "  sta roles ack <ba|sa|uxui|dev> [<id>[,<id>...]] --module <name> [--request <request-id> --yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   Controller asks in chat, then relays the human acknowledgement\n" +
+  "  sta roles history --module <name> [--knowledge-root <path>] [--json]   read pending and decided lane requests with item versions, actor and chat reference\n" +
+  "    signoff/ack exit codes: 0 decided yes · 3 rejected · 4 announced, answer on the channel then re-run with --request · 5 no trusted channel · 6 refused (stale/replay/wrong scope)\n" +
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh\n" +
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them\n" +
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role\n" +
@@ -254,12 +250,13 @@ export const USAGE =
   "underlying flag-based form:\n" +
   "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
-  "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
+  "  sta --task-id <id> --module <name> [--token-budget <n>]                           run with optional token budget control\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
   "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  sta --check-prompt-budget [--project-root <path>]  check the static prompt floor: CLAUDE.md + agent prompt budgets, no policies pre-read, pointers resolve\n" +
   "  sta --check-workflows [--project-root <path>]      check generated workflows/*.yml byte-match the classifier\n" +
+  "  sta --check-workflow-roles [--project-root <path>] check every stage a compiled workflow plan can select has a role contract and an evidence rule\n" +
   "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills), the .codex/hooks mirrors and each hook's generated guard-rule block byte-match their sources\n" +
   "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  sta --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
@@ -275,10 +272,9 @@ export const USAGE =
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json into <out-dir>\n" +
   "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json against the project's real files — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
-  "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/\n" +
   "  sta --check-git-ownership [--project-root <path>]  check that Git mutation stays inside orchestrator/src/git/ and forbidden subcommands are absent\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
-  "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --yes|--no`\n" +
+  "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits a person's answer on the trusted channel, then `sta approve <task-id> --request <request-id>`\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -293,6 +289,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkLayoutFlag = false;
   let checkPromptBudgetFlag = false;
   let checkWorkflowsFlag = false;
+  let checkWorkflowRolesFlag = false;
   let checkBindingsFlag = false;
   let checkProfileFlag = false;
   let checkDecisionsFlag = false;
@@ -307,7 +304,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkPlanFlag = false;
   let checkKnowledgeFlag = false;
   let checkInstallationFlag = false;
-  let checkRolesFlag = false;
   let checkGitOwnershipFlag = false;
   let buildTemplatesOutDir: string | undefined;
   let environment: Environment = Environment.LOCAL;
@@ -318,9 +314,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let runtime: RuntimeId | undefined;
   let model: string | undefined;
   let effort: string | undefined;
-  let noQaOptimization = false;
-  let noDeterministicGate = false;
-  let noDocumentGate = false;
   let tokenBudget: number | undefined;
   let version = false;
   let rootName: string | undefined;
@@ -380,6 +373,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkPromptBudgetFlag = true;
     } else if (arg === "--check-workflows") {
       checkWorkflowsFlag = true;
+    } else if (arg === "--check-workflow-roles") {
+      checkWorkflowRolesFlag = true;
     } else if (arg === "--check-bindings") {
       checkBindingsFlag = true;
     } else if (arg === "--check-profile") {
@@ -408,8 +403,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkKnowledgeFlag = true;
     } else if (arg === "--check-installation") {
       checkInstallationFlag = true;
-    } else if (arg === "--check-roles") {
-      checkRolesFlag = true;
     } else if (arg === "--check-git-ownership") {
       checkGitOwnershipFlag = true;
     } else if (arg === "--build-templates") {
@@ -456,12 +449,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
           "Use --runtime <id>, --model <name> and/or --effort <name> for this run, or routing.by_role in .sta/config.yaml for a per-role override. " +
           "A route that cannot execute always stops for a person; nothing hands off to another runner.",
       );
-    } else if (arg === "--no-qa-optimization") {
-      noQaOptimization = true;
-    } else if (arg === "--no-deterministic-gate") {
-      noDeterministicGate = true;
-    } else if (arg === "--no-document-gate") {
-      noDocumentGate = true;
     } else if (arg === "--token-budget") {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--token-budget must be a positive integer");
@@ -489,6 +476,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkLayoutFlag &&
     !checkPromptBudgetFlag &&
     !checkWorkflowsFlag &&
+    !checkWorkflowRolesFlag &&
     !checkBindingsFlag &&
     !checkProfileFlag &&
     !checkDecisionsFlag &&
@@ -503,7 +491,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkPlanFlag &&
     !checkKnowledgeFlag &&
     !checkInstallationFlag &&
-    !checkRolesFlag &&
     !checkGitOwnershipFlag &&
     !buildTemplatesOutDir
   ) {
@@ -528,6 +515,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkLayout: checkLayoutFlag,
     checkPromptBudget: checkPromptBudgetFlag,
     checkWorkflows: checkWorkflowsFlag,
+    checkWorkflowRoles: checkWorkflowRolesFlag,
     checkBindings: checkBindingsFlag,
     checkProfile: checkProfileFlag,
     checkDecisions: checkDecisionsFlag,
@@ -542,7 +530,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkPlan: checkPlanFlag,
     checkKnowledge: checkKnowledgeFlag,
     checkInstallation: checkInstallationFlag,
-    checkRoles: checkRolesFlag,
     checkGitOwnership: checkGitOwnershipFlag,
     buildTemplates: buildTemplatesOutDir,
     environment,
@@ -555,9 +542,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     runtime,
     model,
     effort,
-    noQaOptimization,
-    noDeterministicGate,
-    noDocumentGate,
     tokenBudget,
     rootName,
     version,
@@ -590,24 +574,6 @@ export function cliVersion(startDir: string = path.dirname(fileURLToPath(import.
   }
 }
 
-/**
- * Which `provideHumanApproval` field a gate's approval type maps to. Keyed on
- * `approvalType`, not on the edge's target state: `test-planner`
- * (and `project-manager` already did, for the "feature" pipeline) sits between
- * DESIGN and IMPLEMENTATION, so the schema-confirmation gate's target can be
- * PLAN rather than IMPLEMENTATION directly — the approval type is what stays
- * stable, per gatePolicy.ts/approval.ts's matching fix.
- */
-export async function confirm(question: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await rl.question(`${question} [y/N] `);
-    return /^y(es)?$/i.test(answer.trim());
-  } finally {
-    rl.close();
-  }
-}
-
 const VERBS = [
   "run",
   "status",
@@ -623,6 +589,7 @@ const VERBS = [
   "tokens",
   "context",
   "knowledge",
+  "grant",
   "policy",
   "upgrade",
   "migrate",
@@ -682,6 +649,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, d
       return runContextVerb(rest, defaultProjectRoot);
     case "knowledge":
       return runKnowledgeVerb(rest, defaultProjectRoot);
+    case "grant":
+      return runGrantVerb(rest, defaultProjectRoot);
     case "policy":
       return runPolicyVerb(rest, defaultProjectRoot);
     case "projects":
@@ -762,6 +731,13 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     },
     budget: budgetFor(args),
     stateViewPath: defaultStateViewPath(args.projectRoot),
+    // The runtime executor resolves contracts from this root at dispatch.
+    contractRoot: args.projectRoot,
+    // V13 TASK-007: the role-lane prerequisites are a stage-entry guard of the
+    // engine, always on, reading the task's own Knowledge root.
+    stageEntryGuard: createRoleLaneStageGuard({ projectRoot: args.projectRoot, moduleName: args.module, ledger: store }),
+    // V13 TASK-027: the Controller chat relay is the sole production channel.
+    humanDecisionVerifier: resolveHumanDecisionChannel(),
   });
   let lockedTaskId: string | undefined;
 
@@ -819,15 +795,21 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
       { interactive: process.stdin.isTTY === true },
     );
 
-    const composition = await composeProductionTaskExecutor(args, taskId, orchestrator, store, dependencies);
-
-    return await runTaskLoop(orchestrator, registry, composition.executor, {
-      log: (message) => console.log(message),
-      error: (message) => console.error(message),
-      confirm,
-      isTTY: process.stdin.isTTY === true,
-      actor: process.env.USER ?? process.env.USERNAME,
+    // `sta run` is one task through the one task-run service (V13 TASK-007):
+    // the same engine, stage guards, evidence and completion a multi-task run
+    // uses; SINGLE_TASK_POLICY only says where to stop.
+    const result = await runTasks({
+      registry,
+      store,
+      taskIds: [orchestrator.taskId],
+      executorFor: async (running) => (await composeProductionTaskExecutor(taskExecutorOptionsFromArgs(args), running.taskId, running, store, dependencies)).executor,
+      policy: SINGLE_TASK_POLICY,
+      io: {
+        log: (message) => console.log(message),
+        error: (message) => console.error(message),
+      },
     });
+    return result.exitCode;
   } finally {
     if (lockedTaskId) releaseTaskLock(args.projectRoot, lockedTaskId);
     registry.close();

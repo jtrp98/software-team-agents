@@ -63,6 +63,10 @@ function projectWithBinding(): string {
     "---\ndescription: verifies work\nmode: all\npermission:\n  bash:\n    \"git *\": deny\n---\n\nRole text.\n",
     "utf8",
   );
+  // The real-install shape: `sta init`/`sync` ships the sta-guards plugin, and
+  // V13 TASK-014 refuses any headless run whose workspace lacks it.
+  fs.mkdirSync(path.join(root, ".opencode", "plugin"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".opencode", "plugin", "sta-guards.js"), "export const StaGuards = async () => ({});\n", "utf8");
   return root;
 }
 
@@ -100,6 +104,13 @@ describe("parseOpenCodeJsonl", () => {
     ].join("\n");
     const parsed = parseOpenCodeJsonl(ndjson);
     expect(parsed.usage).toEqual({ inputTokens: 40, outputTokens: 10, cachedInputTokens: 15, cacheCreationInputTokens: 25, costUsd: 0.01 });
+  });
+
+  it("V13 TASK-014 lifts the stream's sessionID as the native session reference", () => {
+    const parsed = parseOpenCodeJsonl(SPIKE_NDJSON);
+    expect(parsed.sessionID).toBe("ses_x");
+    // A stream with no sessionID stays absent - never invented.
+    expect(parseOpenCodeJsonl(JSON.stringify({ type: "text", part: { type: "text", text: "x" } }) + "\n").sessionID).toBeUndefined();
   });
 
   it("never throws on garbage lines and keeps absent fields undefined, never zero", () => {
@@ -231,28 +242,53 @@ describe("OpenCodeAdapter", () => {
     expect(result.diagnostics.join("\n")).toMatch(/provider\/auth failure/);
   });
 
-  it("reports pre/post guard enforced only when the sta-guards plugin exists; exit checks stay unenforced", async () => {
+  it("V13 TASK-014 refuses a guarded run before spawn when the sta-guards plugin is missing", async () => {
     const root = projectWithBinding();
-    const { spawn } = okSpawn();
-    const noPlugin = new OpenCodeAdapter({ projectRoot: root, spawnSync: spawn });
+    fs.rmSync(path.join(root, ".opencode", "plugin", "sta-guards.js"));
+    const { spawn, calls } = okSpawn();
+    const adapter = new OpenCodeAdapter({ projectRoot: root, spawnSync: spawn });
     const guarded: RuntimeAgentRequest = requestFor(root, {
       guards: { writeAllow: [], writeDeny: ["**"], forbidCommands: ["git"], exitChecks: ["code-green"] },
     });
 
-    const withoutPlugin = await noPlugin.executeAgent(guarded);
-    expect(withoutPlugin.guards.enforced).toEqual([]);
-    expect(withoutPlugin.guards.unenforced).toContain(RuntimeCapability.PRE_TOOL_GUARD);
-    expect(withoutPlugin.guards.unenforced).toContain(RuntimeCapability.EXIT_GUARD);
-
-    fs.mkdirSync(path.join(root, ".opencode", "plugin"), { recursive: true });
-    fs.writeFileSync(path.join(root, ".opencode", "plugin", "sta-guards.js"), "export const StaGuards = async () => ({});\n", "utf8");
-    const withPlugin = await noPlugin.executeAgent(guarded);
-    expect(withPlugin.guards.enforced).toContain(RuntimeCapability.PRE_TOOL_GUARD);
-    expect(withPlugin.guards.unenforced).toContain(RuntimeCapability.EXIT_GUARD);
-    expect(withPlugin.guards.reason).toMatch(/Stop-hook|post-hoc/);
+    const refused = await adapter.executeAgent(guarded);
+    expect(refused.status).toBe("ERROR");
+    expect(refused.exitCode).toBeNull();
+    expect(refused.diagnostics.join("\n")).toMatch(/refusing to run.*sta-guards[.]js is missing.*allow-all/);
+    expect(refused.guards.unenforced).toContain(RuntimeCapability.PRE_TOOL_GUARD);
+    // No spawn happened - the refusal is the answer, not a degraded run.
+    expect(calls.some((c) => c.args.includes("run"))).toBe(false);
   });
 
-  it("unguarded requests produce an empty guard report either way", async () => {
+  it("V13 TASK-014 refuses every run before spawn when the plugin is missing - allow-all is unguarded even for an unguarded request", async () => {
+    const root = projectWithBinding();
+    fs.rmSync(path.join(root, ".opencode", "plugin", "sta-guards.js"));
+    const { spawn, calls } = okSpawn();
+    const adapter = new OpenCodeAdapter({ projectRoot: root, spawnSync: spawn });
+
+    const refused = await adapter.executeAgent(requestFor(root));
+    expect(refused.status).toBe("ERROR");
+    expect(refused.diagnostics.join("\n")).toMatch(/sta init\/sync/);
+    expect(calls.some((c) => c.args.includes("run"))).toBe(false);
+  });
+
+  it("with the plugin present, pre/post guards are enforced and exit checks stay unenforced with a reason", async () => {
+    const root = projectWithBinding();
+    const { spawn } = okSpawn();
+    const adapter = new OpenCodeAdapter({ projectRoot: root, spawnSync: spawn });
+    const guarded: RuntimeAgentRequest = requestFor(root, {
+      guards: { writeAllow: [], writeDeny: ["**"], forbidCommands: ["git"], exitChecks: ["code-green"] },
+    });
+
+    const result = await adapter.executeAgent(guarded);
+    expect(result.guards.enforced).toContain(RuntimeCapability.PRE_TOOL_GUARD);
+    expect(result.guards.enforced).toContain(RuntimeCapability.POST_TOOL_GUARD);
+    expect(result.guards.unenforced).toContain(RuntimeCapability.EXIT_GUARD);
+    expect(result.guards.unenforced).toContain(RuntimeCapability.PER_AGENT_EXIT_GUARD);
+    expect(result.guards.reason).toMatch(/Stop-hook|post-hoc/);
+  });
+
+it("an unguarded request with the plugin present produces an empty guard report", async () => {
     const root = projectWithBinding();
     const { spawn } = okSpawn();
     const adapter = new OpenCodeAdapter({ projectRoot: root, spawnSync: spawn });

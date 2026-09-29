@@ -30,7 +30,7 @@ export const ExecutionConfigSchema = z.object({
   allow_handoff: z.boolean().optional(),
   /**
    * Ignored. The paid API runtime this key used to gate is retired
-   * (`--runtime` never offers it; production never constructs `ApiAdapter`),
+   * (`--runtime` never offers it; `ApiAdapter` was deleted in V13 TASK-024),
    * so nothing reads this value any more. It stays declared here, still
    * boolean-typed and still round-tripped by `loadStaConfig`, purely so an
    * existing `.sta/config.yaml` or `.agent-team/config.yaml` that still

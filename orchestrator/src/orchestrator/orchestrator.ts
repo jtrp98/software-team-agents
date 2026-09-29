@@ -1,26 +1,45 @@
 import { AgentStage, TaskState } from "../types.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { forceBlock, forwardState, recoverTo, transition, type TaskMachine } from "../state/taskState.js";
-import { MAX_RETRY, initTaskRun, recordFailure, type TaskRun } from "../retry/retryPolicy.js";
-import { decideRecovery, type RecoveryAction } from "../retry/recoveryPolicy.js";
+import { MAX_RETRY, initTaskRun, recordFailure, type FailureKind, type RetryBudget, type TaskRun } from "../retry/retryPolicy.js";
+import { decideRecovery, decideHandoffIntent, RECOVERY_POLICY_VERSION, type RecoveryAction } from "../retry/recoveryPolicy.js";
 import { routeRepair, type RepairRoute } from "../retry/repairRoute.js";
 import { policyFor } from "../escalation/escalationPolicy.js";
 import { routeFailure } from "./failure.js";
-import { checkGate, type GateContext } from "../gates/gatePolicy.js";
+import { z } from "zod";
+import { checkGate, gateContextFor, type StoredGateEvidence } from "../gates/gatePolicy.js";
 import {
+  ApprovalDecisionError,
   ApprovalType,
+  describeHumanActor,
+  applyHumanDecision,
   approvalTypeForEdge,
-  decideApproval as decideApprovalRecord,
   findApproval,
-  gateEvidenceFrom,
+  findApprovalRequest,
   requestApproval,
+  withdrawApproval,
   type ApprovalLedger,
   type ApprovalRecord,
+  type HumanDecisionRecord,
+  type VerifiedHumanDecision,
 } from "../gates/approval.js";
+import {
+  UNCONFIGURED_HUMAN_CHANNEL,
+  UntrustedHumanDecisionError,
+  assertVerifierOutput,
+  type ApprovalPublication,
+  type HumanDecisionSubmission,
+  type HumanDecisionVerifier,
+} from "../gates/humanDecision.js";
+import { DesignGateAssessmentSchema } from "../docs/designEvidence.js";
+import { QaModeDecisionSchema } from "../qa/mode.js";
 import {
   ArtifactType,
   validateArtifact,
   type QaReportArtifact,
+  type ReviewReportArtifact,
   type SecurityReportArtifact,
   type ValidatableArtifactType,
 } from "../artifacts/schemas.js";
@@ -33,24 +52,107 @@ import { assertPermission } from "../agents/permissionPolicy.js";
 import { EventBus } from "../events/eventBus.js";
 import { verdictEventFor, type DomainEventMap } from "../events/domainEvents.js";
 import { describeEvent } from "../audit/auditTrail.js";
-import { assertIndependentVerdict } from "../review/reviewSeparation.js";
+import { REVIEWS, assertIndependentVerdict, checkReviewSeparation } from "../review/reviewSeparation.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { TaskNotFoundError, newPersistedTask, type KnowledgeRootIdentity, type PersistedTask, type TaskStore } from "../store/taskStore.js";
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
 import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
-import type { RuntimeTask } from "./runtimeTask.js";
+import type { StageEntryGuard } from "./stageGuards.js";
+import { acceptWorkflowDocument, assertRuntimeTaskFresh, type RuntimeTask } from "./runtimeTask.js";
+import { ownedDocumentProblems } from "../qa/documentVerificationHook.js";
+import { verifiedArtifactProvenance } from "../knowledge/artifactProvenance.js";
 import {
   assessBusinessInput,
   businessGateReason,
   BusinessInputEvidenceSchema,
   type BusinessInputEvidence,
 } from "../gates/businessInput.js";
+import { contentHash, stableHash } from "../artifacts/executionPacket.js";
+import { readExecutionPacket } from "../state/runtimeArtifacts.js";
+import { resolveAuthoritativeContract } from "../agents/agentContract.js";
+import { canWritePath, pathRulesFor } from "../agents/pathPermissions.js";
+import {
+  DeterministicVerificationSchema,
+  buildEvidence,
+  type EvidencePayload,
+  type EvidenceRecord,
+} from "../evidence/evidenceStore.js";
+import type { DeterministicVerification } from "../qa/deterministic.js";
+import {
+  approvalEvidenceFor,
+  completionRecordFor,
+  decideStageCompletion,
+  decideTaskCompletion,
+  latestAttempt,
+  unmetStateExit,
+  verifyTaskCompletion,
+  type StageCompletionDecision,
+} from "./transitionGuard.js";
+
+const CODE_PRODUCING_STAGES: ReadonlySet<AgentStage> = new Set([AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]);
+const ROLE_DOCUMENT: Partial<Record<AgentStage, string>> = {
+  [AgentStage.BUSINESS_ANALYST]: "requirement.md",
+  [AgentStage.SYSTEM_ANALYST]: "design.md",
+  [AgentStage.PROJECT_MANAGER]: "plan.md",
+  [AgentStage.TEST_PLANNER]: "test-plan.md",
+  [AgentStage.UXUI_DESIGNER]: "uxui/design.md",
+  [AgentStage.REVIEWER]: "review.md",
+  [AgentStage.QA_ENGINEER]: "qa.md",
+  [AgentStage.SECURITY]: "security.md",
+};
+
+/** The stages a reviewer round reviews — the one table `reviewSeparation.ts` states. */
+const REVIEWED_BY_REVIEWER: readonly AgentStage[] = REVIEWS[AgentStage.REVIEWER] ?? [];
+
+/** The failure budget a verdict stage's FAIL spends, or null for a stage that issues no verdict. */
+function failureKindOf(stage: AgentStage): FailureKind | null {
+  if (stage === AgentStage.REVIEWER) return "review";
+  if (stage === AgentStage.QA_ENGINEER) return "qa";
+  if (stage === AgentStage.SECURITY) return "security";
+  return null;
+}
+
+const FAILURE_APPROVAL: Record<FailureKind, ApprovalType> = {
+  review: ApprovalType.REVIEW_FAILURE,
+  qa: ApprovalType.QA_FAILURE,
+  security: ApprovalType.SECURITY_RISK,
+};
+
+/** The persisted deterministic sweep a QA round is handed, with the evidence id it came from. */
+export interface PersistedVerificationRef {
+  evidenceId: string;
+  verification: DeterministicVerification;
+}
+
+/**
+ * V13 TASK-017 — STA's own post-run scope verification verdict for one
+ * attempt: what the executor port's changed-files evidence was graded against,
+ * and what it violated. Produced by the runtime executor's mandatory
+ * postflight, persisted as `scope-postflight` evidence; absent only for an
+ * attempt whose guard scope grants no writes at all.
+ */
+export interface PostflightGuardOutcome {
+  ok: boolean;
+  /** How many changed files were graded. */
+  checked: number;
+  /** One line per violation; empty exactly when `ok`. */
+  violations: readonly string[];
+  /** sha256 over the graded inputs and verdicts — binds the evidence to the exact check. */
+  digest: string;
+  runtimeId: string;
+  contractDigest: string | null;
+}
 
 export interface AgentExecutorRequest {
   stage: AgentStage;
   taskId: string;
+  /** STA reservation key; a runtime must use it when reporting this attempt. */
+  idempotencyKey?: string;
+  /** Called by STA runtime composition after packet verification and before adapter invocation. */
+  recordDispatch?: (identity: { packetPath: string; packetHash: string; contractDigest: string; runtimeId: string }) => void;
   context: ContextItem[];
   /** Only set when stage is DEVOPS: which of the two runs this is, so the executor's prompt can say so. See `isAgentAssignedAt` in taskStatus.ts. */
   deployPhase?: "prepare" | "execute";
@@ -62,6 +164,13 @@ export interface AgentExecutorRequest {
   qaRound?: number;
   /** Bounded intake evidence, supplied only to the BA stage. */
   businessInput?: BusinessInputEvidence;
+  /**
+   * QA_ENGINEER only: the post-Dev deterministic sweep of the latest completed
+   * code-producing attempt, read by STA from the durable evidence store - so a
+   * QA round started by a fresh process sees exactly what the Dev process ran.
+   * Absent when no such record exists; nothing substitutes for it.
+   */
+  deterministicVerification?: PersistedVerificationRef;
 }
 
 export interface AgentExecutorResult {
@@ -70,10 +179,28 @@ export interface AgentExecutorResult {
   artifact?: unknown;
   /** Runtime-state path of the exact packet used for this attempt. */
   packetPath?: string;
-  /** Relayed legacy gate flags. Confirmed BA intake is trusted task input and cannot be supplied by an executing agent. */
-  gateEvidence?: Partial<Omit<GateContext, "businessInput">>;
-  /** Internal marker: post-Dev deterministic failure keeps the cursor on this Dev stage. */
-  postDevVerificationFailed?: boolean;
+  /** STA runtime composition names the on-disk role document it read back. */
+  sourceArtifact?: { path: string };
+  /**
+   * STA-derived gate facts relayed from the execution composition (design
+   * risk assessment, QA mode decision, QA verdict requirements). Strictly
+   * validated: approval facts, reports and business input can never arrive
+   * this way — see `ExecutorGateEvidenceSchema`.
+   */
+  gateEvidence?: ExecutorGateEvidence;
+  /**
+   * The deterministic sweep STA's post-Dev hook ran for a code-producing
+   * stage (`qa/verificationHook.ts`). The orchestrator persists it as
+   * evidence of this attempt in the same transaction as the completion;
+   * after that the store - not this object - is the source of truth.
+   */
+  deterministicVerification?: DeterministicVerification;
+  /**
+   * V13 TASK-017 — the runtime executor's mandatory postflight scope check:
+   * STA's own verdict on the files this attempt actually changed. The
+   * orchestrator persists it as `scope-postflight` evidence of this attempt.
+   */
+  postflightGuard?: PostflightGuardOutcome;
   /**
    * A failure as structured data: what broke, who owns it, whether a person
    * must look. The agent supplies the facts; the orchestrator decides where
@@ -84,12 +211,32 @@ export interface AgentExecutorResult {
   failure?: StructuredFailure;
 }
 
+/**
+ * The only gate facts an executor result may carry. Strict: any other key —
+ * `requirementApproved`, `designApproved`, `humanApproved`, a report, business
+ * input — is refused, so a forged executor result cannot supply approval.
+ */
+export const ExecutorGateEvidenceSchema = z.strictObject({
+  designAssessment: DesignGateAssessmentSchema.optional(),
+  qaModeDecision: QaModeDecisionSchema.optional(),
+  qaVerdictRequirements: z.array(z.string().min(1)).optional(),
+});
+export type ExecutorGateEvidence = z.infer<typeof ExecutorGateEvidenceSchema>;
+
 /** The pluggable seam: the orchestrator is a pure coordinator, it never runs an agent itself. */
 export type AgentExecutor = (req: AgentExecutorRequest) => Promise<AgentExecutorResult> | AgentExecutorResult;
 
 export type OrchestratorStatus =
   | { kind: "RUNNING"; stage: AgentStage }
-  | { kind: "WAITING_FOR_HUMAN"; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null }
+  | {
+      kind: "WAITING_FOR_HUMAN";
+      from: TaskState;
+      to: TaskState;
+      reason: string;
+      approvalType: ApprovalType | null;
+      /** The pending request a trusted human decision must name. Null only for an edge no approval type answers. */
+      requestId: string | null;
+    }
   | { kind: "BLOCKED"; reason: string }
   | { kind: "DEPLOYED" };
 
@@ -108,9 +255,13 @@ export interface OrchestratorEventMap extends DomainEventMap {
   AGENT_ASSIGNED: { taskId: string; stage: AgentStage; inputs: ContextCategory[] };
   /** `artifactType` is what the stage produced, or null for a stage whose work is only code on disk. */
   AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ValidatableArtifactType | null; packetPath: string | null };
-  WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
+  WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null; requestId: string | null };
   TASK_BLOCKED: { taskId: string; reason: string };
-  TASK_DEPLOYED: { taskId: string };
+  TASK_DEPLOYED: { taskId: string; completionEvidenceId: string };
+  /** STA recorded that a stage attempt satisfied every required evidence (`transitionGuard.ts`). */
+  STAGE_COMPLETED: { taskId: string; stage: AgentStage; attempt: number; evidenceId: string; refs: string[] };
+  /** A stage attempt ended without its required evidence; the cursor stays on the stage. */
+  STAGE_INCOMPLETE: { taskId: string; stage: AgentStage; attempt: number; missing: string[] };
 }
 
 export interface OrchestratorOptions {
@@ -138,6 +289,28 @@ export interface OrchestratorOptions {
   runtimeTask?: RuntimeTask | null;
   /** Validated business intake used to select confirmed-input versus interactive BA mode. */
   businessInput?: BusinessInputEvidence;
+  /**
+   * The trusted human channel that authenticates approval decisions. Defaults
+   * to `UNCONFIGURED_HUMAN_CHANNEL`, which refuses every decision — STA fails
+   * closed until a real channel is integrated.
+   */
+  humanDecisionVerifier?: HumanDecisionVerifier;
+  /**
+   * Where `contracts/*.yaml` are read for the reviewer-independence check
+   * (V13 TASK-006) — the same root dispatch resolves contracts from. Defaults
+   * to the framework root.
+   */
+  contractRoot?: string;
+  /**
+   * V13 TASK-007 — asked right before every stage assignment (`advance()`).
+   * Required, with no default: production composition supplies the role-lane
+   * guard (`stageGuards.ts` `createRoleLaneStageGuard`), a test supplies an
+   * explicitly named double. A refusal parks the task as BLOCKED with the
+   * guard's reason without touching the state machine, so it is re-evaluated
+   * on the next `status()` and clears once a person records the missing lane
+   * action.
+   */
+  stageEntryGuard: StageEntryGuard;
 }
 
 function assertCanProduce(stage: AgentStage, artifactType: ValidatableArtifactType): void {
@@ -149,6 +322,15 @@ function assertCanProduce(stage: AgentStage, artifactType: ValidatableArtifactTy
   // asks "is this in the table?", this one asks "is this a review of your own
   // work?", and only the second still holds if someone edits the table.
   assertIndependentVerdict(stage, artifactType);
+}
+
+function rejectionReason(record: ApprovalRecord): string {
+  const decision = record.decision;
+  return (
+    `${record.scope.type} request ${record.requestId} was rejected` +
+    `${decision ? ` by ${describeHumanActor(decision.actor)} via ${decision.source.channel}` : ""}` +
+    `${decision?.note ? `: ${decision.note}` : ""}`
+  );
 }
 
 function implementationStart(pipeline: AgentStage[]): number {
@@ -183,15 +365,19 @@ export class Orchestrator {
   readonly store: TaskStore;
   readonly dependsOn: string[];
   readonly classification: ClassificationResult;
-  readonly runtimeTask: RuntimeTask | null;
+  private compiledTask: RuntimeTask | null;
+  get runtimeTask(): RuntimeTask | null { return this.compiledTask; }
   private readonly pipeline: AgentStage[];
   private readonly implementationStartIndex: number;
   private readonly budget: Budget;
   private readonly now: () => number;
   private readonly createdAt: number;
   private run: TaskRun;
-  private gateContext: GateContext;
-  private artifactStore: Partial<Record<ContextCategory, string>>;
+  private gateContext: StoredGateEvidence;
+  private readonly humanDecisionVerifier: HumanDecisionVerifier;
+  private readonly contractRoot: string;
+  private readonly stageEntryGuard: StageEntryGuard;
+  private artifactStore: Record<string, string>;
   private pipelineCursor: number;
   private blockedReason: string | undefined;
   private lastFailure: StructuredFailure | null;
@@ -222,37 +408,52 @@ export class Orchestrator {
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to. Exposed for the CLI and the run log; not persisted — it is derived, not state. */
   private lastRecovery: RecoveryAction | null = null;
-  /**
-   * The deterministic repair route for the most recent failure (T-V8-015).
-   * Process-local, exactly like `lastRecovery`: it is a derivation of the
-   * persisted `lastFailure`, so a resumed task recomputes it rather than
-   * reading a second stored copy that could drift from the failure it
-   * describes. `invalidates` is empty here because this class holds no task
-   * graph; the descendant set is computed by whoever owns the graph, from the
-   * same `invalidationSetFor`.
-   */
+  private recoveryDecision: PersistedTask["recoveryDecision"] = null;
+  private inFlightAttempt: PersistedTask["inFlightAttempt"] = null;
+  private settledAttempt: PersistedTask["settledAttempt"] = null;
+  /** Last repair policy output, persisted with the failure it classified. */
   private lastRepairRoute: RepairRoute | null = null;
+  /** The intake scope is immutable for a canonical task; handoff refers to its digest. */
+  private frozenScopeDigest(): string | null {
+    if (!this.runtimeTask || !("version" in this.runtimeTask) || this.runtimeTask.version !== 2) return null;
+    return stableHash({ scope: this.runtimeTask.scope, knowledgeRoot: this.knowledgeRoot, targetBindings: this.targetBindings });
+  }
+  /** The `task-completion` evidence id written when the task reached DEPLOYED; null until then. */
+  private completionEvidenceId: string | null;
+  /** The completion decision for the most recent stage attempt - derived and process-local, for callers explaining a stop. */
+  private lastStageDecision: { stage: AgentStage; attempt: number; decision: StageCompletionDecision } | null = null;
+  /** Depth of the open `atomic()` unit; events reach listeners only once it commits. */
+  private atomicDepth = 0;
+  private pendingEmits: Array<() => void> = [];
 
-  constructor(taskId: string, classification: ClassificationResult, opts?: OrchestratorOptions) {
-    const restore = opts?.restore;
+  constructor(taskId: string, classification: ClassificationResult, opts: OrchestratorOptions) {
+    const restore = opts.restore;
     this.taskId = taskId;
-    this.now = opts?.now ?? Date.now;
-    this.store = opts?.store ?? new MemoryTaskStore();
-    this.budget = opts?.budget ?? DEFAULT_BUDGET;
+    this.now = opts.now ?? Date.now;
+    this.store = opts.store ?? new MemoryTaskStore();
+    this.budget = opts.budget ?? DEFAULT_BUDGET;
     this.classification = classification;
-    this.runtimeTask = restore?.runtimeTask ?? opts?.runtimeTask ?? null;
+    this.compiledTask = restore?.runtimeTask ?? opts.runtimeTask ?? null;
     this.createdAt = restore?.createdAt ?? this.now();
-    this.dependsOn = restore ? [...restore.dependsOn] : [...(opts?.dependsOn ?? [])];
+    this.dependsOn = restore ? [...restore.dependsOn] : [...(opts.dependsOn ?? [])];
     this.pipeline = restore ? restore.machine.pipeline : classification.pipeline;
     this.implementationStartIndex = implementationStart(this.pipeline);
+    this.humanDecisionVerifier = opts.humanDecisionVerifier ?? UNCONFIGURED_HUMAN_CHANNEL;
+    this.contractRoot = opts.contractRoot ?? defaultProjectRoot();
+    this.stageEntryGuard = opts.stageEntryGuard;
 
     if (restore) {
       this.run = { machine: restore.machine, retries: { ...restore.retries } };
       this.gateContext = { ...restore.gateContext };
-      this.artifactStore = { ...restore.artifacts } as Partial<Record<ContextCategory, string>>;
+      this.artifactStore = { ...restore.artifacts };
       this.pipelineCursor = restore.pipelineCursor;
       this.blockedReason = restore.blockedReason ?? undefined;
       this.lastFailure = restore.lastFailure;
+      this.recoveryDecision = restore.recoveryDecision;
+      this.lastRecovery = restore.recoveryDecision?.action ?? null;
+      this.lastRepairRoute = restore.recoveryDecision?.repairRoute ?? null;
+      this.inFlightAttempt = restore.inFlightAttempt;
+      this.settledAttempt = restore.settledAttempt;
       this.approvals = [...restore.approvals];
       this.paused = restore.paused;
       this.cancelled = restore.cancelled;
@@ -261,27 +462,32 @@ export class Orchestrator {
       this.deployPrepared = restore.deployPrepared;
       this.targetBindings = restore.targetBindings;
       this.knowledgeRoot = restore.knowledgeRoot ?? null;
+      this.completionEvidenceId = restore.completionEvidenceId;
       // Seeded from the store so budget accounting counts what the
       // earlier process already spent — a resumed task must not get a fresh
       // token allowance just because it restarted.
       this.runLog = new RunLog(this.store.runsForTask(taskId));
     } else {
       this.run = initTaskRun(classification.pipeline, classification.requiresHumanApproval);
-      this.gateContext = opts?.businessInput
+      this.gateContext = opts.businessInput
         ? { businessInput: BusinessInputEvidenceSchema.parse(opts.businessInput) }
         : {};
       this.artifactStore = {};
       this.pipelineCursor = 0;
       this.blockedReason = undefined;
       this.lastFailure = null;
+      this.recoveryDecision = null;
+      this.inFlightAttempt = null;
+      this.settledAttempt = null;
       this.approvals = [];
       this.paused = false;
       this.cancelled = false;
       this.cancelReason = null;
-      this.taskEnvironment = opts?.environment ?? Environment.LOCAL;
+      this.taskEnvironment = opts.environment ?? Environment.LOCAL;
       this.deployPrepared = false;
-      this.targetBindings = opts?.targetBindings ?? { targets: [] };
-      this.knowledgeRoot = opts?.knowledgeRoot ?? null;
+      this.targetBindings = opts.targetBindings ?? { targets: [] };
+      this.knowledgeRoot = opts.knowledgeRoot ?? null;
+      this.completionEvidenceId = null;
       this.runLog = new RunLog();
       this.store.createTask(
         newPersistedTask({
@@ -291,7 +497,7 @@ export class Orchestrator {
           machine: this.run.machine,
           now: this.createdAt,
           environment: this.taskEnvironment,
-          targetBindings: opts?.targetBindings,
+          targetBindings: opts.targetBindings,
           runtimeTask: this.runtimeTask,
           gateContext: this.gateContext,
           knowledgeRoot: this.knowledgeRoot,
@@ -309,7 +515,7 @@ export class Orchestrator {
   static resume(
     taskId: string,
     store: TaskStore,
-    opts?: Omit<OrchestratorOptions, "store" | "dependsOn" | "restore">,
+    opts: Omit<OrchestratorOptions, "store" | "dependsOn" | "restore">,
   ): Orchestrator {
     const stored = store.loadTask(taskId);
     if (!stored) throw new TaskNotFoundError(taskId);
@@ -320,7 +526,7 @@ export class Orchestrator {
   static fromPersisted(
     stored: PersistedTask,
     store: TaskStore,
-    opts?: Omit<OrchestratorOptions, "store" | "dependsOn" | "restore">,
+    opts: Omit<OrchestratorOptions, "store" | "dependsOn" | "restore">,
   ): Orchestrator {
     return new Orchestrator(stored.taskId, stored.classification, { ...opts, store, restore: stored });
   }
@@ -329,7 +535,7 @@ export class Orchestrator {
     return this.run.machine;
   }
 
-  get retries(): { qa: number; security: number } {
+  get retries(): RetryBudget {
     return this.run.retries;
   }
 
@@ -365,6 +571,9 @@ export class Orchestrator {
       pipelineCursor: this.pipelineCursor,
       blockedReason: this.blockedReason ?? null,
       lastFailure: this.lastFailure,
+      recoveryDecision: this.recoveryDecision,
+      inFlightAttempt: this.inFlightAttempt,
+      settledAttempt: this.settledAttempt,
       paused: this.paused,
       cancelled: this.cancelled,
       cancelReason: this.cancelReason,
@@ -372,7 +581,193 @@ export class Orchestrator {
       deployPrepared: this.deployPrepared,
       targetBindings: this.targetBindings,
       knowledgeRoot: this.knowledgeRoot,
+      completionEvidenceId: this.completionEvidenceId,
     };
+  }
+
+  /** Every persisted evidence record of this task, re-validated on read. */
+  evidence(): EvidenceRecord[] {
+    return this.store.evidenceForTask(this.taskId);
+  }
+
+  /** Why the most recent stage attempt did or did not complete (null before any attempt in this process). */
+  get stageDecision(): { stage: AgentStage; attempt: number; decision: StageCompletionDecision } | null {
+    return this.lastStageDecision;
+  }
+
+  /**
+   * Runs `fn` as one unit against the store and this object's state: every
+   * store write inside it (task row, run, events, evidence) commits together
+   * in one `TaskStore.transaction`, and on any throw both the store and the
+   * in-memory fields are restored to what they were before. Listeners hear
+   * the unit's events only after it commits, so nobody observes a transition
+   * that was rolled back. Nested calls join the open unit.
+   */
+  private atomic<T>(fn: () => T): T {
+    if (this.atomicDepth > 0) return fn();
+    const saved = {
+      compiledTask: this.compiledTask,
+      run: this.run,
+      gateContext: { ...this.gateContext },
+      artifactStore: { ...this.artifactStore },
+      pipelineCursor: this.pipelineCursor,
+      blockedReason: this.blockedReason,
+      lastFailure: this.lastFailure,
+      approvals: this.approvals,
+      lastStatusKey: this.lastStatusKey,
+      deployPrepared: this.deployPrepared,
+      stateBeforeFailure: this.stateBeforeFailure,
+      lastRecovery: this.lastRecovery,
+      recoveryDecision: this.recoveryDecision,
+      inFlightAttempt: this.inFlightAttempt,
+      settledAttempt: this.settledAttempt,
+      lastRepairRoute: this.lastRepairRoute,
+      completionEvidenceId: this.completionEvidenceId,
+      lastStageDecision: this.lastStageDecision,
+      runCount: this.runLog.size(),
+    };
+    this.atomicDepth += 1;
+    let result: T;
+    try {
+      result = this.store.transaction(fn);
+    } catch (error) {
+      this.atomicDepth -= 1;
+      this.pendingEmits = [];
+      this.run = saved.run;
+      this.compiledTask = saved.compiledTask;
+      this.gateContext = saved.gateContext;
+      this.artifactStore = saved.artifactStore;
+      this.pipelineCursor = saved.pipelineCursor;
+      this.blockedReason = saved.blockedReason;
+      this.lastFailure = saved.lastFailure;
+      this.approvals = saved.approvals;
+      this.lastStatusKey = saved.lastStatusKey;
+      this.deployPrepared = saved.deployPrepared;
+      this.stateBeforeFailure = saved.stateBeforeFailure;
+      this.lastRecovery = saved.lastRecovery;
+      this.recoveryDecision = saved.recoveryDecision;
+      this.inFlightAttempt = saved.inFlightAttempt;
+      this.settledAttempt = saved.settledAttempt;
+      this.lastRepairRoute = saved.lastRepairRoute;
+      this.completionEvidenceId = saved.completionEvidenceId;
+      this.lastStageDecision = saved.lastStageDecision;
+      this.runLog.truncate(saved.runCount);
+      throw error;
+    }
+    this.atomicDepth -= 1;
+    const emits = this.pendingEmits;
+    this.pendingEmits = [];
+    for (const deliver of emits) deliver();
+    return result;
+  }
+
+  /** Builds and appends one evidence record of this task inside the open unit. */
+  private recordEvidence(params: {
+    stage: AgentStage;
+    attempt: number;
+    role: string;
+    subject: string;
+    payload: EvidencePayload;
+    refs?: string[];
+  }): EvidenceRecord {
+    return this.store.appendEvidence(
+      buildEvidence({
+        taskId: this.taskId,
+        stage: params.stage,
+        attempt: params.attempt,
+        role: params.role,
+        subject: params.subject,
+        payload: params.payload,
+        refs: params.refs ?? [],
+        recordedAt: this.now(),
+      }),
+    );
+  }
+
+  /** A governed attempt is reserved only after its exact packet is on disk,
+   * before the adapter can touch Knowledge or a Target. A crash leaves the
+   * reservation unresolved and a second command cannot silently rerun it. */
+  private recordRoleDispatch(
+    stage: AgentStage,
+    attempt: number,
+    idempotencyKey: string,
+    identity: { packetPath: string; packetHash: string; contractDigest: string; runtimeId: string },
+  ): void {
+    this.atomic(() => {
+      if (!this.knowledgeRoot || !this.runtimeTask || !("version" in this.runtimeTask) || this.runtimeTask.version !== 2) {
+        throw new Error(`${stage}: no canonical Knowledge-bound task for dispatch`);
+      }
+      if (this.pipeline[this.pipelineCursor] !== stage || latestAttempt(this.evidence(), stage) + 1 !== attempt ||
+          idempotencyKey !== `${this.taskId}:${stage}:${attempt}`) {
+        throw new Error(`${stage}: dispatch does not match assigned attempt`);
+      }
+      if (this.inFlightAttempt) throw new Error(`attempt ${this.inFlightAttempt.idempotencyKey} already has a dispatch`);
+      assertRuntimeTaskFresh(this.runtimeTask);
+      for (const predecessor of this.runtimeTask.workflow_origin?.accepted ?? []) {
+        const verified = verifiedArtifactProvenance(this.store, predecessor.evidence_id);
+        const completion = this.evidence().find(item => item.kind === "stage-completion" && item.stage === predecessor.stage && item.attempt === verified.attempt && item.refs.includes(predecessor.evidence_id));
+        if (verified.taskId !== this.taskId || verified.stage !== predecessor.stage || verified.sourceDigest !== predecessor.hash ||
+            !verified.knowledgePath || path.resolve(this.knowledgeRoot.path, verified.knowledgePath) !== predecessor.source || !completion) {
+          throw new Error(`${stage}: workflow predecessor lacks matching accepted artifact/completion evidence`);
+        }
+      }
+      const root = fs.realpathSync(this.knowledgeRoot.path);
+      const absolute = path.resolve(root, identity.packetPath);
+      const real = fs.realpathSync(absolute);
+      const within = path.relative(root, real);
+      if (within.startsWith("..") || path.isAbsolute(within) || absolute !== real) {
+        throw new Error(`${stage}: dispatch packet escapes the frozen Knowledge root`);
+      }
+      const packet = readExecutionPacket(real, { packetHash: identity.packetHash, planHash: this.runtimeTask.plan_hash });
+      if (packet.task_id !== this.taskId || packet.stage !== stage || packet.role !== AGENT_REGISTRY[stage].role) {
+        throw new Error(`${stage}: dispatch packet has a different task, stage or role`);
+      }
+      const contractDigest = resolveAuthoritativeContract(stage, this.contractRoot).digest;
+      if (identity.contractDigest !== contractDigest) throw new Error(`${stage}: dispatch contract digest differs from authoritative role contract`);
+      const scopeDigest = this.frozenScopeDigest();
+      if (!scopeDigest) throw new Error(`${stage}: canonical frozen scope is absent`);
+      let sourceBeforeDigest: string | null = null;
+      const expectedDoc = ROLE_DOCUMENT[stage];
+      if (expectedDoc) {
+        const expected = path.resolve(path.dirname(this.runtimeTask.plan_source), expectedDoc);
+        const relativeDoc = path.relative(root, expected);
+        if (relativeDoc.startsWith("..") || path.isAbsolute(relativeDoc)) throw new Error(`${stage}: role document escapes the frozen Knowledge root`);
+        const rel = relativeDoc.replace(/\\/g, "/");
+        if (!canWritePath(pathRulesFor(stage, this.contractRoot), rel).allowed ||
+            !canWritePath({ write: packet.scope.allow, deny: packet.scope.deny, read: [] }, rel).allowed) {
+          throw new Error(`${stage}: role document is outside authoritative contract or packet write scope`);
+        }
+        if (fs.existsSync(expected)) {
+          if (fs.realpathSync(expected) !== expected) throw new Error(`${stage}: role document is not a regular canonical path`);
+          sourceBeforeDigest = contentHash(fs.readFileSync(expected));
+        }
+      }
+      this.recordEvidence({
+        stage, attempt, role: AGENT_REGISTRY[stage].role, subject: "dispatch",
+        payload: { kind: "role-dispatch", idempotencyKey, packetPath: identity.packetPath,
+          packetHash: identity.packetHash, contractDigest, scopeDigest, runtimeId: identity.runtimeId,
+          sourceBeforeDigest },
+      });
+      this.inFlightAttempt = { stage, attempt, idempotencyKey };
+      this.persist();
+    });
+  }
+
+  /**
+   * The persisted deterministic sweep of the most recently completed
+   * code-producing attempt - what a QA round verifies against. Read from the
+   * store, so it is the same answer in the process that ran Dev and in any
+   * process started after that one exited.
+   */
+  persistedVerification(records: readonly EvidenceRecord[] = this.evidence()): PersistedVerificationRef | undefined {
+    const completions = records.filter((r) => r.kind === "stage-completion" && CODE_PRODUCING_STAGES.has(r.stage));
+    const latest = completions[completions.length - 1];
+    if (!latest) return undefined;
+    const record = records.find(
+      (r) => r.kind === "deterministic-verification" && r.stage === latest.stage && r.attempt === latest.attempt,
+    );
+    if (!record || record.payload.kind !== "deterministic-verification") return undefined;
+    return { evidenceId: record.evidenceId, verification: record.payload.verification as DeterministicVerification };
   }
 
   private persist(): void {
@@ -384,59 +779,184 @@ export class Orchestrator {
     return [...this.approvals];
   }
 
+  /** The request a human decision must currently name, if any. */
+  pendingApprovalRequest(): ApprovalRecord | null {
+    return this.approvals.find((a) => a.status === "pending") ?? null;
+  }
+
   /**
-   * Records a person's answer to an approval this task actually asked for.
+   * Where this task's configured channel announced `requestId`, read from
+   * persisted `approval-publication` evidence — never from the channel or a
+   * caller, so a decision is looked for only where STA itself asked.
+   */
+  approvalPublication(requestId: string, records: readonly EvidenceRecord[] = this.evidence()): ApprovalPublication | null {
+    for (const record of records) {
+      const payload = record.payload;
+      if (payload.kind !== "approval-publication") continue;
+      if (payload.requestId !== requestId || payload.channel !== this.humanDecisionVerifier.channel) continue;
+      return { channel: payload.channel, ref: payload.ref, url: payload.url };
+    }
+    return null;
+  }
+
+  /**
+   * Announces the pending request on the trusted channel (chat-relay: binds
+   * the request ID for the Controller to present in chat) and persists where,
+   * exactly once per request. Returns null when
+   * nothing is pending or the channel has nothing to announce (unconfigured).
+   * A channel failure throws and leaves the request pending — publication is
+   * how a person learns of the question, never a decision.
+   *
+   * The channel is awaited outside any store transaction; the record is then
+   * written only if the request is still the pending one. A crash between the
+   * two can leave one unrecorded announcement behind (a second presentation of
+   * the same request on the next publish), never a decision.
+   */
+  async publishPendingApproval(): Promise<(ApprovalPublication & { requestId: string; fresh: boolean }) | null> {
+    const pending = this.pendingApprovalRequest();
+    if (!pending) return null;
+    const existing = this.approvalPublication(pending.requestId);
+    if (existing) return { ...existing, requestId: pending.requestId, fresh: false };
+    const verifier = this.humanDecisionVerifier;
+    if (!verifier.publish) return null;
+    const artifacts = this.latestArtifactDigests();
+    const published = await verifier.publish({ request: pending, artifacts });
+    if (published.channel !== verifier.channel) {
+      throw new UntrustedHumanDecisionError(`channel ${verifier.channel} reported a publication on channel ${published.channel}`);
+    }
+    this.atomic(() => {
+      if (this.pendingApprovalRequest()?.requestId !== pending.requestId) {
+        throw new ApprovalDecisionError("not-pending", `approval request ${pending.requestId} stopped being pending while it was being published`);
+      }
+      this.recordEvidence({
+        stage: AgentStage.HUMAN,
+        attempt: 1,
+        role: "orchestrator",
+        subject: pending.requestId,
+        payload: {
+          kind: "approval-publication",
+          requestId: pending.requestId,
+          type: pending.scope.type,
+          channel: published.channel,
+          ref: published.ref,
+          url: published.url,
+          artifacts: artifacts.map((a) => ({ ...a })),
+        },
+        refs: artifacts.map((a) => a.evidenceId),
+      });
+    });
+    return { ...published, requestId: pending.requestId, fresh: true };
+  }
+
+  /** The latest artifact evidence per artifact type — what an announced approval is about. */
+  private latestArtifactDigests(): Array<{ artifactType: string; contentDigest: string; evidenceId: string }> {
+    const latest = new Map<string, { artifactType: string; contentDigest: string; evidenceId: string }>();
+    for (const record of this.evidence()) {
+      if (record.payload.kind !== "artifact") continue;
+      latest.set(record.payload.artifactType, {
+        artifactType: record.payload.artifactType,
+        contentDigest: record.payload.contentDigest,
+        evidenceId: record.evidenceId,
+      });
+    }
+    return [...latest.values()];
+  }
+
+  /**
+   * Records a human answer to a pending request — the only way an approval
+   * state is ever set. The configured trusted channel must authenticate the
+   * submission (the default channel refuses everything), and the ledger then
+   * refuses an unknown, settled, superseded, wrong-scope or replayed decision.
+   * Nothing is written unless every check passes.
+   *
+   * The channel is awaited before the store transaction opens, and the
+   * pending check runs again inside it against the persisted row, so a
+   * decision recorded meanwhile by another process is refused as not-pending.
+   * After the commit the channel may settle its announcement (close the
+   * Issue); a failure there is reported and can never undo the decision.
    *
    * A rejection is an answer, not an absence: it is stored as `rejected`, and
    * `advance()` blocks the task on it rather than posing the same question on
-   * the next poll — otherwise a "no" would degrade into a re-prompt until
-   * someone eventually said yes.
+   * the next poll.
    */
-  decideApproval(
-    type: ApprovalType,
-    approved: boolean,
-    opts: { by?: string; note?: string } = {},
-  ): void {
-    this.approvals = decideApprovalRecord(this.approvals, {
-      type,
-      approved,
-      now: this.now(),
-      by: opts.by,
-      note: opts.note,
+  async submitHumanDecision(submission: HumanDecisionSubmission): Promise<{ decision: HumanDecisionRecord; settleError: string | null }> {
+    const request = this.decidableRequest(submission.requestId);
+    const verifier = this.humanDecisionVerifier;
+    const publication = this.approvalPublication(request.requestId);
+    const verified = assertVerifierOutput(
+      verifier,
+      submission,
+      await verifier.verify(request, submission, { now: this.now(), publication }),
+    );
+    this.atomic(() => this.applyVerifiedDecision(request, verified));
+    let settleError: string | null = null;
+    if (verifier.settle) {
+      try {
+        await verifier.settle(request, verified.decision, publication);
+      } catch (e) {
+        settleError = e instanceof Error ? e.message : String(e);
+      }
+    }
+    return { decision: verified.decision, settleError };
+  }
+
+  private decidableRequest(requestId: string): ApprovalRecord {
+    const request = findApprovalRequest(this.approvals, requestId);
+    if (!request) {
+      throw new ApprovalDecisionError(
+        "unknown-request",
+        `no approval request ${requestId} was opened for task ${this.taskId} — a decision cannot precede the question`,
+      );
+    }
+    if (request.status !== "pending") {
+      throw new ApprovalDecisionError("not-pending", `approval request ${request.requestId} is already ${request.status}`);
+    }
+    return request;
+  }
+
+  private applyVerifiedDecision(request: ApprovalRecord, verified: VerifiedHumanDecision): void {
+    // The verifier ran outside the transaction: re-read the persisted row so a
+    // decision another process recorded meanwhile is a refusal, not a race.
+    const onDisk = findApprovalRequest(this.store.loadTask(this.taskId)?.approvals ?? [], request.requestId);
+    if (onDisk && onDisk.status !== "pending") {
+      throw new ApprovalDecisionError("not-pending", `approval request ${request.requestId} is already ${onDisk.status}`);
+    }
+    this.decidableRequest(request.requestId);
+    this.approvals = applyHumanDecision(this.approvals, verified);
+    // The decision is evidence too: the ledger says a person answered, this
+    // record puts the answer in the chain a transition and Done reference.
+    this.recordEvidence({
+      stage: AgentStage.HUMAN,
+      attempt: 1,
+      role: "human",
+      subject: request.requestId,
+      payload: {
+        kind: "approval-decision",
+        requestId: request.requestId,
+        decisionId: verified.decision.decisionId,
+        type: request.scope.type,
+        approved: verified.decision.approved,
+        actorId: verified.decision.actor.id,
+        ...(verified.decision.actor.id === null ? { actorUnavailableReason: verified.decision.actor.unavailableReason } : {}),
+        channel: verified.decision.source.channel,
+        evidenceRef: verified.decision.source.evidenceRef,
+      },
     });
-    this.syncGateEvidence();
     this.persist();
     // The answer is an event too — otherwise a listener could observe every
     // question the pipeline ever asked and never learn what a person said back.
     this.emitAndStore("APPROVAL_DECIDED", {
       taskId: this.taskId,
-      type,
-      approved,
-      by: opts.by ?? null,
+      requestId: request.requestId,
+      type: request.scope.type,
+      approved: verified.decision.approved,
+      actorId: verified.decision.actor.id,
+      ...(verified.decision.actor.id === null ? { actorUnavailableReason: verified.decision.actor.unavailableReason } : {}),
+      channel: verified.decision.source.channel,
+      evidenceRef: verified.decision.source.evidenceRef,
+      decisionId: verified.decision.decisionId,
+      note: verified.decision.note,
     });
-  }
-
-  /**
-   * The legacy entry point, kept working: it maps a gate field back to the
-   * approval type that feeds it. Callers that know which decision
-   * they are answering should use `decideApproval` instead — this cannot
-   * express a rejection distinctly.
-   */
-  provideHumanApproval(field: "requirementApproved" | "designApproved" | "humanApproved", value: boolean): void {
-    const type =
-      field === "requirementApproved"
-        ? ApprovalType.REQUIREMENT_INTERVIEW
-        : field === "designApproved"
-          ? ApprovalType.SCHEMA_CONFIRMATION
-          : ApprovalType.DEPLOY;
-    if (!findApproval(this.approvals, type)) {
-      // The gate has not been reached yet, so there is no question to answer.
-      // Record the evidence directly, as this method always did.
-      this.gateContext = { ...this.gateContext, [field]: value };
-      this.persist();
-      return;
-    }
-    this.decideApproval(type, value);
   }
 
   /**
@@ -444,10 +964,11 @@ export class Orchestrator {
    * exact human answer can discharge a material-business gate: approving the
    * generic gate flag alone never manufactures the missing decision.
    */
-  provideBusinessInput(
-    input: BusinessInputEvidence,
-    opts: { by?: string } = {},
-  ): void {
+  provideBusinessInput(input: BusinessInputEvidence): void {
+    this.atomic(() => this.replaceBusinessInput(input));
+  }
+
+  private replaceBusinessInput(input: BusinessInputEvidence): void {
     if (this.run.machine.current !== TaskState.REQUIREMENT) {
       throw new Error(
         `business input can only be replaced at REQUIREMENT; current state is ${this.run.machine.current}`,
@@ -466,10 +987,12 @@ export class Orchestrator {
       assessBusinessInput(parsed).canNormalizeWithoutInterview &&
       pending?.status === "pending"
     ) {
-      this.decideApproval(ApprovalType.REQUIREMENT_INTERVIEW, true, {
-        by: opts.by ?? parsed.owner ?? undefined,
-        note: "resolved by updated confirmed-input evidence",
-      });
+      // Evidence discharges the gate; no person answered. Closing the request as
+      // withdrawn records that without manufacturing a human approval.
+      const reason = "discharged by updated confirmed-input evidence";
+      this.approvals = withdrawApproval(this.approvals, pending.requestId, { now: this.now(), reason });
+      this.persist();
+      this.emitAndStore("APPROVAL_WITHDRAWN", { taskId: this.taskId, requestId: pending.requestId, type: pending.scope.type, reason });
       return;
     }
     this.persist();
@@ -484,17 +1007,12 @@ export class Orchestrator {
    * store on every single `status()` call. Comparing the reference is what makes
    * "a question was opened" a one-time fact rather than a per-poll one.
    */
-  private openApproval(params: { type: ApprovalType; reason: string; from?: TaskState; to?: TaskState }): void {
+  private openApproval(params: { type: ApprovalType; reason: string; from?: TaskState; to?: TaskState }): ApprovalRecord {
     const before = this.approvals;
-    this.approvals = requestApproval(before, { ...params, now: this.now() });
-    if (this.approvals === before) return;
-    const record = findApproval(this.approvals, params.type);
-    if (record) this.emitAndStore("APPROVAL_REQUIRED", { taskId: this.taskId, approval: record });
-  }
-
-  /** Keeps the gate's booleans equal to the ledger — the ledger is the source, these are the derivation. */
-  private syncGateEvidence(): void {
-    this.gateContext = { ...this.gateContext, ...gateEvidenceFrom(this.approvals) };
+    this.approvals = requestApproval(before, { ...params, taskId: this.taskId, now: this.now() });
+    const record = findApproval(this.approvals, params.type)!;
+    if (this.approvals !== before) this.emitAndStore("APPROVAL_REQUIRED", { taskId: this.taskId, approval: record });
+    return record;
   }
 
   private statusKey(status: OrchestratorStatus): string {
@@ -532,13 +1050,14 @@ export class Orchestrator {
             to: status.to,
             reason: status.reason,
             approvalType: status.approvalType,
+            requestId: status.requestId,
           });
           break;
         case "BLOCKED":
           this.emitAndStore("TASK_BLOCKED", { taskId: this.taskId, reason: status.reason });
           break;
         case "DEPLOYED":
-          this.emitAndStore("TASK_DEPLOYED", { taskId: this.taskId });
+          this.emitAndStore("TASK_DEPLOYED", { taskId: this.taskId, completionEvidenceId: this.completionEvidenceId! });
           // Same moment, different fact: TASK_DEPLOYED is the transition,
           // DEPLOY_COMPLETED is what reaching it cost.
           this.emitAndStore("DEPLOY_COMPLETED", this.deploySummary());
@@ -583,7 +1102,8 @@ export class Orchestrator {
    * about what "actor" means.
    */
   private emitAndStore<K extends keyof OrchestratorEventMap & string>(type: K, payload: OrchestratorEventMap[K]): void {
-    this.events.emit(type, payload);
+    if (this.atomicDepth > 0) this.pendingEmits.push(() => this.events.emit(type, payload));
+    else this.events.emit(type, payload);
     const record = payload as unknown as Record<string, unknown>;
     this.store.appendEvent({
       taskId: this.taskId,
@@ -602,9 +1122,24 @@ export class Orchestrator {
   private advance(): OrchestratorStatus {
     for (;;) {
       const current = this.run.machine.current;
-      if (current === TaskState.DEPLOYED) return this.settle({ kind: "DEPLOYED" });
+      if (current === TaskState.DEPLOYED) {
+        // Done is DEPLOYED *and* verified completion evidence; a row whose
+        // evidence does not back it is reported as blocked, never as Done.
+        const verified = verifyTaskCompletion(this.store, {
+          taskId: this.taskId,
+          machine: this.run.machine,
+          completionEvidenceId: this.completionEvidenceId,
+        });
+        if (!verified.done) {
+          return this.settle({ kind: "BLOCKED", reason: `DEPLOYED is not backed by completion evidence: ${verified.reason}` });
+        }
+        return this.settle({ kind: "DEPLOYED" });
+      }
       if (current === TaskState.BLOCKED) {
         return this.settle({ kind: "BLOCKED", reason: this.blockedReason ?? "blocked" });
+      }
+      if (this.inFlightAttempt) {
+        return this.settle({ kind: "BLOCKED", reason: `attempt ${this.inFlightAttempt.idempotencyKey} has an unresolved executor outcome; reconcile it before another dispatch` });
       }
 
       const stage = this.pipeline[this.pipelineCursor];
@@ -627,14 +1162,11 @@ export class Orchestrator {
           const reason = businessGateReason(assessment);
           const existing = findApproval(this.approvals, ApprovalType.REQUIREMENT_INTERVIEW);
           if (existing?.status === "rejected") {
-            this.blockedReason =
-              `${ApprovalType.REQUIREMENT_INTERVIEW} was rejected` +
-              `${existing.decidedBy ? ` by ${existing.decidedBy}` : ""}` +
-              `${existing.note ? `: ${existing.note}` : ""}`;
+            this.blockedReason = rejectionReason(existing);
             this.run = { ...this.run, machine: forceBlock(this.run.machine) };
             return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
           }
-          this.openApproval({
+          const request = this.openApproval({
             type: ApprovalType.REQUIREMENT_INTERVIEW,
             reason,
             from: current,
@@ -646,10 +1178,23 @@ export class Orchestrator {
             to: next,
             reason,
             approvalType: ApprovalType.REQUIREMENT_INTERVIEW,
+            requestId: request.status === "pending" ? request.requestId : null,
           });
         }
       }
       if (stage !== undefined && isAgentAssignedAt(stage, current, this.deployPrepared)) {
+        // The stage-entry guard (V13 TASK-007): a refusal is a stop, not a
+        // failure — nothing is dispatched, no role-run is recorded, and the
+        // machine is not forced to BLOCKED, so this is asked again on the
+        // next poll and clears once a person records the missing lane action.
+        const entry = this.stageEntryGuard({
+          taskId: this.taskId,
+          stage,
+          level: this.classification.level,
+          knowledgeRoot: this.knowledgeRoot,
+          runtimeTask: this.runtimeTask,
+        });
+        if (!entry.allowed) return this.settle({ kind: "BLOCKED", reason: entry.reason });
         return this.settle({ kind: "RUNNING", stage });
       }
 
@@ -659,32 +1204,71 @@ export class Orchestrator {
         return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
       }
 
-      const gate = checkGate(current, next, this.gateContext);
+      // Approval facts come from the persisted ledger at the moment of the check, never from stored booleans.
+      const gate = checkGate(current, next, gateContextFor(this.gateContext, this.approvals));
       if (!gate.allowed) {
         const reason = gate.reason ?? "gate not satisfied";
         const approvalType = approvalTypeForEdge(current, next);
+        let requestId: string | null = null;
 
         if (approvalType) {
           const existing = findApproval(this.approvals, approvalType);
           // A rejection is a decision. Re-asking it would turn "no" into "not yet".
           if (existing?.status === "rejected") {
-            this.blockedReason =
-              `${approvalType} was rejected${existing.decidedBy ? ` by ${existing.decidedBy}` : ""}` +
-              `${existing.note ? `: ${existing.note}` : ""}`;
+            this.blockedReason = rejectionReason(existing);
             this.run = { ...this.run, machine: forceBlock(this.run.machine) };
             return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
           }
-          this.openApproval({ type: approvalType, reason, from: current, to: next });
+          const request = this.openApproval({ type: approvalType, reason, from: current, to: next });
+          requestId = request.status === "pending" ? request.requestId : null;
         }
 
-        return this.settle({ kind: "WAITING_FOR_HUMAN", from: current, to: next, reason, approvalType });
+        return this.settle({ kind: "WAITING_FOR_HUMAN", from: current, to: next, reason, approvalType, requestId });
       }
 
+      const refusal = this.guardForward(current, next);
+      if (refusal) {
+        this.blockedReason = `transition ${current} -> ${next} refused: ${refusal}`;
+        this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+        return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+      }
       this.run = { ...this.run, machine: transition(this.run.machine, next) };
       if (this.run.machine.current === TaskState.BLOCKED) {
         this.blockedReason ??= "unclassifiable task — needs human triage";
       }
     }
+  }
+
+  /**
+   * The evidence half of the one forward-transition guard (the gate half is
+   * `checkGate` just before it in `advance()`). Leaving a state requires a
+   * recorded completion for every stage that ran in it, an approved edge
+   * requires the decision's evidence record, and entering DEPLOYED requires
+   * the whole task to satisfy `decideTaskCompletion` - whose evidence ids are
+   * then written as the `task-completion` record in this same unit. Returns
+   * the refusal reason, or null when the move is justified.
+   */
+  private guardForward(current: TaskState, next: TaskState): string | null {
+    const records = this.evidence();
+    const missing = unmetStateExit({ state: current, pipeline: this.pipeline, cursor: this.pipelineCursor, records });
+    const approvalType = approvalTypeForEdge(current, next);
+    const approval = approvalType ? findApproval(this.approvals, approvalType) : undefined;
+    if (approval?.status === "approved") missing.push(...approvalEvidenceFor([approval], records).missing);
+    if (missing.length > 0) return missing.join("; ");
+    if (next !== TaskState.DEPLOYED) return null;
+
+    const done = decideTaskCompletion({ pipeline: this.pipeline, approvals: this.approvals, records });
+    if (!done.done) return `task is not complete - ${done.missing.join("; ")}`;
+    const completion = this.recordEvidence({
+      stage: AgentStage.HUMAN,
+      attempt: 1,
+      role: "orchestrator",
+      subject: "task",
+      payload: { kind: "task-completion", pipeline: [...this.pipeline] },
+      refs: done.evidenceIds,
+    });
+    this.completionEvidenceId = completion.evidenceId;
+    return null;
   }
 
   /**
@@ -698,7 +1282,7 @@ export class Orchestrator {
   }
 
   status(): OrchestratorStatus {
-    return this.advance();
+    return this.atomic(() => this.advance());
   }
 
   /**
@@ -711,6 +1295,41 @@ export class Orchestrator {
     stage: AgentStage,
     result: AgentExecutorResult,
     timing: { start: number; end: number },
+    idempotencyKey?: string,
+  ): OrchestratorStatus {
+    return this.atomic(() => {
+      const digest = contentHash(JSON.stringify(result));
+      if (idempotencyKey && this.settledAttempt?.idempotencyKey === idempotencyKey) {
+        if (this.settledAttempt.resultDigest !== digest) throw new Error(`attempt ${idempotencyKey} was already settled with different result bytes`);
+        return this.advance();
+      }
+      if (this.inFlightAttempt && (idempotencyKey !== this.inFlightAttempt.idempotencyKey || stage !== this.inFlightAttempt.stage)) {
+        throw new Error(`attempt ${this.inFlightAttempt.idempotencyKey} is reserved; a different or unkeyed result cannot settle it`);
+      }
+      const governed = this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2;
+      if (governed && (result.outcome.result === "PASS" || result.artifact !== undefined) &&
+          (!idempotencyKey || this.inFlightAttempt?.idempotencyKey !== idempotencyKey)) {
+        throw new Error(`${stage}: governed result has no pre-dispatch attempt reservation`);
+      }
+      const reservation = this.inFlightAttempt ?? (idempotencyKey ? { stage, attempt: latestAttempt(this.evidence(), stage) + 1, idempotencyKey } : null);
+      this.inFlightAttempt = null;
+      const status = this.completeAttempt(stage, result, timing);
+      if (reservation) this.settledAttempt = { ...reservation, resultDigest: digest };
+      this.persist();
+      return status;
+    });
+  }
+
+  /**
+   * One stage attempt, applied as one unit (see `atomic`): the run record, its
+   * events, every evidence record of the attempt, STA's completion decision
+   * and the resulting state all commit together, or - on any refusal - none
+   * of them does.
+   */
+  private completeAttempt(
+    stage: AgentStage,
+    result: AgentExecutorResult,
+    timing: { start: number; end: number },
   ): OrchestratorStatus {
     const assigned = this.advance();
     if (assigned.kind !== "RUNNING" || assigned.stage !== stage) {
@@ -719,6 +1338,92 @@ export class Orchestrator {
       );
     }
 
+    // Refusals come first and throw; the unit rolls back, so a forged or
+    // malformed result leaves no run, event, evidence or gate state behind.
+    let gateEvidence: ExecutorGateEvidence | undefined;
+    if (result.gateEvidence !== undefined) {
+      const evidence = ExecutorGateEvidenceSchema.safeParse(result.gateEvidence);
+      if (!evidence.success) {
+        throw new Error(
+          `${stage}: executor gateEvidence refused - only designAssessment, qaModeDecision and qaVerdictRequirements are accepted; ` +
+            `approvals, reports and business input cannot be supplied by an executing agent (${evidence.error.message})`,
+        );
+      }
+      gateEvidence = evidence.data;
+    }
+    let artifact: { type: ValidatableArtifactType; stored: string; verdict: string | null } | undefined;
+    if (result.artifactType !== undefined && result.artifact !== undefined) {
+      assertCanProduce(stage, result.artifactType);
+      const validated = validateArtifact(result.artifactType, result.artifact);
+      const verdict =
+        result.artifactType === ArtifactType.REVIEW_REPORT
+          ? (validated as ReviewReportArtifact).verdict
+          : result.artifactType === ArtifactType.QA_REPORT
+            ? (validated as QaReportArtifact).status
+            : result.artifactType === ArtifactType.SECURITY_REPORT
+              ? (validated as SecurityReportArtifact).overallStatus
+              : null;
+      artifact = { type: result.artifactType, stored: JSON.stringify(validated), verdict };
+    }
+    const assignedAttempt = latestAttempt(this.evidence(), stage) + 1;
+    const dispatch = this.evidence().find((item) => item.kind === "role-dispatch" && item.stage === stage && item.attempt === assignedAttempt);
+    if (this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2 &&
+        (result.outcome.result === "PASS" || artifact)) {
+      if (!dispatch || dispatch.payload.kind !== "role-dispatch") throw new Error(`${stage}: no pre-dispatch evidence for governed artifact`);
+      if (result.packetPath !== dispatch.payload.packetPath || result.outcome.contract_digest !== dispatch.payload.contractDigest ||
+          result.outcome.runtime !== dispatch.payload.runtimeId) {
+        throw new Error(`${stage}: result identity differs from pre-dispatch packet, contract or runtime`);
+      }
+      const root = fs.realpathSync(this.knowledgeRoot.path);
+      const absolute = path.resolve(root, dispatch.payload.packetPath);
+      const real = fs.realpathSync(absolute);
+      const within = path.relative(root, real);
+      if (within.startsWith("..") || path.isAbsolute(within) || absolute !== real) throw new Error(`${stage}: dispatch packet escaped the frozen Knowledge root`);
+      readExecutionPacket(real, { packetHash: dispatch.payload.packetHash, planHash: this.runtimeTask.plan_hash });
+      if (dispatch.payload.scopeDigest !== this.frozenScopeDigest()) throw new Error(`${stage}: frozen scope changed after dispatch`);
+    }
+    let knowledgeSource: { path: string; digest: string } | null = null;
+    const expectedDoc = ROLE_DOCUMENT[stage];
+    if (artifact && expectedDoc && this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2) {
+      if (!result.outcome.contract_digest || !result.packetPath) {
+        throw new Error(`${stage}: Knowledge artifact has no contract-bound dispatch packet`);
+      }
+      const relative = result.sourceArtifact?.path.replace(/\\/g, "/");
+      if (!relative || !relative.startsWith("_docs/module/")) {
+        throw new Error(`${stage}: missing Knowledge document provenance for ${expectedDoc}`);
+      }
+      const root = fs.realpathSync(this.knowledgeRoot.path);
+      const absolute = path.resolve(root, relative);
+      const expected = path.resolve(path.dirname(this.runtimeTask.plan_source), expectedDoc);
+      const real = fs.realpathSync(absolute);
+      const within = path.relative(root, real);
+      if (within.startsWith("..") || path.isAbsolute(within) || absolute !== expected || real !== expected) {
+        throw new Error(`${stage}: Knowledge document path does not match the frozen module/root`);
+      }
+      const bytes = fs.readFileSync(real);
+      if (bytes.length === 0) throw new Error(`${stage}: Knowledge document is empty`);
+      knowledgeSource = { path: relative, digest: contentHash(bytes.toString("utf8")) };
+      if (dispatch?.payload.kind !== "role-dispatch" || dispatch.payload.sourceBeforeDigest === knowledgeSource.digest) {
+        throw new Error(`${stage}: Knowledge document bytes were not authored in the dispatched attempt`);
+      }
+      if (this.runtimeTask.contract.version === "workflow-1" && result.outcome.result === "PASS") {
+        const problems = ownedDocumentProblems(stage, root, path.basename(path.dirname(expected)));
+        if (problems.length) throw new Error(`${stage}: document verification failed: ${problems.join("; ")}`);
+      }
+    }
+    let verification: z.infer<typeof DeterministicVerificationSchema> | undefined;
+    if (result.deterministicVerification !== undefined) {
+      if (!CODE_PRODUCING_STAGES.has(stage)) {
+        throw new Error(`${stage}: only a code-producing stage carries a post-Dev deterministic verification`);
+      }
+      verification = DeterministicVerificationSchema.parse(result.deterministicVerification);
+    }
+
+    const current = this.run.machine.current;
+    const priorEvidence = this.evidence();
+    const attempt = latestAttempt(priorEvidence, stage) + 1;
+    const deployPhase = stage === AgentStage.DEVOPS ? (current === TaskState.APPROVED ? "execute" : "prepare") : null;
+
     this.emitAndStore("AGENT_COMPLETED", {
       taskId: this.taskId,
       stage,
@@ -726,10 +1431,8 @@ export class Orchestrator {
       artifactType: result.artifactType ?? null,
       packetPath: result.packetPath ?? null,
     });
-    // The mode a QA round ran in is recorded with its cost. Read off the
-    // raw artifact before schema validation (which happens below and gates
-    // progression independently) — only a literal FULL/TARGETED counts, so an
-    // invalid value logs as "not recorded" rather than being guessed into shape.
+    // The mode a QA round ran in is recorded with its cost - only a literal
+    // FULL/TARGETED counts, so an invalid value logs as "not recorded".
     const rawQaMode =
       result.artifactType === ArtifactType.QA_REPORT
         ? (result.artifact as { mode?: unknown } | undefined)?.mode
@@ -746,6 +1449,94 @@ export class Orchestrator {
     });
     this.store.appendRun(record);
 
+    // The attempt's evidence, as STA observed it. A QA run references the
+    // persisted sweep it was handed (the same derivation `step()` used).
+    const role = AGENT_REGISTRY[stage].role;
+    const observedContractDigest = result.outcome.contract_digest ?? null;
+    const authoritativeContractDigest = resolveAuthoritativeContract(stage, this.contractRoot).digest;
+    if (observedContractDigest && observedContractDigest !== authoritativeContractDigest) {
+      throw new Error(`${stage}: artifact/dispatch contract digest mismatch`);
+    }
+    const consumed = stage === AgentStage.QA_ENGINEER ? this.persistedVerification(priorEvidence)?.evidenceId : undefined;
+    const roleRun = this.recordEvidence({
+      stage,
+      attempt,
+      role,
+      subject: "run",
+      payload: {
+        kind: "role-run",
+        result: result.outcome.result,
+        failureReason: result.outcome.failure_reason ?? null,
+        runtime: result.outcome.runtime ?? null,
+        model: result.outcome.model ?? null,
+        packetPath: result.packetPath ?? null,
+        deployPhase,
+        startedAt: timing.start,
+        endedAt: timing.end,
+        contractDigest: observedContractDigest,
+      },
+      refs: [...(consumed ? [consumed] : []), ...(dispatch ? [dispatch.evidenceId] : [])],
+    });
+    let acceptedArtifact: EvidenceRecord | undefined;
+    if (artifact) {
+      this.artifactStore[artifact.type] = artifact.stored;
+      const artifactKey = `${stage}/${attempt}/${artifact.type}`;
+      if (this.artifactStore[artifactKey] !== undefined) throw new Error(`${stage}: immutable artifact snapshot already exists`);
+      this.artifactStore[artifactKey] = artifact.stored;
+      const parsed = JSON.parse(artifact.stored) as unknown;
+      if (artifact.type === ArtifactType.REVIEW_REPORT) this.gateContext.reviewReport = parsed as ReviewReportArtifact;
+      if (artifact.type === ArtifactType.QA_REPORT) this.gateContext.qaReport = parsed as QaReportArtifact;
+      if (artifact.type === ArtifactType.SECURITY_REPORT) this.gateContext.securityReport = parsed as SecurityReportArtifact;
+      acceptedArtifact = this.recordEvidence({
+        stage,
+        attempt,
+        role,
+        subject: artifact.type,
+        payload: {
+          kind: "artifact",
+          artifactType: artifact.type,
+          contentDigest: contentHash(artifact.stored),
+          roleAttemptId: `${this.taskId}:${stage}:${attempt}`,
+          ownerRole: stage,
+          contractDigest: authoritativeContractDigest,
+          sourceDigest: knowledgeSource?.digest ?? null,
+          knowledgePath: knowledgeSource?.path ?? null,
+          location: `task-store:${this.taskId}/artifacts/${artifactKey}`,
+          verdict: artifact.verdict,
+        },
+        refs: [roleRun.evidenceId],
+      });
+    }
+    if (verification) {
+      this.recordEvidence({
+        stage,
+        attempt,
+        role: "orchestrator",
+        subject: "post-dev-verification",
+        payload: { kind: "deterministic-verification", verification },
+        refs: [roleRun.evidenceId],
+      });
+    }
+    if (result.postflightGuard) {
+      this.recordEvidence({
+        stage,
+        attempt,
+        role: "orchestrator",
+        subject: "postflight",
+        payload: {
+          kind: "scope-postflight",
+          ok: result.postflightGuard.ok,
+          checked: result.postflightGuard.checked,
+          violations: [...result.postflightGuard.violations],
+          digest: result.postflightGuard.digest,
+          runtimeId: result.postflightGuard.runtimeId,
+          contractDigest: result.postflightGuard.contractDigest,
+        },
+        refs: [roleRun.evidenceId],
+      });
+    }
+    if (gateEvidence) this.gateContext = { ...this.gateContext, ...gateEvidence };
+
     try {
       assertBudget(this.runLog, this.taskId, this.budget);
     } catch (e) {
@@ -757,40 +1548,59 @@ export class Orchestrator {
       throw e;
     }
 
-    if (result.artifactType !== undefined && result.artifact !== undefined) {
-      assertCanProduce(stage, result.artifactType);
-      const validated = validateArtifact(result.artifactType, result.artifact);
-      this.artifactStore[result.artifactType] = JSON.stringify(validated);
-      if (result.artifactType === ArtifactType.QA_REPORT) {
-        this.gateContext.qaReport = validated as QaReportArtifact;
-      }
-      if (result.artifactType === ArtifactType.SECURITY_REPORT) {
-        this.gateContext.securityReport = validated as SecurityReportArtifact;
-      }
+    // A reviewer's report never completes the review stage on its own: STA
+    // checks, from its own records, that this was an independent review of
+    // the completed implementation, and records that fact as evidence.
+    const independenceProblems =
+      stage === AgentStage.REVIEWER && result.outcome.result === "PASS"
+        ? this.recordReviewIndependence(attempt, roleRun, result)
+        : [];
+
+    // STA's completion decision for this attempt, from persisted evidence only.
+    let decision = decideStageCompletion(stage, attempt, this.evidence());
+    if (!decision.complete && independenceProblems.length > 0) {
+      decision = { ...decision, missing: [...decision.missing, ...independenceProblems] };
     }
-    if (result.gateEvidence) {
-      if ("businessInput" in result.gateEvidence) {
-        throw new Error(
-          "businessInput is trusted task-creation evidence; an executing agent cannot supply or replace it",
-        );
+    this.lastStageDecision = { stage, attempt, decision };
+    if (decision.complete) {
+      if (this.runtimeTask?.contract.version === "workflow-1") {
+        if (!knowledgeSource || !acceptedArtifact) throw new Error(`${stage}: workflow progression requires a changed, verified role-owned document`);
+        this.compiledTask = acceptWorkflowDocument(this.runtimeTask, stage, {
+          source: path.resolve(this.knowledgeRoot!.path, knowledgeSource.path), hash: knowledgeSource.digest, evidence_id: acceptedArtifact.evidenceId,
+        }, this.classification);
       }
-      this.gateContext = { ...this.gateContext, ...result.gateEvidence };
+      const completion = this.recordEvidence({
+        stage,
+        attempt,
+        role: "orchestrator",
+        subject: "completion",
+        payload: { kind: "stage-completion", satisfied: decision.satisfied },
+        refs: [...new Set([...decision.evidenceIds, ...(acceptedArtifact ? [acceptedArtifact.evidenceId] : [])])],
+      });
+      this.emitAndStore("STAGE_COMPLETED", {
+        taskId: this.taskId,
+        stage,
+        attempt,
+        evidenceId: completion.evidenceId,
+        refs: completion.refs,
+      });
+    } else {
+      this.emitAndStore("STAGE_INCOMPLETE", { taskId: this.taskId, stage, attempt, missing: decision.missing });
     }
 
-    // devops's "prepare" completion (at READY_TO_DEPLOY) does not advance the cursor — the
-    // same pipeline slot is still assigned once the task reaches APPROVED, for "execute". A
-    // failed prepare leaves deployPrepared false, so the next run retries prepare rather than
-    // treating a failure as done — devops has no other failure routing (unlike qa/security
-    // below), so this is the one place a failed prepare doesn't silently count as finished.
-    // Every other completion, including devops's own "execute" one, advances exactly as before.
-    const isDevopsPrepareCompletion = stage === AgentStage.DEVOPS && this.run.machine.current === TaskState.READY_TO_DEPLOY;
+    // Only a complete attempt moves the task on. A failed or incomplete one
+    // leaves the cursor on the stage (a retry runs it again); the failure
+    // routes below are the only other thing that may move it, and none of
+    // them moves it forward. devops's "prepare" completion does not advance
+    // the cursor - the same slot runs "execute" once the task is APPROVED.
+    const isDevopsPrepareCompletion = stage === AgentStage.DEVOPS && current === TaskState.READY_TO_DEPLOY;
     const requiresHumanStop =
       result.outcome.result === "FAIL" &&
       result.failure?.requiresHuman === true &&
       result.failure.category === "infrastructure";
     if (isDevopsPrepareCompletion) {
-      if (result.outcome.result !== "FAIL") this.deployPrepared = true;
-    } else if (!requiresHumanStop && result.postDevVerificationFailed !== true) {
+      if (decision.complete) this.deployPrepared = true;
+    } else if (decision.complete) {
       this.pipelineCursor += 1;
     }
     if (result.outcome.result === "FAIL" && result.failure) {
@@ -802,6 +1612,17 @@ export class Orchestrator {
     // pipeline cursor, so an explicit human resume retries the same stage.
     if (requiresHumanStop) {
       this.lastRecovery = { kind: "ESCALATE", strategy: "escalate_to_human", reason: result.failure!.reason };
+      this.lastRepairRoute = routeRepair({
+        finding: { task_id: this.taskId, category: result.failure!.category, owner: result.failure!.owner,
+          retryable: result.failure!.retryable, requires_human: result.failure!.requiresHuman },
+        pipeline: this.pipeline,
+      });
+      this.recoveryDecision = {
+        policyVersion: RECOVERY_POLICY_VERSION, stage, attempt, failureKind: failureKindOf(stage), action: this.lastRecovery,
+        repairRoute: this.lastRepairRoute,
+        handoffIntent: decideHandoffIntent(this.lastRecovery, `${this.taskId}:${stage}:${attempt}`, stage, this.frozenScopeDigest()),
+      };
+      this.recordRecoveryEvidence(stage, attempt);
       this.run = { ...this.run, machine: forceBlock(this.run.machine) };
       this.blockedReason = result.failure!.reason;
       this.emitVerdict(stage, result);
@@ -821,7 +1642,7 @@ export class Orchestrator {
         "before deciding whether to retry; this task will not auto-retry or auto-rollback.";
     }
 
-    const failureKind = stage === AgentStage.QA_ENGINEER ? "qa" : stage === AgentStage.SECURITY ? "security" : null;
+    const failureKind = failureKindOf(stage);
     if (failureKind && result.outcome.result === "FAIL") {
       this.stateBeforeFailure = this.run.machine.current;
       // An infrastructure outcome moves the state but not the defect budget
@@ -831,7 +1652,7 @@ export class Orchestrator {
       this.run = recordFailure(this.run, failureKind, {
         countsAsDefect: result.failure?.category !== "infrastructure",
       });
-      this.applyFailureRoute(failureKind, result.failure);
+      this.applyFailureRoute(failureKind, result.failure, stage, attempt);
     }
 
     // The UX/UI consultant does not fail the way a verifier does — its
@@ -846,16 +1667,15 @@ export class Orchestrator {
     }
 
     // Verdict events, emitted after the route is decided so a failed round
-    // carries the decision with it. A listener that only saw AGENT_COMPLETED
-    // would have to re-derive both halves — and could not derive the recovery
-    // action at all, since nothing outside this method computes it.
-    this.emitVerdict(stage, result);
+    // carries the decision with it. A PASS outcome that lacked its required
+    // evidence is no verdict at all - STAGE_INCOMPLETE already says so.
+    if (decision.complete || result.outcome.result === "FAIL") this.emitVerdict(stage, result);
 
     return this.advance();
   }
 
   /**
-   * Emits QA_PASSED/QA_FAILED/SECURITY_PASSED/SECURITY_FAILED for a stage that
+   * Emits REVIEW_/QA_/SECURITY_ PASSED/FAILED for a stage that
    * verifies something, and nothing at all for a stage that doesn't.
    *
    * An engineer finishing is an AGENT_COMPLETED and no more: giving it a verdict
@@ -869,8 +1689,9 @@ export class Orchestrator {
     const type = verdictEventFor(stage, passed);
     if (!type) return;
 
-    const round = stage === AgentStage.QA_ENGINEER ? this.run.retries.qa : this.run.retries.security;
-    if (type === "QA_PASSED" || type === "SECURITY_PASSED") {
+    const kind = failureKindOf(stage);
+    const round = kind ? this.run.retries[kind] : 0;
+    if (type === "REVIEW_PASSED" || type === "QA_PASSED" || type === "SECURITY_PASSED") {
       this.emitAndStore(type, { taskId: this.taskId, stage, round });
       return;
     }
@@ -892,7 +1713,7 @@ export class Orchestrator {
    * different answers. The agent that reported the failure makes none of these
    * calls — it supplies facts, the orchestrator draws the conclusion.
    */
-  private applyFailureRoute(failureKind: "qa" | "security", failure: StructuredFailure | undefined): void {
+  private applyFailureRoute(failureKind: FailureKind, failure: StructuredFailure | undefined, stage: AgentStage, attempt: number): void {
     // Recorded alongside the recovery action, not instead of it: the action
     // says which state the task moves to, the route says what the repair
     // consists of, what it invalidates, and whether the round after it has to
@@ -918,6 +1739,12 @@ export class Orchestrator {
       currentState: this.stateBeforeFailure,
     });
     this.lastRecovery = action;
+    this.recoveryDecision = {
+      policyVersion: RECOVERY_POLICY_VERSION, stage, attempt, failureKind, action,
+      repairRoute: this.lastRepairRoute,
+      handoffIntent: decideHandoffIntent(action, `${this.taskId}:${stage}:${attempt}`, stage, this.frozenScopeDigest()),
+    };
+    this.recordRecoveryEvidence(stage, attempt);
 
     if (this.run.machine.current === TaskState.BLOCKED) {
       // retryPolicy already forced BLOCKED because the budget is spent. No
@@ -934,7 +1761,7 @@ export class Orchestrator {
         // reason in the ledger instead of only an opaque BLOCKED string — these
         // risk-triggered gates previously left no trace of having been reached.
         this.openApproval({
-          type: failureKind === "qa" ? ApprovalType.QA_FAILURE : ApprovalType.SECURITY_RISK,
+          type: FAILURE_APPROVAL[failureKind],
           reason: action.reason,
         });
         this.run = { ...this.run, machine: forceBlock(this.run.machine) };
@@ -968,6 +1795,110 @@ export class Orchestrator {
         return;
       }
     }
+  }
+
+  private recordRecoveryEvidence(stage: AgentStage, attempt: number): void {
+    const decision = this.recoveryDecision;
+    if (!decision) throw new Error("recovery decision is absent");
+    const roleRun = this.evidence().find((item) => item.kind === "role-run" && item.stage === stage && item.attempt === attempt);
+    if (!roleRun) throw new Error(`recovery decision has no matching role attempt ${stage}:${attempt}`);
+    this.recordEvidence({
+      stage, attempt, role: "orchestrator", subject: "recovery",
+      payload: {
+        kind: "recovery-decision", policyVersion: decision.policyVersion,
+        failureKind: decision.failureKind, action: decision.action,
+        repairRoute: decision.repairRoute, handoffIntent: decision.handoffIntent,
+      },
+      refs: [roleRun.evidenceId],
+    });
+  }
+
+  /**
+   * STA's own independence check for one reviewer attempt whose run reported
+   * PASS (V13 TASK-006). Records a `review-independence` evidence record only
+   * when every check holds, and returns the checks that failed otherwise —
+   * which become the named reasons the stage stays incomplete. Nothing here
+   * reads the reviewer's report: it is decided from STA's own records.
+   *
+   *   implementation-completed  every code-producing stage earlier in this
+   *                             pipeline has a recorded completion for its
+   *                             latest attempt — the review is of that work;
+   *   contract-bound            the reviewer role-run carries the contract
+   *                             digest it was dispatched under;
+   *   distinct-dispatch         the reviewer ran as its own role, from a
+   *                             packet no implementer run used;
+   *   review-separation         the loaded contracts keep reviewer and
+   *                             reviewed stages from writing each other's paths.
+   */
+  private recordReviewIndependence(attempt: number, roleRun: EvidenceRecord, result: AgentExecutorResult): string[] {
+    const records = this.evidence();
+    const problems: string[] = [];
+    const prefix = `${AgentStage.REVIEWER} attempt ${attempt}: independence`;
+    const reviewerIndex = this.pipelineCursor;
+
+    // A stage the state machine never assigns (SETUP) is not a run to review here.
+    const reviewedStages = this.pipeline.filter(
+      (stage, index) => index < reviewerIndex && REVIEWED_BY_REVIEWER.includes(stage) && stageStateOf(stage) !== undefined,
+    );
+    const completionIds: string[] = [];
+    if (reviewedStages.length === 0) {
+      problems.push(`${prefix} check implementation-completed failed — no code-producing stage precedes the reviewer in this pipeline`);
+    }
+    for (const stage of reviewedStages) {
+      const latest = latestAttempt(records, stage);
+      const completion = latest === 0 ? undefined : completionRecordFor(records, stage, latest);
+      if (completion) completionIds.push(completion.evidenceId);
+      else {
+        problems.push(
+          `${prefix} check implementation-completed failed — ${stage} has no recorded completion` +
+            `${latest === 0 ? " (never ran)" : ` for attempt ${latest}`}`,
+        );
+      }
+    }
+
+    const digest = roleRun.payload.kind === "role-run" ? roleRun.payload.contractDigest : null;
+    if (digest === null) {
+      problems.push(`${prefix} check contract-bound failed — the reviewer role-run carries no contract digest`);
+    }
+
+    const reviewerRole = AGENT_REGISTRY[AgentStage.REVIEWER].role;
+    const implementerRuns = records.filter((r) => r.kind === "role-run" && REVIEWED_BY_REVIEWER.includes(r.stage));
+    const packetPath = result.packetPath ?? null;
+    for (const run of implementerRuns) {
+      if (run.role === reviewerRole) {
+        problems.push(`${prefix} check distinct-dispatch failed — ${run.stage} attempt ${run.attempt} ran as role ${run.role}`);
+      }
+      if (packetPath !== null && run.payload.kind === "role-run" && run.payload.packetPath === packetPath) {
+        problems.push(
+          `${prefix} check distinct-dispatch failed — the reviewer used the same packet as ${run.stage} attempt ${run.attempt} (${packetPath})`,
+        );
+      }
+    }
+
+    let separation: string[];
+    try {
+      separation = checkReviewSeparation(this.contractRoot).problems;
+    } catch (error) {
+      separation = [(error as Error).message];
+    }
+    for (const problem of separation) problems.push(`${prefix} check review-separation failed — ${problem}`);
+
+    if (problems.length > 0 || digest === null) return problems;
+    this.recordEvidence({
+      stage: AgentStage.REVIEWER,
+      attempt,
+      role: "orchestrator",
+      subject: "review-independence",
+      payload: {
+        kind: "review-independence",
+        reviewedStages,
+        implementationCompletionIds: completionIds,
+        reviewerContractDigest: digest,
+        checks: ["implementation-completed", "contract-bound", "distinct-dispatch", "review-separation"],
+      },
+      refs: [roleRun.evidenceId, ...completionIds],
+    });
+    return [];
   }
 
   /** First pipeline position whose stage occupies `state` — where the cursor must sit after moving the machine there. */
@@ -1026,10 +1957,12 @@ export class Orchestrator {
 
   /** Convenience wrapper for callers that want a direct call/await relationship instead of listening on `events`. */
   async step(executor: AgentExecutor, now: () => number = Date.now): Promise<OrchestratorStatus> {
-    const status = this.advance();
+    const status = this.status();
     if (status.kind !== "RUNNING") return status;
 
     const { stage } = status;
+    const attempt = latestAttempt(this.evidence(), stage) + 1;
+    const idempotencyKey = `${this.taskId}:${stage}:${attempt}`;
     const context = selectContext(stage, this.artifactStore);
     // At the moment this status was returned, DEVOPS is only ever assigned at exactly one
     // of these two states (see isAgentAssignedAt) — so the current state alone tells us which run.
@@ -1044,10 +1977,23 @@ export class Orchestrator {
     if (stage === AgentStage.DEVOPS && deployPhase === "execute") {
       assertPermission(stage, Permission.DEPLOY);
     }
+    // Deploy/migration is the destructive stage that cannot be repeated after
+    // an unknown outcome. Other stages carry the same key, while the bounded
+    // run's ledger/checkpoint boundary reconciles code side effects on restart.
+    if (stage === AgentStage.DEVOPS && deployPhase === "execute") this.atomic(() => {
+      if (this.inFlightAttempt) throw new Error(`attempt ${this.inFlightAttempt.idempotencyKey} is already reserved`);
+      this.inFlightAttempt = { stage, attempt, idempotencyKey };
+      this.persist();
+    });
     const start = now();
     const result = await executor({
       stage,
       taskId: this.taskId,
+      idempotencyKey,
+      ...(this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2
+        ? { recordDispatch: (identity: { packetPath: string; packetHash: string; contractDigest: string; runtimeId: string }) =>
+            this.recordRoleDispatch(stage, attempt, idempotencyKey, identity) }
+        : {}),
       context,
       deployPhase,
       qaRound,
@@ -1055,9 +2001,10 @@ export class Orchestrator {
         stage === AgentStage.BUSINESS_ANALYST
           ? this.gateContext.businessInput
           : undefined,
+      deterministicVerification: stage === AgentStage.QA_ENGINEER ? this.persistedVerification() : undefined,
     });
     const end = now();
 
-    return this.reportCompletion(stage, result, { start, end });
+    return this.reportCompletion(stage, result, { start, end }, idempotencyKey);
   }
 }

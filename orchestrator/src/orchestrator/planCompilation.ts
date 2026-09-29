@@ -203,8 +203,9 @@ export function previewPlanRegistration(input: PlanScopeResolutionInput): { orde
   const conflictProblems: string[] = [];
   const tasks: ResolvedPlanTask[] = resolved.order.map((taskId) => {
     const task = resolved.byId.get(taskId)!;
-    const classification = classifyTask(input.classificationFor?.(task) ?? classificationInputForPlanTask(task));
-    conflictProblems.push(...classificationConflicts(task, classification));
+    const classificationInput = planTaskInput(input, task);
+    const classification = classifyTask(classificationInput);
+    conflictProblems.push(...classificationConflicts(task, classificationInput, classification));
     return {
       taskId,
       owner: task.owner as AgentStage,
@@ -234,18 +235,17 @@ export function runScopeHash(orderedTasks: readonly PlanTask[]): string {
 }
 
 /**
- * The half of classification a canonical PlanTask genuinely determines.
+ * The classification a canonical PlanTask determines (V13 TASK-007).
  *
- * Risk and human-gate cells are authored facts about *this* task, so they map
- * straight through. Work kind (new feature / bug fix / copy change) is not a
- * PlanTask field and is not invented here: `isIncrementalFeature` is the
- * defensible default only because a canonical PlanTask exists solely downstream
- * of BA/SA/PM — the analysis this flag would otherwise re-run has, by
- * construction, already happened — and a caller may override it.
+ * A canonical PlanTask exists only downstream of BA/SA/PM, so its work kind is
+ * `isPlanTask` — the dedicated plan-task workflow: owner engineer, reviewer,
+ * QA (plus security when sensitive) — never a re-run of the analysis that
+ * produced it. The owner decides the engineer flag; the authored `Risk:`/
+ * `Human gate:` cells map straight through. A caller may override any of it.
  */
 export function classificationInputForPlanTask(task: PlanTask, overrides: ClassificationInput = {}): ClassificationInput {
   const derived: ClassificationInput = {
-    isIncrementalFeature: true,
+    isPlanTask: true,
     touchesSchema: task.risk.includes("schema") || task.humanGate.includes("schema"),
     touchesSensitiveArea:
       task.risk.includes("security") || task.risk.includes("authorization") || task.humanGate.includes("security"),
@@ -256,10 +256,24 @@ export function classificationInputForPlanTask(task: PlanTask, overrides: Classi
   return { ...derived, ...overrides };
 }
 
+/** The one input a plan task is classified from — the caller's override when supplied, the derivation otherwise. */
+function planTaskInput(input: Pick<PlanScopeResolutionInput, "classificationFor">, task: PlanTask): ClassificationInput {
+  return input.classificationFor?.(task) ?? classificationInputForPlanTask(task);
+}
+
+/** The owners the plan-task workflow can run: a plan task is implemented by an engineer. */
+const PLAN_TASK_OWNERS: ReadonlySet<string> = new Set([AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]);
+
 /** The authored risk facts a supplied classification may not contradict. */
-function classificationConflicts(task: PlanTask, classification: ClassificationResult): string[] {
+function classificationConflicts(task: PlanTask, classificationInput: ClassificationInput, classification: ClassificationResult): string[] {
   const derived = classificationInputForPlanTask(task);
   const problems: string[] = [];
+  if (classificationInput.isPlanTask && !PLAN_TASK_OWNERS.has(task.owner)) {
+    problems.push(
+      `task ${task.id}: owner ${task.owner} has no plan-task workflow — a plan task is owned by ` +
+        `${[...PLAN_TASK_OWNERS].join(" or ")}; amend the plan or supply an explicit classification`,
+    );
+  }
   if (derived.touchesSchema && classification.touchesSchema !== true) {
     problems.push(`task ${task.id}: plan risk/gate declares a schema change but the supplied classification does not`);
   }
@@ -343,8 +357,9 @@ export function compileAndRegisterPlan(input: PlanRegistrationInput): PlanRegist
 
     for (const taskId of order) {
       const task = byId.get(taskId)!;
-      const classification = classifyTask(input.classificationFor?.(task) ?? classificationInputForPlanTask(task));
-      const conflicts = classificationConflicts(task, classification);
+      const classificationInput = planTaskInput(input, task);
+      const classification = classifyTask(classificationInput);
+      const conflicts = classificationConflicts(task, classificationInput, classification);
       if (conflicts.length > 0) {
         throw new PlanRegistrationError("classification-conflict", `module ${input.module}: classification contradicts authored plan risk`, conflicts);
       }
@@ -352,6 +367,10 @@ export function compileAndRegisterPlan(input: PlanRegistrationInput): PlanRegist
       input.registry.create({
         taskId,
         classification,
+        // Every registered plan task carries its compiled `workflow_plan`
+        // (V13 TASK-004): the registry compiles it from this exact input and
+        // refuses a pipeline that disagrees with the classifier.
+        classificationInput,
         environment: context.environment,
         targetBindings: context.targetBindings,
         workflow: context.workflow,

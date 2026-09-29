@@ -133,9 +133,7 @@ export function applyRunStatus(id: string, from: LedgerRunStatus, to: LedgerRunS
   return apply(RUN_TRANSITIONS, "run", id, from, to);
 }
 
-export function applyTaskStatus(id: string, from: LedgerTaskStatus, to: LedgerTaskStatus): TransitionResult<LedgerTaskStatus> {
-  return apply(TASK_TRANSITIONS, "task", id, from, to);
-}
+
 
 export function applyAttemptStatus(
   id: string,
@@ -147,11 +145,6 @@ export function applyAttemptStatus(
 
 export const TERMINAL_RUN_STATUSES: ReadonlySet<LedgerRunStatus> = new Set<LedgerRunStatus>([
   "COMPLETED", "REFUSED", "CANCELLED", "STALE",
-]);
-
-/** Statuses that mean this task's work is durably on the run branch. */
-export const SETTLED_TASK_STATUSES: ReadonlySet<LedgerTaskStatus> = new Set<LedgerTaskStatus>([
-  "CHECKPOINTED", "DONE",
 ]);
 
 /** The published transition table, for evidence and for the audit export's self-description. */

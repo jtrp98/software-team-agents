@@ -18,7 +18,7 @@ export const TOKEN_BENCHMARK_DOC_BYTES = {
   design: 67_000,
   plan: 17_000,
   requirement: 12_000,
-  review: 3_400,
+  qa: 3_400,
   testPlan: 1_200,
 } as const;
 
@@ -93,7 +93,7 @@ export function createTokenBenchmarkFixture(root = fs.mkdtempSync(path.join(os.t
     "requirement.md": fixedDocument("# Requirement\n\n## Scope\nPinned benchmark requirement.\n\n## References\nFixture.\n\n", TOKEN_BENCHMARK_DOC_BYTES.requirement),
     "design.md": fixedDesignDocument(TOKEN_BENCHMARK_DOC_BYTES.design),
     "plan.md": fixedDocument("# Plan\n\n## Plan Summary\nPinned plan.\n\n## Phase 1: Delivery\nPinned work.\n\n## Sequencing Notes\nPinned.\n\n## Open Questions\nNone.\n\n", TOKEN_BENCHMARK_DOC_BYTES.plan),
-    "review.md": fixedDocument("# Review\n\n## Open Issues\nNone.\n\n## Round 1\nPinned review.\n\n", TOKEN_BENCHMARK_DOC_BYTES.review),
+    "qa.md": fixedDocument("# QA\n\n## Open Issues\nNone.\n\n## Round 1\nPinned QA round.\n\n", TOKEN_BENCHMARK_DOC_BYTES.qa),
     "test-plan.md": fixedDocument("# Test Plan\n\n## Coverage\nTP-001 covers DES-001.\n\n", TOKEN_BENCHMARK_DOC_BYTES.testPlan),
   };
   for (const [name, content] of Object.entries(docs)) fs.writeFileSync(path.join(dir, name), content, "utf8");
@@ -183,7 +183,7 @@ export function createTraceableTokenBenchmarkFixture(
     "requirement.md": requirement,
     "design.md": design,
     "plan.md": plan,
-    "review.md": fixedDocument("# Review\n\n## Open Issues\nNone.\n\n## Round 1\nPinned review.\n\n", TOKEN_BENCHMARK_DOC_BYTES.review),
+    "qa.md": fixedDocument("# QA\n\n## Open Issues\nNone.\n\n## Round 1\nPinned QA round.\n\n", TOKEN_BENCHMARK_DOC_BYTES.qa),
     "test-plan.md": fixedDocument("# Test Plan\n\n## Coverage\nPinned tests.\n\n", TOKEN_BENCHMARK_DOC_BYTES.testPlan),
   };
   for (const [name, content] of Object.entries(docs)) fs.writeFileSync(path.join(dir, name), content, "utf8");

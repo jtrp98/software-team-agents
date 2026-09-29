@@ -1,7 +1,21 @@
 import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import Ajv, { type ValidateFunction } from "ajv";
+import { approvalChannelDir } from "../gates/humanChannelConfig.js";
 import { LocalWorkspace } from "./localWorkspace.js";
+import { startEgressAllowlistProxy, type StartEgressAllowlistProxy } from "./egressAllowlistProxy.js";
+import { canonicalPath, permissionPathsFor, tomlString } from "./permissionPaths.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { SingleShotLifecycle } from "./singleShotLifecycle.js";
+import type {
+  ExecutorAttemptRef,
+  ExecutorCancelOutcome,
+  ExecutorEvidence,
+  ExecutorPort,
+  PreparedExecutorAttempt,
+} from "./executorPort.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentRequest,
@@ -30,7 +44,7 @@ export type { SpawnSync } from "./runtimeAdapter.js";
  * `agents/registry.ts` and `orchestrator.ts` directly.
  *
  * Everything that is this framework's business rather than Claude Code's —
- * assembling the prompt, slicing module docs, reading `review.md`/`security.md`
+ * assembling the prompt, slicing module docs, reading `qa.md`/`security.md`
  * back, mapping metrics — lives in `runtime/agentRunAssembly.ts` and is driven
  * by `runtime/runtimeExecutor.ts`, not by this file. This adapter only has to
  * answer: how does one run of one role actually happen on this machine, and
@@ -81,6 +95,14 @@ const CLAUDE_CODE_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.STRUCTURED_RESULT,
   RuntimeCapability.COST_REPORTING,
   RuntimeCapability.INTERACTIVE_PROMPTS,
+  // V13 TASK-014 — the lifecycle this adapter actually implements through
+  // `SingleShotLifecycle`: fresh-session resume from the persisted attempt
+  // journal (Claude Code's headless `-p` runs have no mid-attempt restore to
+  // resume into), honest cancel accounting, and evidence collection computed
+  // from the run's own spawn and the work-root snapshots around it.
+  RuntimeCapability.ATTEMPT_RESUME,
+  RuntimeCapability.ATTEMPT_CANCEL,
+  RuntimeCapability.EVIDENCE_COLLECTION,
 ];
 
 /**
@@ -141,6 +163,149 @@ export function disallowRulesFromGuards(guards: RuntimeGuards): string[] {
 }
 
 /**
+ * V13 TASK-031 — the OS approval-isolation boundary for Claude Code.
+ *
+ * Claude Code's own `sandbox.*` settings are not a boundary here: on Windows
+ * its sandbox is feature-gated off, and even when active it wraps only the Bash
+ * tool — the built-in Read/Write/Edit tools run inside `claude.exe` with the
+ * user's token (R14F spike: both read and wrote a decoy approval dir despite
+ * `sandbox.filesystem.denyRead/denyWrite`). So the WHOLE `claude` process is
+ * launched under Codex's Windows elevated restricted-token sandbox
+ * (`codex sandbox`), with a per-run profile of the same shape the certified
+ * Codex adapter uses: broad read, the canonical approval channel an exact
+ * `deny`, writes only at packet-authorized paths plus this run's own
+ * scratch dirs, and network OFF at the OS. The model API is reached only
+ * through the adapter's loopback CONNECT proxy, which tunnels exactly
+ * `api.anthropic.com:443` (`egressAllowlistProxy.ts`): with the profile's
+ * VCS directory read-only this leaves no local or remote Git state change and
+ * no other egress — the parity with Codex's network-disabled profile that
+ * unattended Target writes require.
+ *
+ * Per-run home, never the user's: the elevated backend turns every write grant
+ * into a persistent ACE for the shared sandbox group, so granting the real
+ * `~/.claude` would let any later sandboxed process plant hooks the user's next
+ * unsandboxed `claude` executes (R14F §Security side effect). The run gets a
+ * fresh `CLAUDE_CONFIG_DIR`, `TEMP` and `CODEX_HOME` under one temp root that is
+ * deleted after the run; the login therefore comes only from the environment a
+ * person provisions (e.g. the long-lived token `claude setup-token` issues). The
+ * adapter neither reads nor copies any credential — without one, claude fails
+ * its own authentication and the run is an ERROR.
+ *
+ * Verified only on Windows; elsewhere the builder throws and the run is refused.
+ */
+export const CLAUDE_ISOLATION_UNAVAILABLE = "CLAUDE_ISOLATION_UNAVAILABLE";
+const CLAUDE_ISOLATION_PROFILE = "sta_run";
+/** Workspace paths the agent may read but never rewrite: VCS state and the runtime bindings that carry its own guards. */
+const ALWAYS_READ_ONLY_IN_WORKSPACE = [".git", ".claude", ".codex", ".agents"] as const;
+/** The only hosts the egress proxy tunnels to. */
+export const CLAUDE_EGRESS_HOSTS: readonly string[] = ["api.anthropic.com"];
+
+/** The per-run directories granted to the wrapped process; all live under `root`, which the adapter deletes after the run. */
+export interface ClaudeIsolationRunDirs {
+  readonly root: string;
+  readonly config: string;
+  readonly temp: string;
+  readonly codexHome: string;
+}
+
+export function claudeIsolationRunDirs(root: string): ClaudeIsolationRunDirs {
+  return { root, config: path.join(root, "config"), temp: path.join(root, "tmp"), codexHome: path.join(root, "codex-home") };
+}
+
+/** Where per-run roots are created — exposed so the a1 preflight derives grants from the same base the spawn uses. */
+export function claudeIsolationRunBase(): string {
+  return os.tmpdir();
+}
+
+export interface ClaudeIsolationInvocation {
+  /** `codex sandbox …` arguments, ending in `--`; the claude command line follows. */
+  readonly sandboxArgs: readonly string[];
+  /** Environment the wrapped process must receive (per-run homes). */
+  readonly env: Readonly<Record<string, string>>;
+  /** The canonical protected path the profile denies. */
+  readonly protectedPath: string;
+  /** Every absolute path the profile grants write to. */
+  readonly writeGrants: readonly string[];
+}
+
+/**
+ * The one builder both the spawn and the a1 preflight use, so the preflight
+ * inspects exactly the grants the subsequent process receives.
+ */
+export function claudeIsolationInvocationFor(
+  req: Pick<RuntimeAgentRequest, "cwd" | "autonomy" | "guards" | "workRoots">,
+  runDirs: ClaudeIsolationRunDirs,
+  protectedDir: string = approvalChannelDir(),
+  platform: string = process.platform,
+): ClaudeIsolationInvocation {
+  if (platform !== "win32") {
+    throw new Error(`the Codex-sandbox isolation wrapper is verified only on Windows (platform ${platform})`);
+  }
+  const cwd = path.resolve(req.cwd);
+  const protectedPath = canonicalPath(protectedDir);
+  const cwdWorkRoot = req.workRoots?.find((root) => path.resolve(root.path) === cwd);
+  if (cwdWorkRoot?.access === "read") {
+    throw new Error(`cwd ${cwd} is Target "${cwdWorkRoot.targetId}" bound read-only; refusing to turn it into a writable workspace root`);
+  }
+
+  const permissions = new Map<string, "read" | "write">();
+  permissions.set(".", "read");
+  const workspaceWrites: string[] = [];
+  for (const pattern of req.autonomy === "read-only" ? [] : req.guards.writeAllow) {
+    const expanded = permissionPathsFor(cwd, pattern);
+    if (expanded.length === 0) {
+      throw new Error(`write-allow pattern ${JSON.stringify(pattern)} cannot be represented safely because its wildcard parent does not exist`);
+    }
+    for (const allowed of expanded) permissions.set(allowed, "write");
+  }
+  for (const readOnly of ALWAYS_READ_ONLY_IN_WORKSPACE) permissions.set(readOnly, "read");
+  for (const pattern of req.guards.writeDeny) {
+    for (const denied of permissionPathsFor(cwd, pattern)) permissions.set(denied, "read");
+  }
+  for (const [relative, access] of permissions) if (access === "write") workspaceWrites.push(path.resolve(cwd, relative));
+
+  const extraRoots = [...new Set((req.autonomy === "read-only" ? [] : req.workRoots ?? [])
+    .filter((root) => root.access === "write")
+    .map((root) => path.resolve(root.path))
+    .filter((root) => root !== cwd))];
+  const runWrites = [runDirs.config, runDirs.temp].map((dir) => path.resolve(dir));
+  const absoluteWrites = [...extraRoots, ...runWrites];
+
+  const workspaceEntries = [...permissions.entries()]
+    .map(([permissionPath, access]) => `${tomlString(permissionPath)} = ${tomlString(access)}`)
+    .join(", ");
+  const filesystemEntries = [
+    '":root" = "read"',
+    `${tomlString(protectedPath)} = "deny"`,
+    ...absoluteWrites.map((dir) => `${tomlString(dir)} = "write"`),
+    `":workspace_roots" = { ${workspaceEntries} }`,
+  ].join(", ");
+  const profile = `{ filesystem = { ${filesystemEntries} }, network = { enabled = false } }`;
+  return {
+    sandboxArgs: [
+      "sandbox",
+      "-C",
+      cwd,
+      "-P",
+      CLAUDE_ISOLATION_PROFILE,
+      "-c",
+      `permissions.${CLAUDE_ISOLATION_PROFILE}=${profile}`,
+      "-c",
+      'windows.sandbox="elevated"',
+      "--",
+    ],
+    env: {
+      CLAUDE_CONFIG_DIR: runDirs.config,
+      TEMP: runDirs.temp,
+      TMP: runDirs.temp,
+      CODEX_HOME: runDirs.codexHome,
+    },
+    protectedPath,
+    writeGrants: [...workspaceWrites, ...absoluteWrites],
+  };
+}
+
+/**
  * Upstream statuses observed in this CLI's own envelope when the provider
  * refused to serve. Each was captured from a real `claude -p` run, never taken
  * from vendor documentation; the set stays closed for that reason, so a status
@@ -155,6 +320,8 @@ interface ClaudeCliJsonResult {
   terminal_reason?: string;
   /** The upstream HTTP status, present only alongside `terminal_reason: "api_error"`. */
   api_error_status?: number;
+  /** The session this turn ran in — the native session reference the lifecycle records as evidence. */
+  session_id?: string;
   result?: string;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
@@ -262,9 +429,17 @@ export interface ClaudeCodeAdapterOptions {
    * effect of using this adapter.
    */
   outputSchema?: Record<string, unknown>;
+  /** Injectable for tests; roots the lifecycle's attempt journal instead of the OS temp dir default. */
+  journalRoot?: string;
+  /**
+   * Injectable for tests; defaults to the real loopback allowlist proxy. The
+   * OS profile keeps network disabled either way, so no value here can widen
+   * a run's egress — a fake only decides whether the API is reachable.
+   */
+  startEgressProxy?: StartEgressAllowlistProxy;
 }
 
-export class ClaudeCodeAdapter implements RuntimeAdapter {
+export class ClaudeCodeAdapter implements ExecutorPort {
   readonly id = "claude-code";
   readonly displayName = "Claude Code";
   readonly binding: RuntimeBinding = {
@@ -283,6 +458,9 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
   private readonly outputSchema?: Record<string, unknown>;
   private readonly outputValidator?: ValidateFunction;
   private readonly outputSchemaError?: string;
+  private readonly startEgressProxy: StartEgressAllowlistProxy;
+  /** V13 TASK-014 — the lifecycle port, over this adapter's one spawn-and-parse implementation. */
+  private readonly lifecycle: SingleShotLifecycle;
 
   constructor(opts: ClaudeCodeAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
@@ -291,6 +469,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     this.resolveCommand = opts.resolveCommand ?? resolveNpmCliScriptImpl;
     this.platform = opts.platform ?? process.platform;
     this.outputSchema = opts.outputSchema;
+    this.startEgressProxy = opts.startEgressProxy ?? startEgressAllowlistProxy;
     if (this.outputSchema) {
       try {
         this.outputValidator = new Ajv({ allErrors: true, strict: true }).compile(this.outputSchema);
@@ -298,6 +477,36 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         this.outputSchemaError = String(error);
       }
     }
+    this.lifecycle = new SingleShotLifecycle(this.id, {
+      run: (req) => this.executeAgent(req),
+      sessionRefFrom: (result) => {
+        const envelope = result.raw as ClaudeCliJsonResult | undefined;
+        return typeof envelope?.session_id === "string" && envelope.session_id.length > 0 ? envelope.session_id : undefined;
+      },
+      journalRoot: opts.journalRoot,
+    });
+  }
+
+  // V13 TASK-014 — the lifecycle port, delegating to the shared single-shot
+  // implementation over `executeAgent`. `executeAgent` itself stays the
+  // unchanged single-shot seam `RuntimeAdapter` has always exposed.
+  prepare(req: RuntimeAgentRequest): Promise<PreparedExecutorAttempt> {
+    return this.lifecycle.prepare(req);
+  }
+  execute(attempt: PreparedExecutorAttempt): Promise<RuntimeAgentResult> {
+    return this.lifecycle.execute(attempt);
+  }
+  resume(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult> {
+    return this.lifecycle.resume(ref);
+  }
+  cancel(ref: ExecutorAttemptRef): Promise<ExecutorCancelOutcome> {
+    return this.lifecycle.cancel(ref);
+  }
+  collectResult(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult | null> {
+    return this.lifecycle.collectResult(ref);
+  }
+  collectEvidence(ref: ExecutorAttemptRef): Promise<ExecutorEvidence> {
+    return this.lifecycle.collectEvidence(ref);
   }
 
   /**
@@ -414,22 +623,73 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     // Only when a schema was requested — default runs stay free-form.
     if (this.outputSchema) args.push("--json-schema", JSON.stringify(this.outputSchema));
 
+    // TASK-031: the whole claude process runs inside the per-run OS isolation
+    // wrapper; there is no unwrapped spawn path.
+    let runDirs: ClaudeIsolationRunDirs;
+    let isolation: ClaudeIsolationInvocation;
+    try {
+      runDirs = claudeIsolationRunDirs(fs.mkdtempSync(path.join(claudeIsolationRunBase(), "sta-claude-run-")));
+    } catch (error) {
+      return { status: "ERROR", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [...modelDiagnostics, `${CLAUDE_ISOLATION_UNAVAILABLE}: cannot create the per-run home: ${String(error)}`] };
+    }
+    const cleanupRun = () => {
+      try {
+        fs.rmSync(runDirs.root, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup of an adapter-owned temporary directory
+      }
+    };
+    try {
+      for (const dir of [runDirs.config, runDirs.temp, runDirs.codexHome]) fs.mkdirSync(dir, { recursive: true });
+      isolation = claudeIsolationInvocationFor(req, runDirs, undefined, this.platform);
+    } catch (error) {
+      cleanupRun();
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: { enforced: [], unenforced: [] },
+        diagnostics: [...modelDiagnostics, `${CLAUDE_ISOLATION_UNAVAILABLE}: refusing to spawn claude without its OS isolation profile — ${String(error)}`],
+      };
+    }
+    let egress: { url: string; stop(): void };
+    try {
+      egress = await this.startEgressProxy(CLAUDE_EGRESS_HOSTS, runDirs.root);
+    } catch (error) {
+      cleanupRun();
+      return { status: "ERROR", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [...modelDiagnostics, `${CLAUDE_ISOLATION_UNAVAILABLE}: cannot start the egress allowlist proxy — ${String(error)}`] };
+    }
+    const runEnv = { ...process.env, ...req.env };
+    const egressEnv = {
+      HTTPS_PROXY: egress.url,
+      HTTP_PROXY: egress.url,
+      NO_PROXY: "",
+      // Telemetry/update hosts are not on the allowlist; turn their traffic off rather than let it fail.
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    };
+    // The inner command must be a real executable: the wrapper cannot retry an npm shim.
+    const inner = (this.platform === "win32" ? this.resolveCommand("claude") : null) ?? { file: "claude", prefixArgs: [] };
+
     let proc: SpawnSyncReturns<string>;
     let resolvedThrough: string | null = null;
     try {
-      ({ proc, resolvedThrough } = this.spawnResolved("claude", args, {
+      ({ proc, resolvedThrough } = this.spawnResolved("codex", [...isolation.sandboxArgs, inner.file, ...inner.prefixArgs, ...args], {
         cwd: req.cwd,
         encoding: "utf8",
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
         input: req.prompt,
-        // The one way a PreToolUse hook can know which agent is writing.
-        env: { ...process.env, ...req.env, STA_ROLE: req.role },
+        // STA_ROLE is the one way a PreToolUse hook can know which agent is writing.
+        env: { ...runEnv, ...isolation.env, ...egressEnv, STA_ROLE: req.role },
       }));
     } catch (e) {
       // A spawn that throws outright — not one that returns with `.error` set —
       // means the runtime itself could not be reached, never a task failure.
-      return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [...modelDiagnostics, `failed to spawn \`claude\`: ${String(e)}`] };
+      return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [...modelDiagnostics, `failed to spawn the isolated \`claude\`: ${String(e)}`] };
+    } finally {
+      egress.stop();
+      cleanupRun();
     }
 
     const guards = await guardReportFor(this.workspace, this.binding.guardConfigPath!, req.guards);
@@ -437,10 +697,11 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (proc.error) {
       const code = (proc.error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        const diagnostics = [...modelDiagnostics, `\`claude\` binary not found: ${proc.error.message}`];
+        // ENOENT here is the wrapper: the isolated claude runs inside `codex sandbox`.
+        const diagnostics = [...modelDiagnostics, `\`codex\` (the OS isolation wrapper for claude) not found: ${proc.error.message}`];
         if (resolvedThrough === null && this.platform === "win32") {
           diagnostics.push(
-            "on Windows an npm-installed `claude` is a .cmd/.ps1 shim spawnSync cannot execute; no resolvable entry was found — install the native build or expose a real executable on PATH",
+            "on Windows an npm-installed `codex` is a .cmd/.ps1 shim spawnSync cannot execute; no resolvable entry was found — install the native build or expose a real executable on PATH",
           );
         }
         return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics };

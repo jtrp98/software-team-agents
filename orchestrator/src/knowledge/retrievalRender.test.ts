@@ -12,6 +12,7 @@ const restrictiveDevPolicy: KnowledgePolicy = {
   roles: {
     [AgentStage.BACKEND_ENGINEER]: { sensitive: "redacted", hideFields: ["relations"] },
     [AgentStage.FRONTEND_ENGINEER]: { sensitive: "redacted", hideFields: ["relations"] },
+    [AgentStage.REVIEWER]: { sensitive: "redacted", hideFields: ["relations"] },
     [AgentStage.QA_ENGINEER]: { sensitive: "redacted", hideFields: ["relations"] },
     [AgentStage.DEVOPS]: { sensitive: "redacted", hideFields: ["relations"] },
     [AgentStage.SECURITY]: { sensitive: "redacted", hideFields: ["relations"] },

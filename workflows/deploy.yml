@@ -5,7 +5,7 @@ description: Production deploy or database migration - always stops for a person
 trigger:
   kind: signal
   signal: isProductionDeployOrMigration
-  priority: 0
+  priority: 1
 level: LARGE_CRITICAL
 requires_human_approval: true
 steps:

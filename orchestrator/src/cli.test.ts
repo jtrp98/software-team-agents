@@ -13,6 +13,10 @@ import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
+import { APPROVE_EXIT_ANNOUNCED, APPROVE_EXIT_NO_TRUSTED_CHANNEL, APPROVE_EXIT_REFUSED } from "./cli/verbs/approve.js";
+import { createChatRelayChannel } from "./gates/chatRelayChannel.js";
+import { resolveHumanDecisionChannel } from "./gates/humanChannelConfig.js";
+import { UNCONFIGURED_HUMAN_CHANNEL } from "./gates/humanDecision.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 import { Environment } from "./environment/environment.js";
@@ -27,6 +31,7 @@ import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import type { RuntimeAdapter, RuntimeAgentRequest } from "./runtime/runtimeAdapter.js";
 import { RuntimeCapability } from "./runtime/runtimeCapabilities.js";
 import { declareInstallationConfigOverrideChannelForTest } from "./threeRepo/installation.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./orchestrator/stageGuards.testSupport.js";
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -67,7 +72,7 @@ describe("T-V9-023 obsolete documentation and knowledge conversion CLI removal",
   });
 
   it("rejects removed knowledge migration actions at dispatch", async () => {
-    await expect(runCli(["knowledge", "migrate-v2"], defaultProjectRoot())).rejects.toThrow(/expected sub-command get or reconcile/);
+    await expect(runCli(["knowledge", "migrate-v2"], defaultProjectRoot())).rejects.toThrow(/expected sub-command get, manifest or reconcile/);
     await expect(runCli(["knowledge-migrate"], defaultProjectRoot())).rejects.toThrow(CliUsageError);
     await expect(runCli(["adopt"], defaultProjectRoot())).rejects.toThrow(CliUsageError);
   });
@@ -90,6 +95,7 @@ describe("parseArgs", () => {
       checkLayout: false,
       checkPromptBudget: false,
       checkWorkflows: false,
+      checkWorkflowRoles: false,
       checkBindings: false,
       checkProfile: false,
       checkDecisions: false,
@@ -104,7 +110,6 @@ describe("parseArgs", () => {
       checkPlan: false,
       checkKnowledge: false,
       checkInstallation: false,
-      checkRoles: false,
       checkGitOwnership: false,
       buildTemplates: undefined,
       environment: Environment.LOCAL,
@@ -117,9 +122,6 @@ describe("parseArgs", () => {
       runtime: undefined,
       model: undefined,
       mode: undefined,
-      noQaOptimization: false,
-      noDeterministicGate: false,
-      noDocumentGate: false,
       tokenBudget: undefined,
       version: false,
     });
@@ -189,12 +191,25 @@ describe("parseArgs", () => {
     expect(USAGE).not.toContain("--mode <single|auto|manual>");
   });
 
-  it("parses the post-hoc token budget and deterministic-gate escape hatch", () => {
-    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "42000", "--no-deterministic-gate"], "/repo");
+  it("parses the post-hoc token budget and rejects non-positive values", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "42000"], "/repo");
     expect(args.tokenBudget).toBe(42_000);
-    expect(args.noDeterministicGate).toBe(true);
-    expect(parseArgs(["--task-id", "T-1", "--module", "m", "--no-document-gate"], "/repo").noDocumentGate).toBe(true);
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "0"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("V13 TASK-024: rejects removed gate and QA optimization bypass flags as unrecognized arguments", () => {
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-deterministic-gate"], "/repo"))
+      .toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-deterministic-gate"], "/repo"))
+      .toThrow(/unrecognized argument: --no-deterministic-gate/);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-document-gate"], "/repo"))
+      .toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-document-gate"], "/repo"))
+      .toThrow(/unrecognized argument: --no-document-gate/);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-qa-optimization"], "/repo"))
+      .toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-qa-optimization"], "/repo"))
+      .toThrow(/unrecognized argument: --no-qa-optimization/);
   });
 
   it("--project-root overrides the default", () => {
@@ -258,7 +273,7 @@ describe("T-V3R-032 production runtime composition", () => {
     // T-V5-039 — the paid API adapter is never constructed here; --runtime
     // only offers runtimes that can actually run.
     const registry = createProductionRuntimeRegistry(defaultProjectRoot());
-    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
+    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity", "zcode"]);
     expect([...registry.get("codex").models]).toContain("gpt-6-astra");
     expect([...registry.get("opencode").models]).toContain("zai-coding-plan/glm-5.3#max");
     expect([...registry.get("antigravity").models]).toContain("gemini-3.8-flash-high");
@@ -269,9 +284,10 @@ describe("T-V3R-032 production runtime composition", () => {
 });
 
 describe("three-repo contract authority", () => {
-  it("uses the Framework contract for a bound Target while preserving the legacy workspace contract", () => {
-    expect(contractRootForTask("C:/target", { targets: [{ target_id: "rainybot", role: AgentStage.BACKEND_ENGINEER }] })).toBe(resolveFrameworkRoot());
-    expect(contractRootForTask("C:/legacy", { targets: [] })).toBe("C:/legacy");
+  it("resolves the role-contract authority from the Framework root alone — a Target never supplies contracts", () => {
+    // V13 TASK-011: the legacy workspace-contract fallback is gone; every
+    // task's guard is scoped from Framework-owned contracts.
+    expect(contractRootForTask()).toBe(resolveFrameworkRoot());
   });
 });
 
@@ -561,7 +577,7 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
   /** Seeds a task directly through the registry, without going through `runCli`'s `run` verb — so these tests never need a real `claude` binary on PATH. */
   function seedTask(dir: string, taskId: string): void {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     registry.create({ taskId, classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
     registry.close();
   }
@@ -689,6 +705,95 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
     }
   });
 
+  it("`approve` fails closed without a trusted human channel — no env actor, no --yes, can decide a pending request", async () => {
+    const dir = tmpDir();
+    const previousUser = process.env.USERNAME;
+    try {
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
+      const orch = registry.create({ taskId: "T-DEPLOY", classification: classifyTask({ isProductionDeployOrMigration: true }) });
+      const waiting = await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } })); // devops prepare
+      expect(waiting.kind).toBe("WAITING_FOR_HUMAN");
+      const requestId = orch.pendingApprovalRequest()!.requestId;
+      registry.close();
+
+      process.env.USERNAME = "definitely-a-human";
+      const args = ["approve", "T-DEPLOY", "--project-root", dir];
+      await expect(runCli([...args, "--yes"], dir)).rejects.toThrow(/--request <request-id> is required/);
+      await expect(runCli([...args, "--request", requestId, "--yes"], dir)).rejects.toThrow(/Controller relay requires/);
+      await expect(runCli([...args, "--request", requestId, "--no"], dir)).rejects.toThrow(/Controller relay requires/);
+      expect(await runCli([...args, "--request", requestId], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
+      await expect(runCli([...args, "--request", requestId, "--yes", "--no"], dir)).rejects.toThrow(/mutually exclusive/);
+      expect(await runCli([...args, "--request", "apr_ffffffffffffffffffffffffffffffff"], dir)).toBe(APPROVE_EXIT_REFUSED);
+
+      const reopened = new SqliteTaskStore(defaultStateDbPath(dir));
+      const ledger = reopened.loadTask("T-DEPLOY")!.approvals;
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]).toMatchObject({ requestId, status: "pending", decision: null });
+      expect(reopened.eventsForTask("T-DEPLOY").map((e) => e.type)).not.toContain("APPROVAL_DECIDED");
+      reopened.close();
+    } finally {
+      if (previousUser === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUser;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([[true, false], [false, false], [true, true], [false, true]])("synthetic Controller relay approved=%s unknownActor=%s survives SQLite reopen", async (approved, unknownActor) => {
+    const dir = tmpDir();
+    vi.mocked(resolveHumanDecisionChannel).mockReturnValue(createChatRelayChannel());
+    try {
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
+      const orch = registry.create({ taskId: "T-CHAT-DEPLOY", classification: classifyTask({ isProductionDeployOrMigration: true }) });
+      expect((await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } }))).kind).toBe("WAITING_FOR_HUMAN");
+      const requestId = orch.pendingApprovalRequest()!.requestId;
+      registry.close();
+
+      const args = ["approve", "T-CHAT-DEPLOY", "--project-root", dir, "--request", requestId];
+      const flag = approved ? "--yes" : "--no";
+      expect(await runCli(args, dir)).toBe(APPROVE_EXIT_ANNOUNCED);
+      await expect(runCli([...args, "--yes"], dir)).rejects.toThrow(/Controller relay requires/);
+      const actorFlags = unknownActor ? ["--chat-actor-unavailable"] : ["--chat-actor-id", "human-1"];
+      const relay = ["--chat-conversation-id", "conv-1", "--chat-message-id", "msg-1", ...actorFlags, "--chat-text", `approve ${requestId}`];
+      await expect(runCli([...args, "--yes", ...relay, ...(unknownActor ? ["--chat-actor-id", "human-1"] : ["--chat-actor-unavailable"])], dir)).rejects.toThrow(/mutually exclusive/);
+      for (const text of ["still reviewing", "approve", "approve apr_00000000000000000000000000000000", `reject ${requestId}`]) {
+        expect(await runCli([...args, "--yes", ...relay.slice(0, -1), text], dir)).toBe(APPROVE_EXIT_REFUSED);
+        const unchanged = new SqliteTaskStore(defaultStateDbPath(dir));
+        expect(unchanged.loadTask("T-CHAT-DEPLOY")?.approvals[0]).toMatchObject({ status: "pending", decision: null });
+        expect(unchanged.eventsForTask("T-CHAT-DEPLOY").map((event) => event.type)).not.toContain("APPROVAL_DECIDED");
+        unchanged.close();
+      }
+      const messageText = `${approved ? "approve" : "reject"} ${requestId}`;
+      const answer = [...relay.slice(0, -1), messageText];
+      expect(await runCli([...args, flag, ...answer], dir)).toBe(approved ? 0 : 3);
+      const reopened = new SqliteTaskStore(defaultStateDbPath(dir));
+      expect(reopened.loadTask("T-CHAT-DEPLOY")?.approvals[0]).toMatchObject({
+        status: approved ? "approved" : "rejected",
+        decision: { approved, source: { channel: "chat-relay", evidenceRef: "chat:conv-1/msg-1" }, note: messageText },
+      });
+      expect(reopened.eventsForTask("T-CHAT-DEPLOY").map((event) => event.type)).toContain("APPROVAL_DECIDED");
+      reopened.close();
+      expect(await runCli([...args, flag, ...answer], dir)).toBe(1);
+      const auditLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        expect(await runCli(["audit", "T-CHAT-DEPLOY", "--decisions", "--project-root", dir], dir)).toBe(0);
+        const audit = auditLog.mock.calls.flat().join("\n");
+        expect(audit).toContain(requestId);
+        expect(audit).toContain(messageText);
+        expect(audit).toContain("chat:conv-1/msg-1");
+        expect(audit).toContain(unknownActor ? "unknown (host-does-not-expose-actor)" : "chat-user:human-1");
+        if (unknownActor) expect(audit).not.toContain("who=human");
+        expect(audit).toContain("Controller assertions");
+      } finally {
+        auditLog.mockRestore();
+      }
+    } finally {
+      vi.mocked(resolveHumanDecisionChannel).mockReturnValue(UNCONFIGURED_HUMAN_CHANNEL);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("`pause`/`cancel`/`resume`/`retry`/`approve` all require a task id", async () => {
     const dir = tmpDir();
     try {
@@ -708,7 +813,7 @@ describe("T32 dashboard — status emoji and watchListing", () => {
 
   function seedTask(dir: string, taskId: string): void {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     registry.create({ taskId, classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
     registry.close();
   }
@@ -733,7 +838,7 @@ describe("T32 dashboard — status emoji and watchListing", () => {
     try {
       seedTask(dir, "T-1");
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
-      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
       let renders = 0;
       let sleeps = 0;
       const originalLog = console.log;
@@ -764,7 +869,7 @@ describe("T32 dashboard — status emoji and watchListing", () => {
     const dir = tmpDir();
     try {
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
-      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
       let clears = 0;
       try {
         await watchListing(registry, { intervalMs: 1, iterations: 2, sleep: async () => {}, clear: () => clears++ });
@@ -781,6 +886,31 @@ describe("T32 dashboard — status emoji and watchListing", () => {
 describe("T35 concurrency lock, wired into the CLI", () => {
   function tmpDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-lock-"));
+  }
+
+  // V13 TASK-011: `sta run` refuses an unbound code task at intake, so the
+  // lock tests build the minimal explicit binding — one backend Target, its
+  // local mapping, and module docs whose design declares that Target.
+  function threeRepoFixture(dir: string, taskId: string): string {
+    const knowledge = path.join(dir, "knowledge");
+    fs.mkdirSync(path.join(knowledge, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
+    fs.writeFileSync(
+      path.join(knowledge, "targets.yaml"),
+      "schema_version: 1\ntargets:\n  - target_id: api\n    name: API\n    remote_url: https://github.com/acme/api.git\n    status: active\n    type: backend\n",
+    );
+    const target = path.join(dir, "target");
+    fs.mkdirSync(path.join(target, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(target, ".git", "config"), '[remote "origin"]\n\turl = https://github.com/acme/api.git\n');
+    fs.writeFileSync(
+      path.join(knowledge, ".workflow", "targets.local.yaml"),
+      `schema_version: 1\ntargets:\n  api:\n    path: ${JSON.stringify(target)}\n`,
+    );
+    writePacketPlan(knowledge, [fixtureTask({ id: taskId })], "m", target);
+    fs.appendFileSync(path.join(knowledge, "_docs", "module", "m", "design.md"), "\n## Targets\n\n- api\n");
+    fs.writeFileSync(path.join(dir, "installation.yaml"), `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "installation.yaml");
+    return knowledge;
   }
 
   it("refuses to run/resume a task another process already holds the lock for", async () => {
@@ -810,18 +940,54 @@ describe("T35 concurrency lock, wired into the CLI", () => {
     }
   });
 
+  it("V13 TASK-007 — `sta run` refuses an engineer stage behind an unverified lane handoff before dispatching anything", async () => {
+    const dir = tmpDir();
+    const prevConfig = process.env.STA_INSTALLATION_CONFIG;
+    // The fixture's Knowledge root holds no items — an empty model is not an
+    // approved handoff, and that is exactly what the guard must refuse on.
+    const knowledge = threeRepoFixture(dir, "BE-LANE");
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => { logs.push(line); });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let composed = false;
+    try {
+      const code = await runCli(
+        ["--task-id", "BE-LANE", "--module", "m", "--project-root", dir, "--bug-fix", "--backend", "--backend-target", "api"],
+        dir,
+        { createRuntimeRegistry: () => { composed = true; throw new Error("no runtime may be composed for a refused stage"); } },
+      );
+      expect(code).toBe(1);
+      expect(logs.join("\n")).toMatch(new RegExp(`cannot start backend-engineer: no knowledge/ directory exists under .*${knowledge.replace(/\\/g, "\\\\")}`));
+      expect(logs.join("\n")).toContain("trusted human decision channel");
+      expect(composed).toBe(false);
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      try {
+        const row = store.loadTask("BE-LANE")!;
+        expect(row.machine.current).toBe(TaskState.IMPLEMENTATION);
+        expect(store.runsForTask("BE-LANE")).toEqual([]);
+      } finally {
+        store.close();
+      }
+    } finally {
+      spy.mockRestore();
+      vi.restoreAllMocks();
+      if (prevConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+      else process.env.STA_INSTALLATION_CONFIG = prevConfig;
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Windows may hold the db briefly */ }
+    }
+  });
+
   it("releases the lock once the run finishes (even though it fails without a real `claude` binary), so a later call is not permanently locked out", async () => {
     const dir = tmpDir();
-    // A code task with no bindings is legal only in legacy (unconfigured) mode.
-    // This test must not depend on whether THIS machine has an installation
-    // configured, so point the mode check at a path that cannot exist.
+    // V13 TASK-011: the run carries an explicit three-repo binding; the run
+    // fails before dispatch (empty-Knowledge lane handoff), and the lock must
+    // still be released rather than leaking, or every future call would
+    // return 4 forever.
     const prevConfig = process.env.STA_INSTALLATION_CONFIG;
-    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
-    // No lock pre-held this time — run will fail quickly (no `claude` on PATH in CI), but the
-    // lock must still be released rather than leaking, or every future call would return 4 forever.
+    threeRepoFixture(dir, "BE-LOCK");
     try {
-      await runCli(["--task-id", "T-1", "--module", "m", "--project-root", dir, "--bug-fix", "--backend"], dir);
-      const code = await runCli(["status", "T-1", "--project-root", dir], dir);
+      await runCli(["--task-id", "BE-LOCK", "--module", "m", "--project-root", dir, "--bug-fix", "--backend", "--backend-target", "api"], dir);
+      const code = await runCli(["status", "BE-LOCK", "--project-root", dir], dir);
       expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
     } finally {
       if (prevConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
@@ -887,7 +1053,7 @@ describe("T-V3TOK-003 tokens verb", () => {
   it("T-V3R-080 renders known completed-task and fallback rollups", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-v3-rollups-"));
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     registry.create({ taskId: "T-done", classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
     const task = store.loadTask("T-done")!;
     store.saveTask({ ...task, machine: { ...task.machine, current: TaskState.DEPLOYED } });
@@ -1067,7 +1233,7 @@ describe("T37 audit verb", () => {
   /** Seeds a task and drives it far enough to produce a trail, without needing a real `claude` binary. */
   function seedWithEvents(dir: string, taskId: string): void {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     const orch = registry.create({
       taskId,
       classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
@@ -1264,7 +1430,7 @@ describe("T41 projects verb", () => {
     const { classifyTask } = await import("./classification/taskClassifier.js");
     const { defaultStateDbPath, defaultStateViewPath } = await import("./store/stateView.js");
     const store = new SqliteTaskStore(defaultStateDbPath(withTasks));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(withTasks) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(withTasks) });
     registry.create({ taskId: "T-1", classification: classifyTask({ isTypoOrCopyOnly: true }), dependsOn: [] });
     registry.close();
 
@@ -1355,7 +1521,7 @@ describe("--env (T43)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-env-"));
     try {
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
-      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
       registry.create({
         taskId: "T-1",
         classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),

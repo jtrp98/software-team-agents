@@ -234,7 +234,9 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     const b = capture();
     await new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync: b.spawnSync }).executeAgent(baseRequest());
 
-    expect(a.get()).toEqual(b.get());
+    // Per-run isolation dirs differ by design; the claude command line after the wrapper's `--` must not.
+    const claudeArgs = (all: string[]) => all.slice(all.indexOf("--") + 1);
+    expect(claudeArgs(a.get())).toEqual(claudeArgs(b.get()));
     expect(a.get()).not.toContain("--model");
 
     // Explicit override → forwarded.
@@ -541,13 +543,62 @@ describe("ClaudeCodeAdapter — guard report reflects the actual workspace, not 
   });
 });
 
+describe("ClaudeCodeAdapter — TASK-031 egress through the loopback allowlist proxy", () => {
+  it("routes the isolated claude through the proxy for api.anthropic.com only, and stops it after the run", async () => {
+    let captured: NodeJS.ProcessEnv | undefined;
+    let requestedHosts: readonly string[] = [];
+    let stopped = 0;
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      platform: "win32",
+      spawnSync: (_cmd, _args, options) => {
+        captured = options.env;
+        return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+      },
+      startEgressProxy: async (hosts) => {
+        requestedHosts = hosts;
+        return { url: "http://127.0.0.1:4242", stop: () => { stopped += 1; } };
+      },
+    });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.status).toBe("OK");
+    expect(requestedHosts).toEqual(["api.anthropic.com"]);
+    expect(captured?.HTTPS_PROXY).toBe("http://127.0.0.1:4242");
+    expect(captured?.HTTP_PROXY).toBe("http://127.0.0.1:4242");
+    expect(captured?.NO_PROXY).toBe("");
+    expect(captured?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
+    expect(stopped).toBe(1);
+  });
+
+  it("refuses before spawn when the proxy cannot start", async () => {
+    let spawned = false;
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      platform: "win32",
+      spawnSync: () => {
+        spawned = true;
+        return cliResult(0, "{}");
+      },
+      startEgressProxy: async () => { throw new Error("no port"); },
+    });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(spawned).toBe(false);
+    expect(result.status).toBe("ERROR");
+    expect(result.diagnostics.join(" ")).toContain("egress allowlist proxy");
+  });
+});
+
 describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
   function enoentOnce(): { spawnSync: SpawnSync; calls: Array<{ cmd: string; args: string[]; cwd?: string }> } {
     const calls: Array<{ cmd: string; args: string[]; cwd?: string }> = [];
     const spawnSync: SpawnSync = (cmd, args, options) => {
       calls.push({ cmd, args: [...args], cwd: options.cwd });
-      if (cmd === "claude") {
-        const err = Object.assign(new Error("spawnSync claude ENOENT"), { code: "ENOENT" });
+      if (cmd === "claude" || cmd === "codex") {
+        const err = Object.assign(new Error(`spawnSync ${cmd} ENOENT`), { code: "ENOENT" });
         return cliResult(null, "", err as NodeJS.ErrnoException);
       }
       return cliResult(0, JSON.stringify({ is_error: false, result: "done via resolved" }));
@@ -555,7 +606,7 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
     return { spawnSync, calls };
   }
 
-  it("on win32, an ENOENT from the bare command retries once through the resolved entry, keeping args/env/cwd", async () => {
+  it("on win32, the isolation wrapper's ENOENT retries once through the resolved codex entry; the inner claude is the resolved executable", async () => {
     const { spawnSync, calls } = enoentOnce();
     let capturedEnv: NodeJS.ProcessEnv | undefined;
     const instrumented: SpawnSync = (cmd, args, options) => {
@@ -566,23 +617,28 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
       projectRoot: tmpProject(),
       spawnSync: instrumented,
       platform: "win32",
-      resolveCommand: (command) => (command === "claude" ? { file: "node-resolved", prefixArgs: ["C:\\npm\\cli.js"] } : null),
+      resolveCommand: (command) =>
+        command === "codex" ? { file: "node-codex", prefixArgs: ["C:/npm/codex.js"] }
+          : command === "claude" ? { file: "C:/npm/claude.exe", prefixArgs: [] } : null,
     });
 
     const result = await adapter.executeAgent(baseRequest({ role: "qa-engineer", env: { FOO: "bar" } }));
 
     expect(calls).toHaveLength(2);
-    expect(calls[0].cmd).toBe("claude");
-    expect(calls[1].cmd).toBe("node-resolved");
-    expect(calls[1].args[0]).toBe("C:\\npm\\cli.js");
+    expect(calls[0].cmd).toBe("codex");
+    expect(calls[0].args[0]).toBe("sandbox");
+    expect(calls[0].args[calls[0].args.indexOf("--") + 1]).toBe("C:/npm/claude.exe");
+    expect(calls[1].cmd).toBe("node-codex");
+    expect(calls[1].args[0]).toBe("C:/npm/codex.js");
     expect(calls[1].args.slice(1)).toEqual(calls[0].args);
     expect(capturedEnv?.STA_ROLE).toBe("qa-engineer");
     expect(capturedEnv?.FOO).toBe("bar");
+    expect(capturedEnv?.CLAUDE_CONFIG_DIR).toMatch(/sta-claude-run-/);
     expect(result.status).toBe("OK");
     expect(result.text).toBe("done via resolved");
   });
 
-  it("on win32, stays UNAVAILABLE when the resolver finds nothing — one attempt only", async () => {
+  it("on win32, stays UNAVAILABLE when the wrapper cannot be resolved — one attempt only", async () => {
     const { spawnSync, calls } = enoentOnce();
     const adapter = new ClaudeCodeAdapter({
       projectRoot: tmpProject(),
@@ -598,7 +654,7 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
     expect(result.diagnostics.some((d) => /shim/i.test(d))).toBe(true);
   });
 
-  it("never consults the resolver off Windows", async () => {
+  it("off Windows, refuses before any spawn: the isolation wrapper is verified only on win32", async () => {
     const { spawnSync, calls } = enoentOnce();
     let resolverCalls = 0;
     const adapter = new ClaudeCodeAdapter({
@@ -614,8 +670,9 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
     const result = await adapter.executeAgent(baseRequest());
 
     expect(resolverCalls).toBe(0);
-    expect(calls).toHaveLength(1);
-    expect(result.status).toBe("UNAVAILABLE");
+    expect(calls).toHaveLength(0);
+    expect(result.status).toBe("ERROR");
+    expect(result.diagnostics.join(" ")).toContain("CLAUDE_ISOLATION_UNAVAILABLE");
   });
 
   it("probe() reports available through the resolved entry too", async () => {

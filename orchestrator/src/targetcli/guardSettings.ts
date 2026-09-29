@@ -392,7 +392,9 @@ function claudeCoverage(wiring: GuardWiringStatus): GuardCoverage {
  * each rendered binding's `permission.bash` block denies state-changing git.
  * Doc-rewrite, secret-leak and green-before-stop have no OpenCode mechanism —
  * the plugin's own header says so, and OpenCode's default posture is allow-all,
- * so a missing plugin means nothing is enforced at all.
+ * so a missing plugin means nothing is enforced at all. Since V13 TASK-014 the
+ * headless adapter refuses a run whose workspace lacks the plugin before any
+ * spawn, instead of launching an unguarded run.
  */
 /** The `partial` verdict when the plugin is present — pure/static, so documentation can quote it without a workspace. */
 export function opencodeCoverageWithPlugin(): GuardCoverage {
@@ -403,7 +405,8 @@ export function opencodeCoverageWithPlugin(): GuardCoverage {
     unenforced: [RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
     detail:
       `partial — ${OPENCODE_PLUGIN_PATH} enforces block-outside-repo and block-path-permissions, and each binding's permission block enforces block-git; ` +
-      "block-doc-rewrite, block-secret-leak and require-green-before-stop have no OpenCode mechanism; the latter two are enforced after headless process exit by the provider-neutral ExitCheckRunner",
+      "block-doc-rewrite, block-secret-leak and require-green-before-stop have no OpenCode mechanism; the latter two are enforced after headless process exit by the provider-neutral ExitCheckRunner; " +
+      "the headless adapter refuses a run whose workspace lacks this plugin before spawn (V13 TASK-014), because OpenCode's default posture is allow-all",
   };
 }
 
@@ -415,7 +418,7 @@ function opencodeCoverage(targetRoot: string): GuardCoverage {
       level: "unguarded",
       enforced: [],
       unenforced: ALL_GUARD_CAPABILITIES,
-      detail: `no ${OPENCODE_PLUGIN_PATH} — OpenCode's default posture is allow-all, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive; run software-team-agents sync`,
+      detail: `no ${OPENCODE_PLUGIN_PATH} — OpenCode's default posture is allow-all, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive; the headless adapter refuses the run before spawn (V13 TASK-014); run software-team-agents sync`,
     };
   }
   return opencodeCoverageWithPlugin();
@@ -492,20 +495,24 @@ export function codexCoverage(targetRoot: string): GuardCoverage {
 }
 
 /**
- * ZCode Desktop is an interactive role-play runtime (the V12 decision): the
- * user opens the desktop app directly and the AI plays pipeline roles from
- * workspace instructions/skills. There is no CLI, so `sta run --runtime zcode`
- * refuses at the registry and no launch preflight can reach this coverage.
+ * ZCode Desktop was treated as an interactive role-play runtime (the V12
+ * decision). V13 TASK-015 traced the install and found the ZCode agent CLI it
+ * bundles (`resources/glm/zcode.cjs`, headless `-p --json`), so
+ * `sta run --runtime zcode` now reaches the governed `ZcodeAdapter`; that
+ * adapter refuses a guarded run unless every STA hook below is persistently
+ * trusted, because the headless engine skips untrusted project hooks.
  * The `.zcode/config.json` hook payload (PreToolUse guards + a Stop hook whose
  * continuation is capped at three) was live-verified end to end on a real
  * ZCode Desktop session (2026-09-23, `planning/v12/evidence/zcode-uat/`): all
  * five PreToolUse denials, the declared-session-role bounds, and the Stop
  * secret-leak block fired for real. Full `enforced` stays unclaimed because
  * the Stop continuation cap and the missing PostToolUse guard remain.
- * The per-role path layer inside `block-path-permissions` resolves its role from
- * `.workflow/session-role.json` (`software-team-agents session-role`) when no
- * orchestrator set `STA_ROLE`, so a declared role-play session gets the same
- * Target/Knowledge write bounds an orchestrated stage does.
+ * The per-role path layer inside `block-path-permissions` resolves its role
+ * from a STA-issued scoped attempt grant (`.workflow/attempt-grant.json`,
+ * issued by `sta grant issue` — V13 TASK-012) when no orchestrator set
+ * `STA_ROLE`, so a granted session gets the same Target/Knowledge write
+ * bounds an orchestrated stage does; the retired `.workflow/session-role.json`
+ * self-declaration grants nothing.
  */
 /** Pure/static — quotes the shipped-payload wiring state into the registry claim, the way `opencodeCoverageWithPlugin` does for OpenCode. */
 export function zcodeCoverageWithSyncedPayload(): GuardCoverage {
@@ -515,7 +522,7 @@ export function zcodeCoverageWithSyncedPayload(): GuardCoverage {
     enforced: [RuntimeCapability.PRE_TOOL_GUARD],
     unenforced: [RuntimeCapability.POST_TOOL_GUARD, RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
     detail:
-      "`.zcode/config.json` wires four PreToolUse guards (block-git, block-outside-repo, block-doc-rewrite, block-path-permissions) plus the Stop pair — live-verified end to end on a real ZCode Desktop session (2026-09-23, planning/v12/evidence/zcode-uat); block-path-permissions takes its role from `.workflow/session-role.json` (declared via `software-team-agents session-role`) when no orchestrator set STA_ROLE, so a declared role-play session gets per-role Target/Knowledge write bounds; require-green-before-stop and block-secret-leak run on the Stop hook, but ZCode caps Stop continuations at three per session (GUARD GAP, covered by the QA round); PostToolUse and per-agent exit guards have no shipped guard",
+      "`.zcode/config.json` wires four PreToolUse guards (block-git, block-outside-repo, block-doc-rewrite, block-path-permissions) plus the Stop pair — live-verified end to end on a real ZCode Desktop session (2026-09-23, planning/v12/evidence/zcode-uat); the headless ZCode CLI runs them only once their declarations are persistently trusted (`zcode hooks trust review`, a person's decision), so the governed adapter refuses a guarded run until they are; block-path-permissions takes its role from a STA-issued attempt grant (`.workflow/attempt-grant.json`, issued via `sta grant issue`) when no orchestrator set STA_ROLE, so a granted session gets per-role Target/Knowledge write bounds; require-green-before-stop and block-secret-leak run on the Stop hook, but ZCode caps Stop continuations at three per session (GUARD GAP, covered by the QA round); PostToolUse and per-agent exit guards have no shipped guard",
   };
 }
 

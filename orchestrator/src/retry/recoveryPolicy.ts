@@ -1,4 +1,5 @@
 import { AgentStage, TaskState } from "../types.js";
+import { z } from "zod";
 import { routeFailure, type StructuredFailure } from "../orchestrator/failure.js";
 import type { TaskMachine } from "../state/taskState.js";
 import { MAX_RETRY, type FailureKind, type TaskRun } from "./retryPolicy.js";
@@ -49,6 +50,49 @@ export type RecoveryAction =
   | { kind: "ESCALATE"; strategy: "escalate_to_human"; reason: string }
   | { kind: "ABORT"; strategy: "abort"; reason: string };
 
+/** Durable policy output. A resumed process reads this decision, never re-runs
+ * policy against a potentially changed configuration for an old failure. */
+export const RECOVERY_POLICY_VERSION = 1;
+export const RecoveryActionSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("RETRY"), strategy: z.literal("retry_same_stage"), stage: z.enum(AgentStage), attempt: z.number().int().nonnegative(), max: z.number().int().nonnegative(), reason: z.string() }),
+  z.strictObject({ kind: z.literal("RECOVER"), strategy: z.literal("return_to_owner"), stage: z.enum(AgentStage), toState: z.enum(TaskState), reason: z.string() }),
+  z.strictObject({ kind: z.literal("ROLLBACK"), strategy: z.literal("rollback_to_verified"), toState: z.enum(TaskState), reason: z.string() }),
+  z.strictObject({ kind: z.literal("ESCALATE"), strategy: z.literal("escalate_to_human"), reason: z.string() }),
+  z.strictObject({ kind: z.literal("ABORT"), strategy: z.literal("abort"), reason: z.string() }),
+]);
+
+/** The durable handoff intent. It names no runtime on purpose: the runtime is
+ * chosen when the next attempt is dispatched (V13 TASK-016 — certified,
+ * capable, available executors only) and pinned, with its version, on that
+ * attempt's record. `nextRuntime` stays null; it must never be read as a
+ * selection. */
+export const HandoffIntentSchema = z.strictObject({
+  policyVersion: z.literal(RECOVERY_POLICY_VERSION),
+  sourceAttemptId: z.string().min(1),
+  sourceStage: z.enum(AgentStage),
+  nextStage: z.enum(AgentStage).nullable(),
+  nextRuntime: z.null(),
+  scopeDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  reason: z.string().min(1),
+});
+
+export function decideHandoffIntent(
+  action: RecoveryAction,
+  sourceAttemptId: string,
+  sourceStage: AgentStage,
+  scopeDigest: string | null,
+): z.infer<typeof HandoffIntentSchema> {
+  return HandoffIntentSchema.parse({
+    policyVersion: RECOVERY_POLICY_VERSION,
+    sourceAttemptId,
+    sourceStage,
+    nextStage: action.kind === "RETRY" || action.kind === "RECOVER" ? action.stage : null,
+    nextRuntime: null,
+    scopeDigest,
+    reason: action.reason,
+  });
+}
+
 export interface RecoveryInput {
   /** The failure as classified. Undefined when the reporting stage gave none. */
   failure: StructuredFailure | undefined;
@@ -73,7 +117,7 @@ const POST_VERIFICATION: TaskState[] = [TaskState.READY_TO_DEPLOY, TaskState.APP
 
 /** The last state in the machine's own sequence that counts as verified work to fall back to. */
 function lastVerifiedState(machine: TaskMachine): TaskState | null {
-  for (const candidate of [TaskState.SECURITY, TaskState.QA, TaskState.IMPLEMENTATION]) {
+  for (const candidate of [TaskState.SECURITY, TaskState.QA, TaskState.REVIEW, TaskState.IMPLEMENTATION]) {
     if (machine.sequence.includes(candidate) && machine.history.includes(candidate)) return candidate;
   }
   return null;

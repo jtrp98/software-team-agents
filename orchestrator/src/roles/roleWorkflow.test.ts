@@ -1,4 +1,7 @@
+import * as os from "node:os";
 import { describe, expect, it } from "vitest";
+import { LANE_SIGNOFF_TYPE } from "../gates/laneApproval.js";
+import { laneItemDigest, laneItemRefs } from "./laneDecisions.js";
 import { AgentStage } from "../types.js";
 import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
 import type { KnowledgeItem, KnowledgeStatus, RequirementPayload, TaskPayload } from "../knowledge/knowledgeModel.js";
@@ -6,7 +9,6 @@ import { ALLOWED_OWNERS, canTransition } from "../knowledge/ownership.js";
 import { sampleKnowledge } from "../knowledge/sampleKnowledge.js";
 import { ROLE_LANES, type RoleLane, laneOf } from "./roleLane.js";
 import { type RoleWorkspace, emptyWorkspace } from "./roleWorkspace.js";
-import { recordSignoff } from "./roleApproval.js";
 import {
   BA_WORKFLOW,
   DEV_WORKFLOW,
@@ -15,11 +17,17 @@ import {
   type WorkspaceLookup,
   describeStage,
   ownedKindsOf,
-  roleWorkflowState,
+  roleWorkflowState as roleWorkflowStateOf,
   workflowFor,
 } from "./roleWorkflow.js";
 
 const NOW = "2026-08-21T10:00:00Z";
+
+/** Refs the way a lane decision records them; the digest covers content, never the version or status. */
+const refsOf = (items: KnowledgeItem[]) => laneItemRefs(items, os.tmpdir());
+const roleWorkflowState = (spec: Parameters<typeof roleWorkflowStateOf>[0], module: string | null, kb: KnowledgeBase, workspaces: WorkspaceLookup) =>
+  roleWorkflowStateOf(spec, module, kb, workspaces, refsOf);
+const SAMPLE = new KnowledgeBase(sampleKnowledge());
 
 /** The BA lane's two items, at whatever status the case needs. */
 function withStatus(overrides: Record<string, KnowledgeStatus>, extra: Partial<KnowledgeItem>[] = []): KnowledgeBase {
@@ -41,23 +49,32 @@ function lanes(): { lookup: WorkspaceLookup; ack(lane: RoleLane, seen: Record<st
   const map = new Map<RoleLane, RoleWorkspace>(ROLE_LANES.map((l) => [l, emptyWorkspace(l, "sales-crm", NOW)]));
   return {
     lookup: (lane) => map.get(lane) as RoleWorkspace,
+    // The projection of trusted acknowledgement decisions: the digest is the sample item's content.
     ack(lane, seen) {
       map.set(lane, {
         ...(map.get(lane) as RoleWorkspace),
-        seen: Object.entries(seen).map(([id, version]) => ({ id, version, at: NOW, by: "Nan" })),
+        seen: Object.entries(seen).map(([id, version]) => ({ id, version, digest: laneItemDigest(SAMPLE.get(id)!, os.tmpdir()), at: NOW, by: "Nan" })),
       });
     },
+    // The projection of one trusted sign-off decision over `approved`.
     sign(lane, approved, opts = {}) {
-      map.set(
-        lane,
-        recordSignoff(map.get(lane) as RoleWorkspace, {
-          approved,
-          approve: opts.approve ?? true,
-          by: opts.by ?? "Nan",
-          note: opts.note,
-          now: NOW,
-        }),
-      );
+      const current = map.get(lane) as RoleWorkspace;
+      map.set(lane, {
+        ...current,
+        signoffs: [
+          ...current.signoffs,
+          {
+            type: LANE_SIGNOFF_TYPE[lane],
+            status: (opts.approve ?? true) ? "approved" : "rejected",
+            items: refsOf(approved),
+            at: NOW,
+            by: opts.by ?? "Nan",
+            note: opts.note ?? null,
+            requestId: `apr_${String(current.signoffs.length).padStart(32, "0")}`,
+            decisionId: `test-decision-${lane}-${current.signoffs.length}`,
+          },
+        ],
+      });
     },
   };
 }
@@ -101,9 +118,10 @@ describe("the BA lane workflow (T100)", () => {
     expect(state.nextAction.what).toMatch(/somebody other than the owner reviews them/);
   });
 
-  it("hands the next move to a person once everything is reviewed", () => {
+  it("hands the next move to a person once everything is reviewed — the lane sign-off makes it binding", () => {
     const state = baState(withStatus({ "RULE-007": "reviewed" }));
-    expect(state.stage).toBe("awaiting-approval");
+    expect(state.stage).toBe("awaiting-signoff");
+    expect(state.nextAction.what).toMatch(/REQ-003, RULE-007 wait on the lane sign-off, which also makes them binding/);
     expect(state.reviewed).toEqual(["RULE-007"]);
     expect(state.nextAction.actor).toBe("human");
   });
@@ -112,7 +130,7 @@ describe("the BA lane workflow (T100)", () => {
   it("never names an agent as the actor for the approval step", () => {
     for (const status of ["draft", "reviewed", "approved"] as KnowledgeStatus[]) {
       const state = baState(withStatus({ "RULE-007": status }));
-      if (state.stage === "awaiting-approval" || state.stage === "ready" || state.stage === "intake") {
+      if (state.stage === "awaiting-signoff" || state.stage === "ready" || state.stage === "intake") {
         expect(state.nextAction.actor).toBe("human");
       }
     }
@@ -122,7 +140,7 @@ describe("the BA lane workflow (T100)", () => {
     const state = baState(withStatus({ "RULE-007": "approved" }));
     expect(state.stage).toBe("awaiting-signoff");
     expect(state.nextAction.actor).toBe("human");
-    expect(state.nextAction.what).toMatch(/sta roles signoff ba --by <name>/);
+    expect(state.nextAction.what).toMatch(/trusted human decision channel/);
   });
 
   it("is ready, and says how to record the handoff, once approved and signed off", () => {
@@ -132,7 +150,7 @@ describe("the BA lane workflow (T100)", () => {
     expect(state.approved).toEqual(["REQ-003", "RULE-007"]);
     expect(state.handoff.to).toBe("sa");
     expect(state.handoff.blockers).toEqual([]);
-    expect(state.nextAction.what).toMatch(/sta roles ack sa REQ-003,RULE-007 --by <name>/);
+    expect(state.nextAction.what).toMatch(/trusted human decision channel/);
   });
 
   it("blocks the handoff on anything not yet approved, and says why", () => {

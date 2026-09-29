@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { renameSyncRetrying } from "../concurrency/atomicRename.js";
+import { mayOwn } from "./ownership.js";
 import {
   type KnowledgeItem,
   KnowledgeItemError,
@@ -243,6 +245,20 @@ export function sameKnowledgeContent(a: KnowledgeItem, b: KnowledgeItem): boolea
   return contentOf(a) === contentOf(b);
 }
 
+/**
+ * What a lane decision binds an item's content to (V13 TASK-028): sha256 over
+ * the same content `sameKnowledgeContent` compares, minus `status`. The
+ * version is bound separately. `status` is left out because it is not the
+ * subject of a decision but the thing a decision replaces — a file saying
+ * `approved` is never authority, so editing that word must neither forge nor
+ * revoke anything. Any other edit to a signed item, even one that forgot to
+ * bump `version`, moves the digest and makes the decision stale.
+ */
+export function knowledgeSubjectDigest(item: KnowledgeItem): string {
+  const { status: _status, ...subject } = item;
+  return createHash("sha256").update(contentOf(subject as KnowledgeItem)).digest("hex");
+}
+
 function orderedForYaml(item: KnowledgeItem): Record<string, unknown> {
   // Written in the order a person reads it: identity, then state, then
   // provenance, then the kind-specific half, then the prose last because it is
@@ -297,6 +313,8 @@ export function writeKnowledgeItem(
   options: WriteOptions = {},
 ): string {
   const problems = checkKnowledgeItem(item);
+  if (!mayOwn(item.kind, item.owner)) problems.push(`${item.owner} cannot own ${item.kind}; role-owned artifacts require their owning role and human decisions remain separate`);
+  if (item.schema_version === 2) problems.push("canonical Knowledge items require a verified role-attempt commit; direct item writes are closed");
   if (problems.length > 0) throw new KnowledgeItemError(item.id, problems);
 
   const filePath = pathFor(item, projectRoot);

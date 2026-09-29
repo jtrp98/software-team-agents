@@ -727,11 +727,18 @@ describe("Antigravity guard binding (T-V6-012)", () => {
 
   it("registers only tool names AGY was observed to advertise, one exact matcher each", () => {
     const managed = renderAgyManagedHooks();
+    // Every name appears in the real agy `init.tools` roster (planning/v6/v6-agy-spike-evidence.md);
+    // the read and shell tools carry the approval-channel floor (V13 TASK-027).
     expect(managed.PreToolUse.map((entry) => entry.matcher)).toEqual([
+      "find_by_name",
+      "grep_search",
+      "list_dir",
       "multi_replace_file_content",
       "notebook_edit",
       "replace_file_content",
+      "run_command",
       "sed_file",
+      "view_file",
       "write_to_file",
     ]);
     for (const entry of managed.PreToolUse) {

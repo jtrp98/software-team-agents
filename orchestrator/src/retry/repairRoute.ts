@@ -1,4 +1,5 @@
 import { AgentStage, TaskState } from "../types.js";
+import { z } from "zod";
 import type { Finding, FindingCategory } from "../artifacts/finding.js";
 import type { TaskGraph } from "../graph/taskGraph.js";
 import type { QaRiskSignals } from "../qa/mode.js";
@@ -47,6 +48,17 @@ export interface RepairRoute {
   /** The recorded rationale — one sentence naming the category and the rule that chose this route. */
   reason: string;
 }
+
+/** A recovery route is a decision record, so resume reads these exact fields. */
+export const RepairRouteSchema = z.strictObject({
+  kind: z.enum(["delta-repair", "recompile-descendants", "business-decision", "halt-and-resume", "escalate"]),
+  owner: z.union([z.enum(AgentStage), z.literal("human")]),
+  toState: z.enum(TaskState).optional(),
+  invalidates: z.array(z.string()),
+  requiresFullQa: z.boolean(),
+  consumesDefectRetry: z.boolean(),
+  reason: z.string().min(1),
+});
 
 /** Facts about what the repair itself touched. Booleans, supplied by the caller — never inferred from prose here. */
 export interface RepairChangeFacts {

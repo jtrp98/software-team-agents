@@ -1,6 +1,6 @@
 import { TaskState } from "../types.js";
 import { canTransition, transition, type TaskMachine } from "../state/taskState.js";
-import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
+import type { QaReportArtifact, ReviewReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
 import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
 import { checkQaVerdictCoverage } from "../qa/verdict.js";
 import {
@@ -9,6 +9,7 @@ import {
   type BusinessInputEvidence,
 } from "./businessInput.js";
 import type { DesignGateAssessment } from "../docs/designEvidence.js";
+import { gateEvidenceFrom, type ApprovalLedger } from "./approval.js";
 
 /**
  * Evidence available to gate a transition. This is deliberately separate
@@ -16,15 +17,23 @@ import type { DesignGateAssessment } from "../docs/designEvidence.js";
  * no idea whether a design was approved or a QA report passed.
  */
 export interface GateContext {
-  /** The interactive requirement fallback was answered by a person. */
+  /**
+   * Derived at check time from the persisted approval ledger
+   * (`gateEvidenceFrom`) — never stored, never accepted from a caller or an
+   * executor. See `StoredGateEvidence`.
+   */
   requirementApproved?: boolean;
   /** Structured intake evidence. Complete confirmed input discharges only the redundant interview. */
   businessInput?: BusinessInputEvidence;
   /** Risk facts derived from design.md after SA completes. */
   designAssessment?: DesignGateAssessment;
+  /** Derived from the ledger, like `requirementApproved`. */
   designApproved?: boolean;
+  /** The reviewer's parsed verdict (V13 TASK-006); leaving REVIEW forward requires PASS. */
+  reviewReport?: ReviewReportArtifact;
   qaReport?: QaReportArtifact;
   securityReport?: SecurityReportArtifact;
+  /** Derived from the ledger, like `requirementApproved`. */
   humanApproved?: boolean;
   /**
    * The mode decision made for the current QA round. Optional for backward
@@ -42,6 +51,19 @@ export interface GateContext {
    * caller that composes the gate without that wrapper is still held to it.
    */
   qaVerdictRequirements?: string[];
+}
+
+/** The part of the gate context a task persists. Human approval facts are excluded: they exist only as ledger records. */
+export type StoredGateEvidence = Omit<GateContext, "requirementApproved" | "designApproved" | "humanApproved">;
+
+/**
+ * The context a gate is checked against: stored evidence plus approval facts
+ * derived from the ledger. Any approval key present on the stored side is
+ * discarded, never merged — only a recorded human decision can supply one.
+ */
+export function gateContextFor(stored: StoredGateEvidence, ledger: ApprovalLedger): GateContext {
+  const { requirementApproved: _r, designApproved: _d, humanApproved: _h, ...evidence } = stored as GateContext;
+  return { ...evidence, ...gateEvidenceFrom(ledger) };
 }
 
 export interface GateResult {
@@ -102,6 +124,12 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
             ? designGateReason(ctx.designAssessment)
             : "DESIGN_APPROVED required before development can start",
         };
+  }
+
+  if (from === TaskState.REVIEW && to !== TaskState.REVIEW_FAILED) {
+    return ctx.reviewReport?.verdict === "PASS"
+      ? { allowed: true }
+      : { allowed: false, reason: "REVIEW_PASS required — review-report.verdict must be PASS" };
   }
 
   if (from === TaskState.QA && to !== TaskState.QA_FAILED) {

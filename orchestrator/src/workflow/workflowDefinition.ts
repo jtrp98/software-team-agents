@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
 import { AgentStage, TaskLevel } from "../types.js";
-import { defaultProjectRoot } from "../agents/agentContract.js";
-import { testPlannerDecision, type ClassificationInput } from "../classification/taskClassifier.js";
-import { catalogWorkflows, checkWorkflowFiles, workflowPath, workflowsDir } from "./workflowCatalog.js";
+import { defaultProjectRoot, loadAgentContract } from "../agents/agentContract.js";
+import { classifyTask, testPlannerDecision, type ClassificationInput } from "../classification/taskClassifier.js";
+import { contentHash } from "../artifacts/executionPacket.js";
+import { STAGE_EVIDENCE_REQUIREMENTS } from "../orchestrator/transitionGuard.js";
+import { catalogWorkflows, checkWorkflowFiles, renderWorkflowYaml, workflowPath, workflowsDir } from "./workflowCatalog.js";
 
 export { workflowPath, workflowsDir };
 
@@ -35,7 +37,13 @@ export type WorkflowTrigger =
 
 export interface WorkflowStep {
   agent: AgentStage;
-  when?: "touchesBackend" | "touchesFrontend" | "touchesSensitiveArea" | "always_sensitive" | "test_strategy_required";
+  when?:
+    | "touchesBackend"
+    | "touchesFrontend"
+    | "touchesSensitiveArea"
+    | "touchesSensitiveAreaOrSchema"
+    | "always_sensitive"
+    | "test_strategy_required";
   note?: string;
 }
 
@@ -160,6 +168,7 @@ export function pipelineFromWorkflow(workflow: WorkflowDefinition, input: Classi
     if (step.when === "touchesBackend" && !input.touchesBackend) continue;
     if (step.when === "touchesFrontend" && !input.touchesFrontend) continue;
     if (step.when === "touchesSensitiveArea" && !input.touchesSensitiveArea) continue;
+    if (step.when === "touchesSensitiveAreaOrSchema" && !input.touchesSensitiveArea && !input.touchesSchema) continue;
     if (step.when === "test_strategy_required" && !testPlannerDecision(input).required) continue;
     // always_sensitive: included regardless of what the caller said.
     if (!stages.includes(step.agent) || step.agent !== AgentStage.SECURITY) stages.push(step.agent);
@@ -216,6 +225,74 @@ export function checkAllWorkflows(projectRoot: string = defaultProjectRoot()): W
   return { ok: problems.length === 0, problems };
 }
 
+/**
+ * One task's compiled, versioned pipeline (V13 TASK-004) — the declarative
+ * `workflows/<id>.yml` twin of what `classifyTask()` computes directly,
+ * cross-checked against it rather than trusted blindly.
+ */
+export interface CompiledWorkflowPlan {
+  workflowId: string;
+  /** Absolute path to the `workflows/<id>.yml` this plan was compiled from. */
+  workflowSource: string;
+  /** sha256 of the workflow's canonical rendered YAML bytes (same convention as `plan_hash`/`artifact_hashes`). */
+  workflowDigest: string;
+  pipeline: AgentStage[];
+  level: TaskLevel;
+  requiresHumanApproval: boolean;
+}
+
+export class WorkflowPlanMismatchError extends Error {
+  constructor(
+    public readonly workflowId: string,
+    public readonly fromWorkflow: AgentStage[],
+    public readonly fromClassifier: AgentStage[],
+  ) {
+    super(
+      `compiled workflow plan for "${workflowId}" disagrees with classifyTask() —\n` +
+        `  from workflows/${workflowId}.yml: ${fromWorkflow.join(" -> ") || "(empty)"}\n` +
+        `  from classifyTask() directly:   ${fromClassifier.join(" -> ") || "(empty)"}\n` +
+        "this must never silently diverge; fix the workflow catalog derivation (workflowCatalog.ts) or the classifier",
+    );
+    this.name = "WorkflowPlanMismatchError";
+  }
+}
+
+/**
+ * Compiles one task's pipeline from the persisted, versioned
+ * `workflows/<id>.yml` — reading from disk rather than the in-memory catalog,
+ * since the persisted file is the thing being compiled (`loadAllWorkflows`,
+ * not `catalogWorkflows()`; the same default `resolveWorkflowId` already
+ * used elsewhere before this task).
+ *
+ * Fails closed: `classifyTask(input).pipeline` is recomputed directly and
+ * compared against the declarative reconstruction. Any discrepancy is a bug
+ * in the derivation, never a difference to silently prefer one side of.
+ */
+export function compileWorkflowPlan(
+  input: ClassificationInput,
+  projectRoot: string = defaultProjectRoot(),
+): CompiledWorkflowPlan {
+  const workflows = loadAllWorkflows(projectRoot);
+  const workflowId = resolveWorkflowId(input, workflows);
+  const workflow = workflows[workflowId];
+  if (!workflow) throw new WorkflowError(workflowId, [`resolveWorkflowId selected "${workflowId}", which is not among the loaded workflows`]);
+
+  const pipeline = pipelineFromWorkflow(workflow, input);
+  const fromClassifier = classifyTask(input).pipeline;
+  if (JSON.stringify(pipeline) !== JSON.stringify(fromClassifier)) {
+    throw new WorkflowPlanMismatchError(workflowId, pipeline, fromClassifier);
+  }
+
+  return {
+    workflowId,
+    workflowSource: path.resolve(workflowPath(workflowId, projectRoot)),
+    workflowDigest: contentHash(renderWorkflowYaml(workflow)),
+    pipeline,
+    level: workflow.level,
+    requiresHumanApproval: workflow.requires_human_approval,
+  };
+}
+
 export class WorkflowMismatchError extends Error {
   constructor(public readonly problems: string[]) {
     super(`workflows/ and the classifier disagree:\n- ${problems.join("\n- ")}`);
@@ -226,4 +303,85 @@ export class WorkflowMismatchError extends Error {
 export function assertWorkflowsMatchClassifier(projectRoot: string = defaultProjectRoot()): void {
   const result = checkAllWorkflows(projectRoot);
   if (!result.ok) throw new WorkflowMismatchError(result.problems);
+}
+
+/**
+ * Representative input matrix a compiled plan can realistically produce: the
+ * same shapes {@link deriveSignalWorkflow} (workflowCatalog.ts) probes,
+ * plus `touchesSchema` — the axis this task's Part A fix depends on — so a
+ * stage this task's compiler can select is exactly what this checker
+ * exercises, not a hand-picked subset of it.
+ */
+const REPRESENTATIVE_PLAN_PROBES: readonly ClassificationInput[] = [
+  {},
+  { touchesBackend: true },
+  { touchesFrontend: true },
+  { touchesBackend: true, touchesFrontend: true },
+  { touchesBackend: true, touchesFrontend: true, touchesSensitiveArea: true },
+  { touchesBackend: true, touchesFrontend: true, touchesSchema: true },
+  { touchesBackend: true, touchesFrontend: true, testStrategyTriggers: ["cross-task"] },
+];
+
+export interface WorkflowRoleCoverageResult {
+  ok: boolean;
+  problems: string[];
+}
+
+/**
+ * `--check-workflow-roles` (V13 TASK-004 Part C): every non-HUMAN stage a
+ * compiled plan can select, across every workflow and the representative
+ * input matrix above, must have a loadable `contracts/<stage>.yaml`
+ * ("missing role") and an entry in `STAGE_EVIDENCE_REQUIREMENTS`
+ * ("missing evidence rule"). Both are closed `Record<AgentStage, …>` maps
+ * today, so this mainly guards against the real, checkable drift: a stage's
+ * contract file going missing or unreadable on disk.
+ *
+ * Plan-graph invariants (cycles, unknown owners, missing role/evidence for a
+ * `PlanTask`) are `planCompilation.ts`'s job already — this checker is the
+ * workflow-catalog half only, and does not duplicate that one.
+ */
+export function checkWorkflowRoleCoverage(projectRoot: string = defaultProjectRoot()): WorkflowRoleCoverageResult {
+  const problems: string[] = [];
+  let workflows: Record<string, WorkflowDefinition>;
+  try {
+    workflows = loadAllWorkflows(projectRoot);
+  } catch (e) {
+    return { ok: false, problems: [e instanceof WorkflowError ? e.message : String(e)] };
+  }
+  if (Object.keys(workflows).length === 0) {
+    return { ok: false, problems: [`no workflow files found in ${workflowsDir(projectRoot)}`] };
+  }
+
+  const stagesSeen = new Map<AgentStage, string>(); // stage -> one workflow id that selected it, for the message
+  for (const workflow of Object.values(workflows)) {
+    for (const probe of REPRESENTATIVE_PLAN_PROBES) {
+      const input: ClassificationInput =
+        workflow.trigger.kind === "signal" && workflow.trigger.signal !== "none"
+          ? { ...probe, [workflow.trigger.signal]: true }
+          : probe;
+      for (const stage of pipelineFromWorkflow(workflow, input)) {
+        if (stage === AgentStage.HUMAN) continue;
+        if (!stagesSeen.has(stage)) stagesSeen.set(stage, workflow.workflow);
+      }
+    }
+  }
+
+  for (const [stage, exampleWorkflow] of stagesSeen) {
+    try {
+      loadAgentContract(stage, projectRoot);
+    } catch (e) {
+      problems.push(
+        `${stage} (selected by workflows/${exampleWorkflow}.yml): missing role — ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    const requirements = STAGE_EVIDENCE_REQUIREMENTS[stage];
+    if (!requirements || requirements.length === 0) {
+      problems.push(
+        `${stage} (selected by workflows/${exampleWorkflow}.yml): missing evidence rule — ` +
+          "STAGE_EVIDENCE_REQUIREMENTS (orchestrator/transitionGuard.ts) has no completion requirement for it",
+      );
+    }
+  }
+
+  return { ok: problems.length === 0, problems };
 }

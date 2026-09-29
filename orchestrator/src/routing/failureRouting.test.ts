@@ -14,7 +14,7 @@ const FULL_PIPELINE = [
   AgentStage.DEVOPS,
 ];
 
-/** A review.md shaped the way `qa-engineer.md` specifies its Open Issues table. */
+/** A qa.md shaped the way `qa-engineer.md` specifies its Open Issues table. */
 function review(rows: string[], header = "| issue | phase | routes to | blocking | rounds |"): string {
   return [
     "# sales-crm — Verification & Review",

@@ -4,7 +4,6 @@ import {
   ArtifactValidationError,
   HANDOFF_MAX_BYTES,
   validateArtifact,
-  LegacyExecutionPacketSchema,
 } from "./schemas.js";
 
 describe("HandoffArtifact", () => {
@@ -67,8 +66,7 @@ describe("ExecutionPacket", () => {
     sources: ["runtime-task", "module-docs"],
   };
 
-  it("reads the old handoff for audit but refuses it as an execution packet", () => {
-    expect(LegacyExecutionPacketSchema.parse(valid)).toEqual(valid);
+  it("refuses legacy packet format as an execution packet", () => {
     expect(() => validateArtifact(ArtifactType.EXECUTION_PACKET, valid)).toThrow(ArtifactValidationError);
   });
 

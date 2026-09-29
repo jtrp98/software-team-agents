@@ -3,7 +3,6 @@ import type { Finding } from "../artifacts/finding.js";
 import type { ApprovalRecord } from "../gates/approval.js";
 import { readFindingsForTask } from "../state/runtimeArtifacts.js";
 import type { SqliteTaskStore } from "../store/sqliteStore.js";
-import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import {
   LedgerAmbiguityError,
   LedgerAttemptSchema,
@@ -16,18 +15,15 @@ import {
   type LedgerAttempt,
   type LedgerCheckpoint,
   type LedgerEvent,
-  type LedgerReadiness,
   type LedgerRun,
   type LedgerTask,
   type NewLedgerEvent,
   type RunLedger,
 } from "./runLedger.js";
 import {
-  SETTLED_TASK_STATUSES,
   TERMINAL_RUN_STATUSES,
   applyAttemptStatus,
   applyRunStatus,
-  applyTaskStatus,
   type LedgerAttemptStatus,
   type LedgerRunStatus,
   type LedgerTaskStatus,
@@ -174,17 +170,11 @@ export class SqliteRunLedger implements RunLedger {
     return row ? LedgerTaskSchema.parse(JSON.parse(row.record)) : null;
   }
 
-  setTaskStatus(
-    runId: string,
-    taskId: string,
-    to: LedgerTaskStatus,
-    options: { reason?: string; actor?: string } = {},
-  ): LedgerTask {
+  projectTaskStatus(runId: string, taskId: string, to: LedgerTaskStatus, options: { reason?: string } = {}): LedgerTask {
     return this.transaction(() => {
       const task = this.readTask(runId, taskId);
       if (!task) throw new LedgerNotFoundError(`task in run ${runId}`, taskId);
-      const transition = applyTaskStatus(`${runId}/${taskId}`, task.status, to);
-      if (transition.idempotent) return task;
+      if (task.status === to) return task;
       const updated: LedgerTask = { ...task, status: to, updated_at: this.now() };
       this.db
         .prepare("UPDATE ledger_tasks SET record = ? WHERE run_id = ? AND task_id = ?")
@@ -194,46 +184,14 @@ export class SqliteRunLedger implements RunLedger {
         task_id: taskId,
         at: updated.updated_at,
         kind: "TASK_STATUS",
-        actor: options.actor ?? "orchestrator",
+        actor: "engine-projection",
         reason: options.reason ?? null,
         from: task.status,
         to,
-        payload: {},
+        payload: { projection: true },
       });
       return updated;
     });
-  }
-
-  /**
-   * Readiness from the frozen DAG plus ledger status — the single authority
-   * T-V8-017 requires. It deliberately reads no plan file: the plan the run
-   * froze is the one it walks, and a later edit to `plan.md` must force an
-   * explicit recompile, not quietly change which task runs next.
-   */
-  readiness(runId: string): LedgerReadiness {
-    const tasks = this.readTasks(runId);
-    if (tasks.length === 0) throw new LedgerNotFoundError("run", runId);
-    const graph = taskGraphFromPlan(
-      tasks.map((task) => ({
-        id: task.task_id,
-        owner: task.owner,
-        phase: task.phase,
-        dependsOn: task.depends_on,
-        produces: task.produces,
-        consumes: task.consumes,
-      })),
-    );
-    const settled = tasks.filter((task) => SETTLED_TASK_STATUSES.has(task.status)).map((task) => task.task_id);
-    const blocked = tasks.filter((task) => task.status === "BLOCKED").map((task) => task.task_id);
-    const ready: string[] = [];
-    const waiting: Array<{ task_id: string; waiting_on: string[] }> = [];
-    for (const task of tasks) {
-      if (SETTLED_TASK_STATUSES.has(task.status) || task.status === "BLOCKED") continue;
-      const waitingOn = graph.waitingOn(task.task_id, settled, blocked);
-      if (waitingOn.length === 0) ready.push(task.task_id);
-      else waiting.push({ task_id: task.task_id, waiting_on: waitingOn });
-    }
-    return { ready, waiting, blocked, settled };
   }
 
   // -- attempts ------------------------------------------------------------
@@ -267,6 +225,7 @@ export class SqliteRunLedger implements RunLedger {
         runtime: record.observed.runtime,
         model: record.observed.model,
         effort: record.observed.effort,
+        runtime_version: record.runtime_version,
         packet_hash: record.packet_hash,
         ...(record.reroute_of === null ? {} : { reroute_of: record.reroute_of }),
       },
@@ -382,7 +341,7 @@ export class SqliteRunLedger implements RunLedger {
 
   // -- read-through to the authorities that already own these facts --------
 
-  retriesFor(taskId: string): { qa: number; security: number } | null {
+  retriesFor(taskId: string): { review: number; qa: number; security: number } | null {
     const task = this.store.loadTask(taskId);
     return task ? { ...task.retries } : null;
   }

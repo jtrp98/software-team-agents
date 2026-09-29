@@ -1,13 +1,24 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { PlanTaskSchema } from "../docs/planTask.js";
+import { PlanTaskSchema, planTaskHash } from "../docs/planTask.js";
 import { AgentStage } from "../types.js";
 import { DesignEvidenceRefSchema } from "../docs/designEvidence.js";
 
 const text = z.string().min(1);
 export const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 export const RevisionSchema = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/);
-export const TaskContractSchema = PlanTaskSchema.omit({ status: true });
+const PlannedContractSchema = PlanTaskSchema.omit({ status: true });
+/** Workflow preparation has no PM phase, task traces or implementation authority. */
+export const WorkflowContractSchema = PlannedContractSchema.extend({
+  version: z.literal("workflow-1"), phase: z.null(),
+  owner: z.literal(AgentStage.BUSINESS_ANALYST),
+  traceability: z.array(text).length(0), produces: z.array(text).length(0), consumes: z.array(text).length(0),
+}).strict();
+export const TaskContractSchema = z.union([PlannedContractSchema, WorkflowContractSchema]);
+export type TaskContract = z.infer<typeof TaskContractSchema>;
+export function taskContractHash(contract: TaskContract): string {
+  return contract.version === 1 ? planTaskHash({ ...contract, status: "pending" }) : stableHash(contract);
+}
 export const SourceHashSchema = z.strictObject({ source: text, hash: Sha256Schema });
 export const SelectedTraceSchema = z.strictObject({ id: text, source: text, text, hash: Sha256Schema });
 export const DependencySchema = z.strictObject({
@@ -23,7 +34,10 @@ export const RetrievalCandidateSchema = z.strictObject({
 });
 export const VerificationSchema = z.object({
   status: z.enum(["selected", "full-order", "deferred"]), levels: z.array(text), reason: text,
-  enforcement: z.enum(["warn", "enforce"]).optional(), task_types: z.array(text).optional(),
+  // V13 TASK-017 — `warn` is deleted: a required check that produced no
+  // evidence blocks. A persisted task still carrying `warn` fails this schema
+  // and must be recompiled, exactly as an explicit cutover demands.
+  enforcement: z.literal("enforce").optional(), task_types: z.array(text).optional(),
   selection_source: z.enum(["task-classification", "change-scope", "full-order"]).optional(),
 });
 
@@ -50,12 +64,28 @@ export function packetConfigHash(input: {
   });
 }
 
+export const RoleContractDigestSchema = z.strictObject({
+  name: text,
+  role: text,
+  version: z.string().optional(),
+  digest: Sha256Schema,
+  constraints: z.array(text).optional(),
+  tools: z.array(text).optional(),
+});
+
+export const ExpectedOutputSchema = z.strictObject({
+  artifact_type: text,
+  doc_path: text.optional(),
+  schema_name: text.optional(),
+  required_sections: z.array(text).optional(),
+});
+
 export const PacketFieldsSchema = z.strictObject({
   version: z.literal(2), attempt: z.number().int().positive(), task_id: text,
   stage: z.enum(AgentStage), role: text,
   contract: TaskContractSchema,
   dependencies: z.array(DependencySchema.extend({ evidence: DependencyEvidenceSchema })),
-  selected_traces: z.array(SelectedTraceSchema).min(1),
+  selected_traces: z.array(SelectedTraceSchema),
   /** Optional only so persisted pre-T-V8-007 v2 packets remain audit-readable. New compilation always supplies it. */
   design_evidence: z.array(DesignEvidenceRefSchema).optional(),
   scope: z.strictObject({ roots: z.array(text), allow: z.array(text), deny: z.array(text) }),
@@ -70,9 +100,15 @@ export const PacketFieldsSchema = z.strictObject({
   // is selected above, never appended again as whole source documents.
   verification_context: z.array(z.strictObject({ source: z.literal("qa-evidence"), content: text })),
   identity: z.strictObject({
-    task_hash: Sha256Schema, plan_hash: Sha256Schema, artifact_hashes: z.array(SourceHashSchema).min(2),
+    task_hash: Sha256Schema, plan_hash: Sha256Schema, artifact_hashes: z.array(SourceHashSchema).min(1),
     config_hash: Sha256Schema, compiler_version: z.literal("v8-packet-2"), compiler_hash: Sha256Schema, base_revision: RevisionSchema,
   }),
+  /** V13 TASK-020 — self-contained role contract binding, rules, knowledge, expected output and correlation. */
+  role_contract: RoleContractDigestSchema.optional(),
+  rules: z.array(text).optional(),
+  relevant_knowledge: z.array(text).optional(),
+  expected_output: ExpectedOutputSchema.optional(),
+  correlation_id: text.optional(),
 });
 export type PacketFields = z.infer<typeof PacketFieldsSchema>;
 export type DependencyEvidence = z.infer<typeof DependencyEvidenceSchema>;
@@ -85,7 +121,7 @@ export function renderPacketSections(packet: PacketFields): string[] {
   return [
     section("Objective", t.objective), section("Why", t.why),
     section("Task and dependencies", [
-      `${t.id} — ${t.title}; phase ${t.phase}; owner ${t.owner}; current stage ${packet.stage}; attempt ${packet.attempt}`,
+      `${t.id} — ${t.title}; ${t.version === 1 ? `phase ${t.phase}` : "workflow preparation (PM plan not yet accepted)"}; owner ${t.owner}; current stage ${packet.stage}; attempt ${packet.attempt}`,
       `Declared dependencies: ${t.dependsOn.join(", ") || "none"}`,
       ...packet.dependencies.map(d => `${d.task_id} [${d.edges.join(", ")}]: complete; produces ${d.produces.join(", ") || "none"}; evidence ${d.evidence.source} (${d.evidence.hash})\n${list(d.evidence.outputs.map(o => `${o.source} (${o.hash})`))}`),
     ].join("\n")),
@@ -108,6 +144,25 @@ export function renderPacketSections(packet: PacketFields): string[] {
     // wrapped in another `section()` heading.
     ...(packet.code_intel_evidence ? [packet.code_intel_evidence] : []),
     ...packet.verification_context.map(c => section("Verification evidence", c.content)),
+    ...(packet.role_contract ? [
+      section("Role contract", [
+        `${packet.role_contract.name} (${packet.role_contract.role}) — contract digest: ${packet.role_contract.digest}`,
+        ...(packet.role_contract.version ? [`Version: ${packet.role_contract.version}`] : []),
+        ...(packet.role_contract.tools && packet.role_contract.tools.length ? [`Tools: ${packet.role_contract.tools.join(", ")}`] : []),
+        ...(packet.role_contract.constraints && packet.role_contract.constraints.length ? [`Constraints:\n${list(packet.role_contract.constraints)}`] : []),
+      ].join("\n")),
+    ] : []),
+    ...(packet.rules && packet.rules.length ? [section("Rules and constraints", list(packet.rules))] : []),
+    ...(packet.relevant_knowledge && packet.relevant_knowledge.length ? [section("Relevant knowledge", list(packet.relevant_knowledge))] : []),
+    ...(packet.expected_output ? [
+      section("Expected output", [
+        `Artifact type: ${packet.expected_output.artifact_type}`,
+        ...(packet.expected_output.doc_path ? [`Knowledge path: ${packet.expected_output.doc_path}`] : []),
+        ...(packet.expected_output.schema_name ? [`Schema: ${packet.expected_output.schema_name}`] : []),
+        ...(packet.expected_output.required_sections && packet.expected_output.required_sections.length ? [`Required sections:\n${list(packet.expected_output.required_sections)}`] : []),
+      ].join("\n")),
+    ] : []),
+    ...(packet.correlation_id ? [section("Correlation ID", packet.correlation_id)] : []),
   ];
 }
 

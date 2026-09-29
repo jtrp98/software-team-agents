@@ -137,22 +137,22 @@ describe("T-V8-013 open_findings ids survive rewrite/archive, unlike positional 
 
 describe("moduleDocPath / readModuleDoc", () => {
   it("resolves under _docs/module/<name>/", () => {
-    expect(moduleDocPath("/root", "sales-crm", "review.md")).toBe(
-      path.join("/root", "_docs", "module", "sales-crm", "review.md"),
+    expect(moduleDocPath("/root", "sales-crm", "qa.md")).toBe(
+      path.join("/root", "_docs", "module", "sales-crm", "qa.md"),
     );
   });
 
   it("returns null when the file doesn't exist, instead of throwing", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moduledocs-"));
-    expect(readModuleDoc(dir, "nope", "review.md")).toBeNull();
+    expect(readModuleDoc(dir, "nope", "qa.md")).toBeNull();
   });
 
   it("reads real content back", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moduledocs-"));
     const modDir = path.join(dir, "_docs", "module", "sales-crm");
     fs.mkdirSync(modDir, { recursive: true });
-    fs.writeFileSync(path.join(modDir, "review.md"), "hello");
-    expect(readModuleDoc(dir, "sales-crm", "review.md")).toBe("hello");
+    fs.writeFileSync(path.join(modDir, "qa.md"), "hello");
+    expect(readModuleDoc(dir, "sales-crm", "qa.md")).toBe("hello");
   });
 
   /**
@@ -163,12 +163,12 @@ describe("moduleDocPath / readModuleDoc", () => {
    */
   it("refuses a module name that would escape _docs/module/", () => {
     for (const hostile of ["../..", "..", ".", "a/../b", "a/b", "a\\b", "C:\\tmp", "C:tmp"]) {
-      expect(() => moduleDocPath("/root", hostile, "review.md"), hostile).toThrow(/unsafe module name/);
+      expect(() => moduleDocPath("/root", hostile, "qa.md"), hostile).toThrow(/unsafe module name/);
     }
   });
 
   it("still accepts the names real modules use", () => {
-    expect(() => moduleDocPath("/root", "sales-crm", "review.md")).not.toThrow();
+    expect(() => moduleDocPath("/root", "sales-crm", "qa.md")).not.toThrow();
     expect(() => moduleDocPath("/root", "auth_login v2 (th)", "plan.md")).not.toThrow();
   });
 });
@@ -185,7 +185,7 @@ describe("listModules / resolveModule (T-V3TOK-040)", () => {
   }
 
   it("returns one module, ignoring empty folders and non-establishing documents", () => {
-    const root = fixture({ empty: [], stale: ["review.md"], sales: ["requirement.md"] });
+    const root = fixture({ empty: [], stale: ["qa.md"], sales: ["requirement.md"] });
     expect(listModules(root)).toEqual(["sales"]);
     expect(resolveModule(root)).toEqual({ status: "one", module: "sales", candidates: ["sales"] });
   });

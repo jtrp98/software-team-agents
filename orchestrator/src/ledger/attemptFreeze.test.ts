@@ -33,7 +33,7 @@ let runId: string;
 
 function capabilityReport(overrides: Partial<RuntimeCapabilityReport> = {}): RuntimeCapabilityReport {
   return {
-    runtimeId: "claude-code",
+    runtimeId: "codex",
     available: true,
     checks: [
       { capability: RuntimeCapability.PRE_TOOL_GUARD, claimed: true, verified: true },
@@ -49,12 +49,12 @@ function capabilityReport(overrides: Partial<RuntimeCapabilityReport> = {}): Run
 function freezeInput(overrides: Partial<FreezeAttemptInput> = {}): FreezeAttemptInput {
   return {
     ledger, runId, taskId: "BE-004", stage: AgentStage.BACKEND_ENGINEER, attempt: 1,
-    requested: { runtime: "claude-code", model: "claude-opus-5", effort: "high" },
-    observed: { runtime: "claude-code", model: "claude-opus-5", effort: "high" },
+    requested: { runtime: "codex", model: "gpt-5.5", effort: "high" },
+    observed: { runtime: "codex", model: "gpt-5.5", effort: "high" },
     modelExplicit: true,
     routeBasis: "level-2;task-tier:T2/task-tier:T2",
     tier: "T2",
-    adapterVersion: "claude-code@1",
+    adapterVersion: "codex@1",
     configHash: HASH_A, planHash: HASH_C, baseRevision: "abc1234",
     availability: { available: true },
     capabilityReport: capabilityReport(),
@@ -100,11 +100,11 @@ describe("T-V8-018 — an attempt cannot start without a complete, supported, ev
     const attempt = freezeAttempt(freezeInput());
     expect(attempt.attempt_id).toBe(attemptId(runId, "BE-004", AgentStage.BACKEND_ENGINEER, 1));
     expect(attempt.status).toBe("FROZEN");
-    expect(attempt.requested).toEqual({ runtime: "claude-code", model: "claude-opus-5", effort: "high" });
-    expect(attempt.observed).toEqual({ runtime: "claude-code", model: "claude-opus-5", effort: "high" });
+    expect(attempt.requested).toEqual({ runtime: "codex", model: "gpt-5.5", effort: "high" });
+    expect(attempt.observed).toEqual({ runtime: "codex", model: "gpt-5.5", effort: "high" });
     expect(attempt.route_basis).toBe("level-2;task-tier:T2/task-tier:T2");
     expect(attempt.tier).toBe("T2");
-    expect(attempt.adapter_version).toBe("claude-code@1");
+    expect(attempt.adapter_version).toBe("codex@1");
     expect(attempt.config_hash).toBe(HASH_A);
     expect(attempt.base_revision).toBe("abc1234");
     expect(attempt.packet_hash).toBe(HASH_B);
@@ -175,20 +175,20 @@ describe("T-V8-018 — an attempt cannot start without a complete, supported, ev
 describe("T-V8-018 — the adapter sees exactly the frozen route", () => {
   it("builds the adapter's model/effort fields only from the ledger", () => {
     const attempt = freezeAttempt(freezeInput());
-    expect(adapterRouteFor(attempt)).toEqual({ model: "claude-opus-5", modelExplicit: true, effort: "high" });
-    const noEffort = freezeAttempt(freezeInput({ attempt: 2, observed: { runtime: "claude-code" }, modelExplicit: false }));
+    expect(adapterRouteFor(attempt)).toEqual({ model: "gpt-5.5", modelExplicit: true, effort: "high" });
+    const noEffort = freezeAttempt(freezeInput({ attempt: 2, observed: { runtime: "codex" }, modelExplicit: false }));
     expect(adapterRouteFor(noEffort)).toEqual({ modelExplicit: false });
   });
 
   it("fails closed on any divergence and names both values", () => {
     const attempt = freezeAttempt(freezeInput());
-    expect(() => assertAdapterRequestMatchesAttempt(attempt, { runtimeId: "claude-code", model: "claude-opus-5", modelExplicit: true, effort: "high" })).not.toThrow();
+    expect(() => assertAdapterRequestMatchesAttempt(attempt, { runtimeId: "codex", model: "gpt-5.5", modelExplicit: true, effort: "high" })).not.toThrow();
     for (const [request, expected] of [
-      [{ runtimeId: "codex", model: "claude-opus-5", modelExplicit: true, effort: "high" }, /runtime: frozen=claude-code, request=codex/],
-      [{ runtimeId: "claude-code", model: "claude-sonnet-5", modelExplicit: true, effort: "high" }, /model: frozen=claude-opus-5, request=claude-sonnet-5/],
-      [{ runtimeId: "claude-code", model: "claude-opus-5", modelExplicit: false, effort: "high" }, /modelExplicit: frozen=true, request=false/],
-      [{ runtimeId: "claude-code", model: "claude-opus-5", modelExplicit: true, effort: "medium" }, /effort: frozen=high, request=medium/],
-      [{ runtimeId: "claude-code", model: "claude-opus-5", modelExplicit: true }, /effort: frozen=high, request=null/],
+      [{ runtimeId: "claude-code", model: "gpt-5.5", modelExplicit: true, effort: "high" }, /runtime: frozen=codex, request=claude-code/],
+      [{ runtimeId: "codex", model: "gpt-5.5-mini", modelExplicit: true, effort: "high" }, /model: frozen=gpt-5.5, request=gpt-5.5-mini/],
+      [{ runtimeId: "codex", model: "gpt-5.5", modelExplicit: false, effort: "high" }, /modelExplicit: frozen=true, request=false/],
+      [{ runtimeId: "codex", model: "gpt-5.5", modelExplicit: true, effort: "medium" }, /effort: frozen=high, request=medium/],
+      [{ runtimeId: "codex", model: "gpt-5.5", modelExplicit: true }, /effort: frozen=high, request=null/],
     ] as const) {
       expect(() => assertAdapterRequestMatchesAttempt(attempt, request)).toThrow(AttemptConformanceError);
       expect(() => assertAdapterRequestMatchesAttempt(attempt, request)).toThrow(expected);
@@ -205,7 +205,7 @@ describe("T-V8-018 — provider failure halts; only an explicit reroute creates 
     expect(halted.outcome_reason).toBe("quota: provider refused this invocation");
     expect(halted.ended_at).toBe(4_000);
     // The route recorded on the attempt is untouched by its outcome.
-    expect(halted.observed.runtime).toBe("claude-code");
+    expect(halted.observed.runtime).toBe("codex");
 
     const unavailable = freezeAttempt(freezeInput({ attempt: 2 }));
     expect(haltAttempt(ledger, unavailable.attempt_id, "unavailable", "binary missing", 5_000).status).toBe("UNAVAILABLE");
@@ -247,11 +247,76 @@ describe("T-V8-018 — provider failure halts; only an explicit reroute creates 
   });
 });
 
+describe("V13 TASK-016 — the executor and its version are pinned to the attempt", () => {
+  it("pins the probed executor version and refuses to resume on a different one", () => {
+    const attempt = freezeAttempt(freezeInput({ availability: { available: true, version: "2.1.0" } }));
+    expect(attempt.runtime_version).toBe("2.1.0");
+    expect(ledger.readAttempt(attempt.attempt_id)!.runtime_version).toBe("2.1.0");
+    expect(() => assertAttemptResumable(attempt, { runtimeId: "codex", runtimeVersion: "2.1.0" })).not.toThrow();
+    expect(() => assertAttemptResumable(attempt, { runtimeId: "codex", runtimeVersion: "2.2.0" })).toThrow(
+      /runtime_version \(frozen=2\.1\.0, current=2\.2\.0\)/,
+    );
+  });
+
+  it("records a probe without a version as null, never an invented one", () => {
+    expect(freezeAttempt(freezeInput()).runtime_version).toBeNull();
+  });
+
+  // V13 TASK-027 R14C (a1): Antigravity lost Target-write certification with the
+  // approval isolation boundary; zcode never had it. Claude Code regained it in
+  // TASK-031 (whole-process OS sandbox + network lock).
+  it.each(["zcode", "antigravity"])("refuses to freeze a governed write on uncertified executor %s", (runtime) => {
+    expect(() =>
+      freezeAttempt(freezeInput({
+        requested: { runtime },
+        observed: { runtime },
+        modelExplicit: false,
+        capabilityReport: capabilityReport({ runtimeId: runtime }),
+      })),
+    ).toThrow(new RegExp(`runtime "${runtime}" is not certified for unattended Target writes`));
+  });
+
+  it("a reroute onto an uncertified executor is refused and leaves the halted attempt as it was", () => {
+    const first = freezeAttempt(freezeInput({ availability: { available: true, version: "0.155.0" } }));
+    haltAttempt(ledger, first.attempt_id, "unavailable", "binary missing", 3_000);
+    expect(() => rerouteAttempt(ledger.readAttempt(first.attempt_id)!, {
+      ...freezeInput({
+        attempt: 2,
+        requested: { runtime: "antigravity", model: "gemini-3-pro", effort: "high" },
+        observed: { runtime: "antigravity", model: "gemini-3-pro", effort: "high" },
+        capabilityReport: capabilityReport({ runtimeId: "antigravity" }),
+        availability: { available: true, version: "1.2.12" },
+      }),
+    })).toThrow(/runtime "antigravity" is not certified for unattended Target writes/);
+    expect(ledger.attemptsForTask(runId, "BE-004").map((a) => a.attempt)).toEqual([1]);
+    expect(ledger.readAttempt(first.attempt_id)!.status).toBe("UNAVAILABLE");
+  });
+
+  it("a reroute keeps the task, stage, plan and packet, and pins the version the rerouted executor probed", () => {
+    const first = freezeAttempt(freezeInput({ availability: { available: true, version: "0.155.0" } }));
+    haltAttempt(ledger, first.attempt_id, "unavailable", "binary missing", 3_000);
+    const second = rerouteAttempt(ledger.readAttempt(first.attempt_id)!, {
+      ...freezeInput({
+        attempt: 2,
+        availability: { available: true, version: "0.155.1" },
+      }),
+    });
+    expect(second.observed.runtime).toBe("codex");
+    expect(second.runtime_version).toBe("0.155.1");
+    expect(second.reroute_of).toBe(first.attempt_id);
+    for (const key of ["task_id", "stage", "plan_hash", "packet_hash", "config_hash", "base_revision"] as const) {
+      expect(second[key], key).toBe(first[key]);
+    }
+    expect(ledger.readAttempt(first.attempt_id)!.observed.runtime).toBe("codex");
+    expect(ledger.readAttempt(first.attempt_id)!.runtime_version).toBe("0.155.0");
+  });
+});
+
 describe("T-V8-018 — resume replays the same packet or refuses", () => {
   let attempt: LedgerAttempt;
   beforeEach(() => { attempt = freezeAttempt(freezeInput()); });
 
-  const current = { packetHash: HASH_B, configHash: HASH_A, planHash: HASH_C, baseRevision: "abc1234", runtimeId: "claude-code", adapterVersion: "claude-code@1" };
+  const current = { packetHash: HASH_B, configHash: HASH_A, planHash: HASH_C, baseRevision: "abc1234", runtimeId: "codex", adapterVersion: "codex@1" };
 
   it("resumes an unfinished attempt whose world is unchanged", () => {
     expect(() => assertAttemptResumable(attempt, current)).not.toThrow();
@@ -264,8 +329,8 @@ describe("T-V8-018 — resume replays the same packet or refuses", () => {
     ["configHash", { configHash: HASH_B }, /config_hash/],
     ["planHash", { planHash: HASH_A }, /plan_hash/],
     ["baseRevision", { baseRevision: "def5678" }, /base_revision/],
-    ["runtimeId", { runtimeId: "codex" }, /runtime/],
-    ["adapterVersion", { adapterVersion: "claude-code@2" }, /adapter_version/],
+    ["runtimeId", { runtimeId: "claude-code" }, /runtime/],
+    ["adapterVersion", { adapterVersion: "codex@2" }, /adapter_version/],
   ])("refuses %s drift", (_name, drift, matcher) => {
     expect(() => assertAttemptResumable(attempt, { ...current, ...drift })).toThrow(AttemptResumeError);
     expect(() => assertAttemptResumable(attempt, { ...current, ...drift })).toThrow(matcher);
@@ -282,11 +347,11 @@ describe("T-V8-018 — resume replays the same packet or refuses", () => {
   });
 
   it("never infers effort or guard facts into an old attempt", () => {
-    const legacy = freezeAttempt(freezeInput({ attempt: 3, observed: { runtime: "claude-code" }, modelExplicit: false, targetWrite: false, writableRoots: [] }));
+    const legacy = freezeAttempt(freezeInput({ attempt: 3, observed: { runtime: "codex" }, modelExplicit: false, targetWrite: false, writableRoots: [] }));
     expect(legacy.observed.effort).toBeNull();
     expect(legacy.observed.model).toBeNull();
     expect(legacy.guard_evidence).toEqual({ target_write: false, pre_tool_guard: true, writable_roots: [] });
     // The recorded contract is what resume is held to; nothing fills the nulls in.
-    expect(ledger.readAttempt(legacy.attempt_id)!.observed).toEqual({ runtime: "claude-code", model: null, effort: null });
+    expect(ledger.readAttempt(legacy.attempt_id)!.observed).toEqual({ runtime: "codex", model: null, effort: null });
   });
 });

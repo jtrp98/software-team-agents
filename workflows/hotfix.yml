@@ -16,6 +16,7 @@ steps:
     when: touchesBackend
   - agent: frontend-engineer
     when: touchesFrontend
+  - agent: reviewer
   - agent: qa-engineer
   - agent: devops
     note: still gated - an unverified or unaudited phase is refused even here

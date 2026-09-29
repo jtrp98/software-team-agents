@@ -4,6 +4,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { initTaskMachine } from "../state/taskState.js";
 import { newPersistedTask, type PersistedTask } from "../store/taskStore.js";
 import { describeStatus, isAgentAssignedAt, phaseOf, stageStateOf, unmetDependencies } from "./taskStatus.js";
+import { ApprovalType, applyHumanDecision, requestApproval } from "../gates/approval.js";
 
 function task(overrides: Partial<PersistedTask> = {}): PersistedTask {
   const classification = classifyTask({
@@ -73,15 +74,41 @@ describe("describeStatus", () => {
     expect(status.reason).toContain("DESIGN_APPROVED");
   });
 
-  it("stops reporting that gate once the approval is recorded", () => {
+  it("stops reporting that gate once a human decision is recorded in the ledger", () => {
     const base = task();
-    const approved = {
+    const asked = requestApproval([], {
+      taskId: base.taskId,
+      type: ApprovalType.SCHEMA_CONFIRMATION,
+      reason: "DESIGN_APPROVED required",
+      now: 1,
+      from: TaskState.DESIGN,
+      to: TaskState.PLAN,
+    });
+    const approvals = applyHumanDecision(asked, {
+      requestId: asked[0].requestId,
+      scope: asked[0].scope,
+      decision: {
+        decisionId: "d-1",
+        approved: true,
+        actor: { kind: "human", id: "reviewer" },
+        source: { channel: "unit-channel", evidenceRef: "r-1" },
+        decidedAt: 2,
+        note: null,
+      },
+    });
+    const approved = { ...base, machine: { ...base.machine, current: TaskState.DESIGN }, pipelineCursor: 1, approvals };
+    expect(describeStatus(approved).kind).toBe("RUNNING");
+  });
+
+  it("ignores an approval boolean smuggled into the gate context — only the ledger counts", () => {
+    const base = task();
+    const forged = {
       ...base,
       machine: { ...base.machine, current: TaskState.DESIGN },
       pipelineCursor: 1,
-      gateContext: { designApproved: true },
+      gateContext: { designApproved: true } as unknown as typeof base.gateContext,
     };
-    expect(describeStatus(approved).kind).toBe("RUNNING");
+    expect(describeStatus(forged).kind).toBe("WAITING_FOR_HUMAN");
   });
 
   it("prefers a dependency wait over anything else — a task that may not start has no agent", () => {
@@ -123,11 +150,19 @@ describe("unmetDependencies", () => {
     expect(unmetDependencies(task({ dependsOn: ["ghost"] }), [])).toEqual(["ghost"]);
   });
 
-  it("clears once the dependency reaches DEPLOYED", () => {
+  it("clears once the dependency is Done — DEPLOYED with its completion record", () => {
+    const done = task({ taskId: "T-1" });
+    const deployed = { ...done, machine: { ...done.machine, current: TaskState.DEPLOYED }, completionEvidenceId: `evd_${"a".repeat(32)}` };
+    const dependent = task({ taskId: "T-2", dependsOn: ["T-1"] });
+    expect(unmetDependencies(dependent, [deployed, dependent])).toEqual([]);
+  });
+
+  it("a bare DEPLOYED state without a completion record is not Done (V13 TASK-003)", () => {
     const done = task({ taskId: "T-1" });
     const deployed = { ...done, machine: { ...done.machine, current: TaskState.DEPLOYED } };
     const dependent = task({ taskId: "T-2", dependsOn: ["T-1"] });
-    expect(unmetDependencies(dependent, [deployed, dependent])).toEqual([]);
+    expect(unmetDependencies(dependent, [deployed, dependent])).toEqual(["T-1"]);
+    expect(describeStatus(deployed)).toMatchObject({ kind: "BLOCKED", reason: expect.stringContaining("without recorded completion evidence") });
   });
 });
 
@@ -157,14 +192,14 @@ describe("phaseOf", () => {
 describe("describeStatus — next state", () => {
   it("says what state follows even while an agent is still running", () => {
     const base = task();
-    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer], and
-    // IMPLEMENTATION is backend-engineer's state.
+    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, reviewer, qa-engineer], and
+    // IMPLEMENTATION is backend-engineer's state; REVIEW follows it.
     const running = { ...base, machine: { ...base.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2 };
     const status = describeStatus(running);
 
     expect(status.kind).toBe("RUNNING");
     expect(status.currentAgent).toBe(AgentStage.BACKEND_ENGINEER);
-    expect(status.nextState).toBe(TaskState.QA);
+    expect(status.nextState).toBe(TaskState.REVIEW);
   });
 
   it("has no next state to report once the task is finished", () => {

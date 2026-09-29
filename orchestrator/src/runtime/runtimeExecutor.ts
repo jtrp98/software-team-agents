@@ -1,7 +1,9 @@
 import * as path from "node:path";
-import { AgentStage, TaskLevel } from "../types.js";
+import { LocalWorkspace } from "./localWorkspace.js";
+import { AgentStage } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
+import { resolveAuthoritativeContract } from "../agents/agentContract.js";
 import {
   GUARD_STACK_RULES_ENV,
   GUARD_TARGET_WORK_ROOTS_ENV,
@@ -12,29 +14,34 @@ import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
-  buildPromptParts,
   compileExecutionPacket,
-  assembleStageContext,
   handoffFromContext,
-  failResult,
+  sliceModuleDocsWithSavings,
+  failResult as failResultBase,
   qaArtifactResult,
+  reviewerArtifactResult,
   securityArtifactResult,
-  suppressRawHandoffWhenNarrowed,
   measureRolePrefixChars,
+  STAGE_DOCUMENT,
+  referencedKnowledgeIds,
   type PromptPartsResult,
   type RunMetrics,
 } from "./agentRunAssembly.js";
+import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { codeIntelContext as defaultCodeIntelContext, retrievalCandidatesForPacket, type CodeIntelSliceDeps } from "./codeIntelAssembly.js";
 import { buildTaskRetrievalQuery } from "../context/retrievalQuery.js";
 import type {
   RuntimeAdapter,
+  RuntimeAgentRequest,
   RuntimeAgentResult,
   RuntimeAutonomy,
   RuntimeGuards,
 } from "./runtimeAdapter.js";
+import { executorPortFor, ExecutorPortRefusalError, type ExecutorEvidence } from "./executorPort.js";
 import type { GuardResolver } from "./runtimeGuards.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
+  governedExecutorGap,
   requiredCapabilitiesFor,
   resolveRuntimeRoute,
   type RuntimeRouteAttempt,
@@ -45,7 +52,6 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { isUnattendedTargetWriteCertified } from "./runtimeSupport.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
-import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import { stageWritesBoundTarget, type RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
@@ -58,6 +64,7 @@ import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
 import { resolveTargetRevision } from "../codeintel/targetRevision.js";
 import type { DependencyEvidence } from "../artifacts/executionPacket.js";
+import { stableHash } from "../artifacts/executionPacket.js";
 import { formatModelPolicyBasis } from "./tierRouting.js";
 import type { ModelTierPolicy } from "./modelTiers.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
@@ -69,6 +76,8 @@ import {
   type ExitCheckRootBaseline,
   type ExitCheckRunner,
 } from "./exitCheckRunner.js";
+import { verifyChangedFilesScope, type PostflightRoot } from "./postflight.js";
+import type { PostflightGuardOutcome } from "../orchestrator/orchestrator.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter`.
@@ -84,6 +93,8 @@ import {
 export interface RuntimeExecutorOptions {
   /** The runtime that actually runs the agent. */
   runtime: RuntimeAdapter;
+  /** Production a1 gate, evaluated against the selected adapter and exact request before any attempt is recorded. */
+  approvalIsolationPreflight?: (runtime: RuntimeAdapter, request: RuntimeAgentRequest) => string | null;
   /** Root of the target project — where the role definitions and `_docs/` live. */
   projectRoot: string;
   /**
@@ -118,29 +129,28 @@ export interface RuntimeExecutorOptions {
   extraInstruction?: string;
   phases?: (taskId: string) => number[] | undefined;
   sliceModuleDocs?: boolean;
-  /**
-   * T-UX12 — the task's classification level, when the caller knows it. Fed to
-   * the role-execution gate so TRIVIAL/SMALL frontend work is not blocked on a
-   * UX-artifact precondition the classifier deliberately skipped for it.
-   */
-  taskLevel?: (taskId: string) => TaskLevel | undefined;
   /** Per-stage working directory for a project whose pipeline spans several repos. */
   stageRoots?: Partial<Record<AgentStage, string>>;
   /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
   /** Stored Phase-1 task contract. Production supplies this for every runnable task. */
-  runtimeTask?: (taskId: string) => RuntimeTask | null | undefined;
+  runtimeTask?: (taskId: string, stage?: AgentStage) => RuntimeTask | null | undefined;
   dependencyEvidence?: (taskId: string) => readonly DependencyEvidence[];
+  /**
+   * V13 TASK-005 — the contract digest bound to this stage's latest recorded
+   * attempt on this task, when one exists (`contractDigestForStage` over
+   * `TaskStore.evidenceForTask`). The dispatch preflight compares it against
+   * the freshly resolved on-disk digest and refuses (fail closed) a
+   * retry/resume whose contract changed underneath it, rather than silently
+   * proceeding as if nothing changed. Absent for embedded/legacy callers with
+   * no evidence store to query — the check is then skipped, exactly as a
+   * first attempt (no prior digest) already is.
+   */
+  priorContractDigest?: (taskId: string, stage: AgentStage) => string | null;
   /** Fixture seam; production always resolves the actual current checkout. */
   packetBaseRevision?: (root: string) => Promise<string>;
   /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
   packetRetention?: number;
-  /**
-   * Makes the BA → SA → DEV human handoffs a prerequisite of the lead stages.
-   * Off by default so a project that has not adopted knowledge workspaces
-   * preserves the prior execution path.
-   */
-  enforceRoleWorkflow?: boolean;
   /**
    * Production routing. When present, runtime/model selection, cached
    * availability, support policy and write-stage capabilities are resolved per
@@ -172,6 +182,12 @@ export interface RuntimeExecutorOptions {
    * the difference between a reproducible attempt and a plausible one.
    */
   frozenAttempt?: LedgerAttempt;
+  /**
+   * V13 TASK-007 — the same seam, per request: the frozen ledger attempt the
+   * given task/stage is executing under right now (a bounded run's engineer
+   * stage), or undefined to route normally. Consulted before `frozenAttempt`.
+   */
+  frozenAttemptFor?: (taskId: string, stage: AgentStage) => LedgerAttempt | undefined;
   /** Original persisted winner basis for a frozen route. */
   frozenRoutingBasis?: string;
   /**
@@ -236,6 +252,14 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   model?: string;
   promptVersion?: number;
   effort?: string;
+  /** V13 TASK-005 — the digest `resolveAuthoritativeContract` resolved and enforced before this attempt started. */
+  contract_digest?: string;
+  /** V13 TASK-014 — the executor attempt id the port minted for this run. */
+  attempt_id?: string;
+  /** V13 TASK-014 — the runtime's native session reference, lifted from its own output. */
+  session_ref?: string;
+  /** V13 TASK-016 — the executor version the availability probe reported before dispatch, pinned to this attempt. */
+  runtime_version?: string;
   context_chars: number;
   estimated_input_tokens: number;
   composition: {
@@ -272,6 +296,10 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // so this reads identically to before until an adapter starts reporting one.
     effort: result.effort ?? declared.effort,
     requested_effort: declared.effort,
+    contract_digest: declared.contract_digest,
+    attempt_id: declared.attempt_id,
+    session_ref: declared.session_ref,
+    runtime_version: declared.runtime_version,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -396,10 +424,10 @@ async function recordCampSwitchInvalidation(
   moduleName: string,
   entry: string,
 ): Promise<string | null> {
-  const relPath = `_docs/module/${moduleName}/review.md`;
+  const relPath = `_docs/module/${moduleName}/qa.md`;
   try {
     const existing = await runtime.workspace.readFile(relPath);
-    const head = existing === null || existing.trim() === "" ? `# review.md — ${moduleName}\n` : existing.replace(/\s*$/, "\n");
+    const head = existing === null || existing.trim() === "" ? `# qa.md — ${moduleName}\n` : existing.replace(/\s*$/, "\n");
     await runtime.workspace.writeFile(relPath, `${head}\n${entry}\n`);
     return null;
   } catch (e) {
@@ -418,6 +446,41 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const moduleName = opts.moduleName(req.taskId);
     const phases = opts.phases?.(req.taskId);
 
+    // V13 TASK-005 — the contract preflight: dispatch is refused (fail closed)
+    // before any guard/work-root resolution when `contracts/<stage>.yaml` is
+    // missing, invalid, or disagrees with `AGENT_REGISTRY[stage]` (unknown
+    // role, wrong permitted role/inputs/outputs/capabilities/tools/states).
+    // The digest of the exact bytes checked here is what every refusal and
+    // every successful attempt below records — never recomputed after the
+    // fact.
+    let authoritativeContract: ReturnType<typeof resolveAuthoritativeContract>;
+    let contractDigest: string;
+    try {
+      authoritativeContract = resolveAuthoritativeContract(req.stage, opts.projectRoot);
+      contractDigest = authoritativeContract.digest;
+    } catch (error) {
+      return failResultBase(`cannot start ${role}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // "Stale contract attempt": a retry/resume of this exact stage on this
+    // task re-resolves the contract fresh (immediately above) and compares it
+    // against the digest bound to that stage's own prior attempt. A contract
+    // that changed on disk between attempts must be visible and refused, not
+    // silently proceed as though the earlier attempt's grant still applies.
+    const priorContractDigest = opts.priorContractDigest?.(req.taskId, req.stage) ?? null;
+    if (priorContractDigest && priorContractDigest !== contractDigest) {
+      return failResultBase(
+        `cannot start ${role}: contracts/${req.stage}.yaml changed since a prior attempt of this stage on task ${req.taskId} ` +
+        `(recorded ${priorContractDigest}, now ${contractDigest}) — recompile/re-verify explicitly in a new attempt`,
+        { contract_digest: contractDigest },
+      );
+    }
+    // Shadows the imported `failResultBase` for the remainder of this attempt
+    // so every refusal below — and every PASS, via `metricsFrom`'s `declared`
+    // — carries the contract digest that was actually checked and enforced
+    // before this attempt started.
+    const failResult = (reason: string, metrics: Partial<RunMetrics> = {}): AgentExecutorResult =>
+      failResultBase(reason, { ...metrics, contract_digest: contractDigest });
+
     let threeRepo: { task: PersistedTask; roots: ThreeRepoRequestRoots } | undefined;
     if (opts.threeRepoTask) {
       try {
@@ -433,13 +496,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
     }
 
-    if (opts.enforceRoleWorkflow) {
-      // In three-repo mode the workflow and UX artifacts live in Knowledge,
-      // never beside framework bindings. Preflight is read-only and runs before
-      // any adapter work, so resolving it first cannot create side effects.
-      const handoff = checkRoleExecutionGate(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.stage, undefined, { level: opts.taskLevel?.(req.taskId) });
-      if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
-    }
+    // The BA → SA → DEV lane prerequisites are not checked here: they are a
+    // stage-entry guard of the engine (`orchestrator/stageGuards.ts`), asked
+    // before a stage is ever assigned, so a refused stage never reaches an
+    // executor at all (V13 TASK-007).
 
     const stageWorkRoots = threeRepo?.roots.workRoots ?? [];
     const stageWritableRoots = stageWorkRoots.filter((root) => root.access === "write");
@@ -461,34 +521,29 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let incomingHandoff;
     try {
       incomingHandoff = handoffFromContext(req.context);
-    } catch (error) {
-      return failResult(`cannot use prior-stage handoff: ${String(error)}`);
-    }
-    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
-    let stageContext;
-    try {
-      stageContext = sliceDocs && !(runtimeTask && "version" in runtimeTask && runtimeTask.version === 2)
-        ? await assembleStageContext(req.stage, {
-            projectRoot: opts.projectRoot,
-            docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
-            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
-            moduleName,
-            phases,
-            taskId: req.taskId,
-            handoff: incomingHandoff ?? undefined,
-            targetRoot: workRoot?.path,
-            targetId: workRoot?.targetId,
-          })
-        : {
-            docs: [], knowledge: [], codeIntel: [], selected: [], docCharsBefore: 0,
-            savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
-            directFileReads: 0,
-          };
+      if (incomingHandoff) {
+        const docsRoot = threeRepo?.roots.knowledgeRoot ?? opts.projectRoot;
+        sliceModuleDocsWithSavings(req.stage, {
+          projectRoot: docsRoot,
+          moduleName,
+          phases,
+          taskId: req.taskId,
+          handoff: incomingHandoff,
+        });
+      }
     } catch (error) {
       return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
     }
+    const runtimeTask = threeRepo?.task.runtimeTask ?? (await opts.runtimeTask?.(req.taskId, req.stage)) ?? null;
+    if (!runtimeTask || !("version" in runtimeTask) || runtimeTask.version !== 2) {
+      return failResult(`task ${req.taskId}: missing semantic RuntimeTask; author canonical task fields and explicitly recompile before execution`);
+    }
 
-    const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
+    // Read-only Target roots are verifier inputs, never the verifier's cwd or
+    // writable repository. Document-producing stages execute in Knowledge.
+    const executionRoot = threeRepo
+      ? (stageWritableRoots[0]?.path ?? threeRepo.roots.knowledgeRoot)
+      : (workRoot?.path ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot);
     let guards: RuntimeGuards;
     try {
       guards = opts.guards(role, executionRoot, { targetSide: stageWritesBoundTarget(runtimeTask, req.stage) });
@@ -499,80 +554,97 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     let packetPath: string | undefined;
+    let packetHash: string | undefined;
     let promptParts: PromptPartsResult;
-    if (runtimeTask) {
-      try {
-        // V10 TASK-025 — the Knowledge root is the one runtime-state home; the
-        // Framework binding root only ever hosted contracts, never packets.
-        const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
-        const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
-        const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision);
-        const packet = compileExecutionPacket({
-          req,
-          role,
-          runtimeTask,
-          contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
-          attempt: nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage),
-          baseRevision,
-          config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
-          dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
-          retrievalCandidates: codeIntel.retrievalCandidates,
-          codeIntelEvidence: codeIntel.evidenceBlock,
-          extra: opts.extraInstruction,
-        });
-        if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
-        const expectedRoots = threeRepo ? stageWritableRoots.map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
-        if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
-        const preview = generatePromptPreview(packet, {
-          current_revision: packet.identity.base_revision,
-          current_config_hash: packet.identity.config_hash,
-          current_compiler_hash: packet.identity.compiler_hash,
-          current_plan_hash: packet.identity.plan_hash,
-        });
-        if (preview.state !== "executable" || preview.prompt.text !== packet.text || preview.prompt.hash !== preview.persisted_packet.text_hash) {
-          throw new Error(`generated prompt preview drift: ${preview.stale_reasons.join("; ") || "prompt bytes differ"}`);
-        }
-        guards = { ...guards, writeAllow: packet.scope.allow, writeDeny: packet.scope.deny };
-        const persisted = writeExecutionPacket({
-          projectRoot: runtimeStateRoot,
-          packet,
-          // The state home is the Knowledge root itself now, so only the
-          // Targets stay forbidden — every resolved one, primary or not.
-          forbiddenRoots: threeRepo
-            ? threeRepo.roots.workRoots.map((root) => root.path)
-            : [],
-          maxRunsPerTask: opts.packetRetention,
-        });
-        packetPath = path.relative(runtimeStateRoot, persisted.path).replace(/\\/g, "/");
-        promptParts = packet;
-      } catch (error) {
-        return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
-      }
-    } else {
-      if (opts.runtimeTask || threeRepo) return failResult(`task ${req.taskId}: missing semantic RuntimeTask; author canonical task fields and explicitly recompile before execution`);
-      // Historical or embedded callers may have no RuntimeTask. Production
-      // tasks created since state schema v13 always take the packet path above.
-      // T-V8-011: once a doc slice was already narrowed using this HANDOFF, its
-      // provenance is visible in the kept text — printing the same references
-      // again as raw JSON would be duplication, not context.
-      const promptReq = { ...req, context: suppressRawHandoffWhenNarrowed(req.context, stageContext.selected) };
-      promptParts = buildPromptParts(promptReq, opts.extraInstruction, {
-        docs: stageContext.docs,
-        knowledge: stageContext.knowledge,
-        codeIntel: stageContext.codeIntel,
+    try {
+      // V10 TASK-025 — the Knowledge root is the one runtime-state home; the
+      // Framework binding root only ever hosted contracts, never packets.
+      const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
+      const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
+      const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, workRoot?.path ?? executionRoot, workRoot?.targetId, baseRevision);
+      const packetAttempt = nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage);
+      const moduleDocName = STAGE_DOCUMENT[req.stage];
+      const packet = compileExecutionPacket({
+        req,
+        role,
+        runtimeTask,
+        contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
+        attempt: packetAttempt,
+        baseRevision,
+        config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
+        dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
+        retrievalCandidates: codeIntel.retrievalCandidates,
+        codeIntelEvidence: codeIntel.evidenceBlock,
+        extra: opts.extraInstruction,
+        authoritativeContract: authoritativeContract.contract,
+        contractDigest: authoritativeContract.digest,
+        rules: authoritativeContract.contract.constraints,
+        relevantKnowledge: knowledgeBriefFor(req.stage, {
+          projectRoot: opts.projectRoot,
+          knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+          moduleName,
+          referencedIds: referencedKnowledgeIds(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.taskId),
+          targetRoot: workRoot?.path,
+        }),
+        expectedOutput: {
+          artifact_type: authoritativeContract.contract.output.required[0] ?? (moduleDocName ? moduleDocName.replace(/\.md$/, "") : "code"),
+          ...(moduleDocName ? { doc_path: `_docs/module/${moduleName}/${moduleDocName}`, schema_name: `${moduleDocName.replace(/\.md$/, "")}.schema.json` } : {}),
+          required_sections: authoritativeContract.contract.output.required,
+        },
+        correlationId: `${req.taskId}:${req.stage}:${packetAttempt}`,
       });
+      if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
+      // A writer's packet roots are its writable roots; a verifier stage
+      // (reviewer, QA, security) holds only read access to the Targets it
+      // verifies, so its packet roots are those read roots and its write
+      // scope is its contract's Knowledge-side docs alone (V13 TASK-007).
+      const guardRoots = stageWritableRoots.length > 0 ? stageWritableRoots : stageWorkRoots;
+      const expectedRoots = threeRepo ? guardRoots.map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
+      if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
+      const preview = generatePromptPreview(packet, {
+        current_revision: packet.identity.base_revision,
+        current_config_hash: packet.identity.config_hash,
+        current_compiler_hash: packet.identity.compiler_hash,
+        current_plan_hash: packet.identity.plan_hash,
+      });
+      if (preview.state !== "executable" || preview.prompt.text !== packet.text || preview.prompt.hash !== preview.persisted_packet.text_hash) {
+        throw new Error(`generated prompt preview drift: ${preview.stale_reasons.join("; ") || "prompt bytes differ"}`);
+      }
+      guards = { ...guards, writeAllow: packet.scope.allow, writeDeny: packet.scope.deny };
+      const persisted = writeExecutionPacket({
+        projectRoot: runtimeStateRoot,
+        packet,
+        // The state home is the Knowledge root itself now, so only the
+        // Targets stay forbidden — every resolved one, primary or not.
+        forbiddenRoots: threeRepo
+          ? threeRepo.roots.workRoots.map((root) => root.path)
+          : [],
+        maxRunsPerTask: opts.packetRetention,
+      });
+      packetPath = path.relative(runtimeStateRoot, persisted.path).replace(/\\/g, "/");
+      packetHash = packet.packet_hash;
+      promptParts = packet;
+    } catch (error) {
+      return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
     }
     const prompt = promptParts.text;
-    const finish = (result: AgentExecutorResult): AgentExecutorResult =>
-      packetPath ? { ...result, packetPath } : result;
+    // V13 TASK-017 — the postflight scope verdict of the dispatch below, if one
+    // ran. Attached to every result `finish` emits so the orchestrator persists
+    // it as evidence of the attempt (a blocked check is a recorded check).
+    let postflightOutcome: PostflightGuardOutcome | undefined;
+    const finish = (result: AgentExecutorResult): AgentExecutorResult => {
+      const graded = postflightOutcome ? { ...result, postflightGuard: postflightOutcome } : result;
+      return packetPath ? { ...graded, packetPath } : graded;
+    };
 
     // Production routing remains above the orchestrator seam. Embedded callers
     // that do not supply a registry retain the fixed-runtime compatibility
     // behaviour.
+    const frozen = opts.frozenAttemptFor?.(req.taskId, req.stage) ?? opts.frozenAttempt;
     const writableRootPaths = threeRepo
       ? stageWritableRoots.map((root) => root.path)
-      : (opts.frozenAttempt?.guard_evidence.writable_roots ?? []);
-    const hasTargetWrite = writableRootPaths.length > 0 || (opts.frozenAttempt?.guard_evidence.target_write ?? false);
+      : (frozen?.guard_evidence.writable_roots ?? []);
+    const hasTargetWrite = writableRootPaths.length > 0 || (frozen?.guard_evidence.target_write ?? false);
     const requiresInteractivity = requiredCapabilitiesFor(
       req.stage,
       false,
@@ -591,7 +663,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // compatibility contract while forwarding centrally resolved or operator
     // effort to adapters.
     let activeAdapterEffort: string | undefined;
-    let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
+    let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string; version?: string }>> = {};
     const routingDiagnostics: string[] = [];
     let requestedRuntime: string | undefined;
     let requestedModel: string | undefined;
@@ -601,7 +673,6 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     /** Entries the route already refused before the selected one. */
     let preRouteSkips: readonly RuntimeRouteAttempt[] = [];
     const classification = opts.classification?.(req.taskId);
-    const frozen = opts.frozenAttempt;
     if (frozen) {
       // The ledger already chose. Re-resolving would at best reproduce this
       // decision and at worst quietly replace it, so the only thing left to do
@@ -618,6 +689,17 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         ));
       }
       routeAvailability = opts.registry ? await opts.registry.probeAll() : {};
+      // V13 TASK-016 — the executor version is part of the frozen route. A
+      // runtime upgraded (or downgraded) underneath a frozen attempt is a
+      // different executor than the one selected; replaying the attempt on it
+      // is refused, and a person or an explicit reroute starts a new attempt.
+      const probedVersion = routeAvailability[adapter.id]?.version ?? null;
+      if (frozen.runtime_version !== null && probedVersion !== frozen.runtime_version) {
+        return finish(failResult(
+          `cannot start ${role}: frozen attempt ${frozen.attempt_id} pinned runtime "${adapter.id}" at version ${frozen.runtime_version}, ` +
+            `but the installed executor now reports ${probedVersion ?? "no version"} — create an explicit new attempt rather than replaying on a different executor`,
+        ));
+      }
       activeRuntime = adapter;
       activeModel = frozen.observed.model ?? undefined;
       activeModelExplicit = frozen.model_explicit;
@@ -789,7 +871,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             context_chars: prompt.length,
             estimated_input_tokens: contextBudget.estimatedInputTokens,
             ...promptParts.composition,
-            doc_chars_before: stageContext.docCharsBefore,
+            doc_chars_before: promptParts.composition.doc_chars,
             instruction_surface_bytes: rolePrefixChars ?? undefined,
             runtime: activeRuntime.id,
             requested_runtime: requestedRuntime,
@@ -817,12 +899,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         model: activeModel,
         promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
         effort: activeEffort,
+        contract_digest: contractDigest,
         context_chars: prompt.length,
         estimated_input_tokens: contextBudget.estimatedInputTokens,
         composition: promptParts.composition,
-        doc_chars_before: stageContext.docCharsBefore,
+        doc_chars_before: promptParts.composition.doc_chars,
         role_prefix_chars: rolePrefixChars,
         runtime: activeRuntime.id,
+        // V13 TASK-016 — the executor version selection saw, pinned to this attempt's record.
+        runtime_version: routeAvailability[activeRuntime.id]?.version,
         requested_runtime: requestedRuntime,
         requested_model: requestedModel,
         routing_basis: routingBasis,
@@ -843,6 +928,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
       if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
+      }
+      // V13 TASK-016 — certification alone is not enough: a governed write
+      // runs only on an executor STA can resume, cancel and collect evidence
+      // from. Checked here too because a frozen attempt never re-enters routing.
+      const executorGap = hasTargetWrite ? governedExecutorGap(activeRuntime) : null;
+      if (executorGap) {
+        return finish(failResult(`cannot start ${role}: ${executorGap}; a governed write needs a certified executor`, declared));
       }
       // Second gate, deliberately worded differently: this is not a safety gap,
       // it is a stage whose work — the interview — this runtime cannot do at
@@ -870,6 +962,12 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         }
       }
       const activeProbe = routeAvailability[activeRuntime.id];
+      // V13 TASK-014 — the attempt identity and session reference of THIS
+      // loop iteration's dispatch, threaded into the run metrics below.
+      let attemptId: string | undefined;
+      let attemptSessionRef: string | undefined;
+      let collectedEvidence: ExecutorEvidence | undefined;
+      let evidenceCollectError: string | undefined;
       let exitCheckBaseline: ExitCheckRootBaseline[] | undefined;
       if (activeProbe?.available === false) {
         result = {
@@ -898,7 +996,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             ));
           }
         }
-        result = await activeRuntime.executeAgent({
+        // V13 TASK-014 — the one dispatch path: through the executor lifecycle
+        // port. `prepare` mints the attempt identity (bound to task/stage)
+        // before any spawn; `execute` runs that exact attempt; a runtime that
+        // declares EVIDENCE_COLLECTION has its normalized evidence collected in
+        // the same flow. A probe/execute-only adapter rides `executorPortFor`'s
+        // typed-refusal wrapper — there is no port-less dispatch path left.
+        const port = executorPortFor(activeRuntime);
+        const adapterRequest: RuntimeAgentRequest = {
           role,
           // `cwd` selects the repository the agent works in; scope stays
           // independently bounded by canonical workRoots below.
@@ -908,6 +1013,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           workRoots: threeRepo?.roots.workRoots,
           definitionPath: activeRuntime.binding.definitionPath(role),
           prompt,
+          // The attempt's task/stage binding — the port mints the attempt id
+          // from the packet identity plus these.
+          taskId: req.taskId,
+          stage: req.stage,
           model: declared.model,
           modelExplicit: activeModelExplicit,
           effort: activeAdapterEffort,
@@ -937,11 +1046,36 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
               : {}),
           },
           timeoutMs: opts.timeoutMs,
-        });
+        };
+        const isolationDenial = opts.approvalIsolationPreflight?.(activeRuntime, adapterRequest);
+        if (isolationDenial) return finish(failResult(`cannot start ${role}: ${isolationDenial}`, declared));
+        if (req.recordDispatch) {
+          if (!packetPath || !packetHash) throw new Error("governed dispatch has no persisted execution packet");
+          req.recordDispatch({ packetPath, packetHash, contractDigest, runtimeId: activeRuntime.id });
+        }
+        const preparedAttempt = await port.prepare(adapterRequest);
+        result = await port.execute(preparedAttempt);
+        attemptId = preparedAttempt.attemptId;
+        if (port.capabilities.has(RuntimeCapability.EVIDENCE_COLLECTION)) {
+          try {
+            collectedEvidence = await port.collectEvidence(preparedAttempt);
+            attemptSessionRef = collectedEvidence.sessionRef;
+          } catch (error) {
+            evidenceCollectError = error instanceof Error ? error.message : String(error);
+          }
+        } else {
+          evidenceCollectError = `executor "${activeRuntime.id}" does not declare EVIDENCE_COLLECTION`;
+        }
       } catch (e) {
-        // `executeAgent` is contracted never to throw. If one does, that is an
-        // adapter bug — and it still must not take the task down, so it lands as a
-        // FAIL that names the adapter rather than the agent.
+        if (e instanceof ExecutorPortRefusalError) {
+          // A typed refusal is the port refusing a lifecycle operation before
+          // any spawn — a refusal to run this attempt, not an adapter bug.
+          return finish(failResult(`cannot start ${role}: executor "${activeRuntime.id}" refused the attempt: ${String(e)}`, declared));
+        }
+        // `executeAgent`/`port.execute` are contracted never to throw beyond a
+        // typed refusal. If one does, that is an adapter bug — and it still
+        // must not take the task down, so it lands as a FAIL that names the
+        // adapter rather than the agent.
         return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared));
       }
 
@@ -971,7 +1105,55 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         ));
       }
 
-      metrics = metricsFrom(result, declared);
+      // V13 TASK-017 — the mandatory postflight: STA verifies, from the
+      // executor port's own changed-files evidence, that a successful attempt
+      // only ever touched paths its enforced scope allows. The hook layer is
+      // defense in depth; this check — run by STA, after the child is gone,
+      // before the result is accepted — is the enforcement. A missing check is
+      // itself a refusal: without changed-file evidence an OK cannot be told
+      // apart from an unauthorized one, so it is not accepted.
+      if (result.status === "OK" && guards.writeAllow.length > 0) {
+        const scopeRoots: readonly PostflightRoot[] = (threeRepo?.roots.workRoots.length ?? 0) > 0
+          ? threeRepo!.roots.workRoots.map((root) => ({ targetId: root.targetId, path: root.path, access: root.access }))
+          : [{ path: executionRoot, access: "write" as const }];
+        if (!collectedEvidence || collectedEvidence.changedFiles === undefined) {
+          const detail = evidenceCollectError
+            ? `changed-files evidence unavailable (${evidenceCollectError})`
+            : "the executor could not snapshot its workspace, so the files this run changed are unknown";
+          const violations = [`postflight scope check missing: ${detail}`];
+          postflightOutcome = {
+            ok: false,
+            checked: 0,
+            violations,
+            digest: stableHash({ checked: 0, violations }),
+            runtimeId: activeRuntime.id,
+            contractDigest,
+          };
+          return finish(failResult(
+            `required postflight check missing for ${role}: ${detail} — an OK whose changed files are unknown is refused`,
+            metricsFrom(result, { ...declared, attempt_id: attemptId, session_ref: attemptSessionRef }),
+          ));
+        }
+        const scopeCheck = verifyChangedFilesScope({
+          role,
+          roots: scopeRoots,
+          changedFiles: collectedEvidence.changedFiles,
+          rules: { write: [...guards.writeAllow], deny: [...guards.writeDeny] },
+        });
+        postflightOutcome = {
+          ok: scopeCheck.ok,
+          checked: scopeCheck.checked,
+          violations: scopeCheck.violations,
+          digest: scopeCheck.digest,
+          runtimeId: activeRuntime.id,
+          contractDigest,
+        };
+        if (!scopeCheck.ok) {
+          result = { ...result, status: "ERROR", diagnostics: [...result.diagnostics, ...scopeCheck.violations] };
+        }
+      }
+
+      metrics = metricsFrom(result, { ...declared, attempt_id: attemptId, session_ref: attemptSessionRef });
 
       if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(
@@ -1023,19 +1205,24 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));
     }
 
-    // qa-engineer and security report their verdict in a document, not in an
-    // exit status — read it back through the runtime's own workspace so this
-    // works wherever the run happened, not only where the orchestrator's `fs`
-    // can reach.
+    const documentWorkspace = threeRepo
+      ? new LocalWorkspace({ root: threeRepo.roots.knowledgeRoot, readOnly: true })
+      : activeRuntime.workspace;
+    // In three-repo execution, the role's cwd is Knowledge while the adapter
+    // may have been constructed at a Product root. Read the resolved artifact
+    // home, never a same-named Product file or the adapter's startup directory.
+    if (req.stage === AgentStage.REVIEWER) {
+      const docName = OWNED_MODULE_DOC[AgentStage.REVIEWER]!;
+      const verdict = await fingerprintVerdict(reviewerArtifactResult(req, metrics, moduleName, await readModuleDocVia(documentWorkspace, moduleName, docName)), opts.projectRoot);
+      return finish(verdict.artifact ? { ...verdict, sourceArtifact: { path: `_docs/module/${moduleName}/${docName}` } } : verdict);
+    }
     if (req.stage === AgentStage.QA_ENGINEER) {
-      return finish(await fingerprintVerdict(
-        qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")),
-        opts.projectRoot,
-      ));
+      const verdict = await fingerprintVerdict(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(documentWorkspace, moduleName, "qa.md")), opts.projectRoot);
+      return finish(verdict.artifact ? { ...verdict, sourceArtifact: { path: `_docs/module/${moduleName}/qa.md` } } : verdict);
     }
     if (req.stage === AgentStage.SECURITY) {
       return finish(await fingerprintVerdict(
-        securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")),
+        securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(documentWorkspace, moduleName, "security.md")),
         opts.projectRoot,
       ));
     }
@@ -1048,7 +1235,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // a deliverable nobody can read is not a deliverable.
     const ownedDoc = OWNED_MODULE_DOC[req.stage];
     if (ownedDoc) {
-      const doc = await readModuleDocVia(activeRuntime, moduleName, ownedDoc);
+      const doc = await readModuleDocVia(documentWorkspace, moduleName, ownedDoc);
       if (doc === null || doc.trim() === "") {
         return finish(failResult(
           `${role} reported success but _docs/module/${moduleName}/${ownedDoc} doesn't exist (or is empty) — ` +
@@ -1078,6 +1265,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         outcome: { ...metrics, result: "PASS" },
         artifactType: ArtifactType.HANDOFF,
         artifact: handoff.artifact,
+        sourceArtifact: { path: `_docs/module/${moduleName}/${ownedDoc}` },
         gateEvidence,
       });
     }
@@ -1087,25 +1275,28 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 }
 
 /**
- * The module document each non-reviewer doc stage must leave behind for its run
+ * The module document each doc stage must leave behind for its run
  * to count as successful (`policies/documentation.md` §1). Engineers are
  * deliberately absent: their deliverable is code across many paths, and their
  * mechanical gates (typecheck/lint at Stop, QA's own round) are what verify it.
  */
 const OWNED_MODULE_DOC: Partial<Record<AgentStage, string>> = {
+  // Read back as a verdict (`reviewerArtifactResult`) before the handoff
+  // branch below is reached — a review is judged, not indexed.
+  [AgentStage.REVIEWER]: "review.md",
   [AgentStage.BUSINESS_ANALYST]: "requirement.md",
   [AgentStage.SYSTEM_ANALYST]: "design.md",
   [AgentStage.PROJECT_MANAGER]: "plan.md",
   [AgentStage.TEST_PLANNER]: "test-plan.md",
-  // The same artifact path `roleExecutionGate.ts` requires to be present and
+  // The same artifact path `orchestrator/stageGuards.ts` requires to be present and
   // signed off before frontend work may start — the two must name one file.
   [AgentStage.UXUI_DESIGNER]: "uxui/design.md",
 };
 
 /** The module-doc path convention (`policies/documentation.md` §1), read through the workspace rather than off disk directly. */
-async function readModuleDocVia(runtime: RuntimeAdapter, moduleName: string, filename: string): Promise<string | null> {
+async function readModuleDocVia(workspace: RuntimeAdapter["workspace"], moduleName: string, filename: string): Promise<string | null> {
   try {
-    return await runtime.workspace.readFile(`_docs/module/${moduleName}/${filename}`);
+    return await workspace.readFile(`_docs/module/${moduleName}/${filename}`);
   } catch {
     // A workspace that cannot answer is the same situation as a missing
     // document, and both fail closed one layer up: a round nobody can read is

@@ -29,6 +29,8 @@ export enum Capability {
   /** Deciding what needs testing and how, before implementation starts — distinct from TESTING. */
   TEST_STRATEGY = "test-strategy",
   UX_ANALYSIS = "ux-analysis",
+  /** Independent review of implemented code against requirement/design/plan — reading, never fixing. Distinct from VERIFICATION (QA's evidence round). */
+  CODE_REVIEW = "code-review",
   VERIFICATION = "verification",
   SECURITY_AUDIT = "security-audit",
   DEPLOYMENT = "deployment",
@@ -39,5 +41,3 @@ export enum Capability {
   /** Only a person can give this — never an agent. */
   APPROVAL = "approval",
 }
-
-export const ALL_CAPABILITIES: Capability[] = Object.values(Capability);

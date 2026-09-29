@@ -63,6 +63,7 @@ const ROLE_DEFAULTS = `role_defaults:
   uxui-designer: T3
   backend-engineer: T5
   frontend-engineer: T5
+  reviewer: T3
   qa-engineer: T3
   security: T2
   devops: runtime-default

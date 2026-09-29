@@ -1,4 +1,6 @@
 import type { RunRecord } from "../observability/runLog.js";
+import { checkEvidenceAppend, parseStoredEvidence, type EvidenceRecord } from "../evidence/evidenceStore.js";
+import { parseLaneRecord, type LaneApprovalRecord } from "../gates/laneApproval.js";
 import {
   TaskAlreadyExistsError,
   TaskNotFoundError,
@@ -23,6 +25,8 @@ export class MemoryTaskStore implements TaskStore {
   private tasks = new Map<string, PersistedTask>();
   private runs: RunRecord[] = [];
   private events: PersistedEvent[] = [];
+  private evidence: EvidenceRecord[] = [];
+  private lanes: LaneApprovalRecord[] = [];
   private inTransaction = false;
 
   /**
@@ -36,6 +40,8 @@ export class MemoryTaskStore implements TaskStore {
     const tasks = new Map([...this.tasks].map(([id, task]) => [id, structuredClone(task)] as const));
     const runs = this.runs.map((r) => ({ ...r }));
     const events = this.events.map((e) => structuredClone(e));
+    const evidence = this.evidence.map((e) => structuredClone(e));
+    const lanes = this.lanes.map((l) => structuredClone(l));
     this.inTransaction = true;
     try {
       return fn();
@@ -43,6 +49,8 @@ export class MemoryTaskStore implements TaskStore {
       this.tasks = tasks;
       this.runs = runs;
       this.events = events;
+      this.evidence = evidence;
+      this.lanes = lanes;
       throw error;
     } finally {
       this.inTransaction = false;
@@ -93,6 +101,63 @@ export class MemoryTaskStore implements TaskStore {
 
   eventsForTask(taskId: string): PersistedEvent[] {
     return this.events.filter((e) => e.taskId === taskId).map((e) => structuredClone(e));
+  }
+
+  appendEvidence(record: EvidenceRecord): EvidenceRecord {
+    const stored = parseStoredEvidence(record.evidenceId, structuredClone(record));
+    const existing = this.loadEvidence(stored.evidenceId);
+    const write = checkEvidenceAppend(stored, existing, (ref) =>
+      this.evidence.some((e) => e.evidenceId === ref && e.taskId === stored.taskId),
+    );
+    if (write) this.evidence.push(stored);
+    return structuredClone(existing ?? stored);
+  }
+
+  loadEvidence(evidenceId: string): EvidenceRecord | null {
+    const found = this.evidence.find((e) => e.evidenceId === evidenceId);
+    return found ? parseStoredEvidence(evidenceId, structuredClone(found)) : null;
+  }
+
+  evidenceForTask(taskId: string): EvidenceRecord[] {
+    return this.evidence
+      .filter((e) => e.taskId === taskId)
+      .map((e) => parseStoredEvidence(e.evidenceId, structuredClone(e)));
+  }
+
+  insertLaneRequest(record: LaneApprovalRecord): void {
+    const stored = parseLaneRecord(record.requestId, structuredClone(record));
+    if (this.lanes.some((l) => l.requestId === stored.requestId)) throw new Error(`lane request ${stored.requestId} already exists`);
+    const decisionId = stored.decision?.decisionId;
+    if (decisionId && this.laneDecisionIdExists(decisionId)) throw new Error(`lane decision ${decisionId} already exists`);
+    this.lanes.push(stored);
+  }
+
+  updateLaneRequest(record: LaneApprovalRecord): void {
+    const stored = parseLaneRecord(record.requestId, structuredClone(record));
+    const index = this.lanes.findIndex((l) => l.requestId === stored.requestId);
+    if (index === -1) throw new Error(`lane request ${stored.requestId} was never opened`);
+    const existing = this.lanes[index]!;
+    if (JSON.stringify(existing.scope) !== JSON.stringify(stored.scope) || existing.requestedAt !== stored.requestedAt) {
+      throw new Error(`lane request ${stored.requestId}: its scope is immutable once opened`);
+    }
+    const decisionId = stored.decision?.decisionId;
+    if (decisionId && this.lanes.some((l, i) => i !== index && l.decision?.decisionId === decisionId)) {
+      throw new Error(`lane decision ${decisionId} already exists`);
+    }
+    this.lanes[index] = stored;
+  }
+
+  loadLaneRequest(requestId: string): LaneApprovalRecord | null {
+    const found = this.lanes.find((l) => l.requestId === requestId);
+    return found ? structuredClone(found) : null;
+  }
+
+  laneRequests(knowledgeRoot: string, module: string): LaneApprovalRecord[] {
+    return this.lanes.filter((l) => l.scope.knowledgeRoot === knowledgeRoot && l.scope.module === module).map((l) => structuredClone(l));
+  }
+
+  laneDecisionIdExists(decisionId: string): boolean {
+    return this.lanes.some((l) => l.decision?.decisionId === decisionId);
   }
 
   close(): void {

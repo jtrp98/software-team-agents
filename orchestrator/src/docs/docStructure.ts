@@ -11,7 +11,7 @@ import { parseModuleTargets } from "./moduleTargets.js";
 
 /**
  * A schema per module document type (`requirement.md`, `design.md`, `plan.md`,
- * `review.md`, `security.md`), so a missing required section is a mechanical finding
+ * `review.md`, `qa.md`, `security.md`), so a missing required section is a mechanical finding
  * instead of something only caught if a person happens to notice.
  *
  * These documents are prose Markdown, not JSON or YAML, so a JSON Schema can't validate
@@ -26,13 +26,14 @@ import { parseModuleTargets } from "./moduleTargets.js";
  * drift here have to be fixed together.
  */
 
-export type DocType = "requirement" | "design" | "plan" | "review" | "security";
+export type DocType = "requirement" | "design" | "plan" | "review" | "qa" | "security";
 
 export const DOC_FILENAMES: Record<DocType, string> = {
   requirement: "requirement.md",
   design: "design.md",
   plan: "plan.md",
   review: "review.md",
+  qa: "qa.md",
   security: "security.md",
 };
 
@@ -122,6 +123,13 @@ export function extractStructure(docType: DocType, markdown: string): Record<str
         phaseCount: count(markdown, /^##\s*Phase\s*\d+/gim),
       };
     case "review":
+      return {
+        hasOpenFindings: has(markdown, /^##\s+Open Findings/im),
+        hasReviewed: has(markdown, /^##\s+Reviewed\b/im),
+        reviewRoundCount: count(markdown, /^##\s*Review Round\b/gim),
+        verdictLineCount: count(markdown, /^\*\*Verdict:\*\*\s*(?:✅ Approved|❌ Changes requested)\s*$/gim),
+      };
+    case "qa":
       return {
         hasOpenIssues: has(markdown, /^##\s+Open Issues/im),
         hasVerificationSummary: has(markdown, /^##\s+Verification Summary/im),
@@ -288,7 +296,7 @@ export function checkDocSize(projectRoot: string, moduleName?: string): DocStruc
 
 /**
  * Checks every module's documents that exist. Scope is strictly STA-owned current
- * canonical documents under `_docs/module/<name>/` (requirement, design, plan, test-plan, review).
+ * canonical documents under `_docs/module/<name>/` (requirement, design, plan, test-plan, qa).
  * Optional project reference material and legacy documents are read-only evidence and outside
  * its validation scope (AD-14, CR-9). A document that doesn't exist yet (a
  * module mid-way through the pipeline, before `design.md` or `plan.md` was written) is

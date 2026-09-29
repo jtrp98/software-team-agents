@@ -21,6 +21,8 @@ const DATA_MODEL = /data\s*model/i;
 const FEASIBILITY_SUMMARY = /feasibility\s+summary/i;
 const MODULES_HEADING = /^modules?\b/i;
 const OPEN_ISSUES = /open\s+issues?/i;
+const REVIEW_OPEN_FINDINGS = /open\s+findings?/i;
+const REVIEW_ROUND = /^review\s+round\b/i;
 
 export interface ContextRequest {
   stage: AgentStage;
@@ -345,8 +347,23 @@ export function selectDocContext(req: ContextRequest, markdown: string): Selecte
       }
     }
   } else if (req.doc === "review") {
+    // review.md: the cross-phase findings table plus the current round and
+    // everything after it (its `## Reviewed` list). Closed rounds are archived
+    // to review/phase-N.md by the reviewer itself.
+    const openFindings = sections.filter((s) => REVIEW_OPEN_FINDINGS.test(s.heading));
+    if (openFindings.length === 0) return whole(req.doc, markdown, "review.md has no `## Open Findings` section — that is the part every run must act on, so nothing is dropped");
+    let currentRound = -1;
+    sections.forEach((s, index) => {
+      if (REVIEW_ROUND.test(s.heading)) currentRound = index;
+    });
+    const from = currentRound === -1 ? sections.length - 1 : currentRound;
+    sections.forEach((s, index) => {
+      if (REVIEW_OPEN_FINDINGS.test(s.heading) || index >= from) kept.push(s);
+      else skipped.push(s.heading);
+    });
+  } else if (req.doc === "qa") {
     const openIssues = sections.filter((s) => OPEN_ISSUES.test(s.heading));
-    if (openIssues.length === 0) return whole(req.doc, markdown, "review.md has no `## Open Issues` section — that is the part every run must act on, so nothing is dropped");
+    if (openIssues.length === 0) return whole(req.doc, markdown, "qa.md has no `## Open Issues` section — that is the part every run must act on, so nothing is dropped");
     const last = sections[sections.length - 1];
     for (const s of sections) {
       if (OPEN_ISSUES.test(s.heading) || s === last || /unverified\s+behaviour/i.test(s.heading)) kept.push(s);
@@ -393,7 +410,8 @@ function isHandoffAlwaysRead(doc: DocKind, heading: string, stage: AgentStage, i
   if (doc === "design") return isAlwaysReadDesignSection(heading) || MODULES_HEADING.test(heading) || (DATA_MODEL.test(heading) && (stage === AgentStage.QA_ENGINEER || stage === AgentStage.PROJECT_MANAGER));
   if (doc === "requirement") return REQUIREMENT_ALWAYS.some((matcher) => matcher.test(heading));
   if (doc === "plan") return PLAN_ALWAYS.some((matcher) => matcher.test(heading));
-  if (doc === "review") return OPEN_ISSUES.test(heading) || /unverified\s+behaviour/i.test(heading) || isLast;
+  if (doc === "review") return REVIEW_OPEN_FINDINGS.test(heading) || REVIEW_ROUND.test(heading) || /^reviewed\b/i.test(heading) || isLast;
+  if (doc === "qa") return OPEN_ISSUES.test(heading) || /unverified\s+behaviour/i.test(heading) || isLast;
   if (doc === "security") return true;
   return false;
 }

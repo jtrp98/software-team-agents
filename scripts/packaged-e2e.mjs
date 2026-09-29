@@ -291,11 +291,11 @@ try {
         r.out.slice(0, 400),
       );
     }
-    const warned = runBin(targetBin, ["init", "--role", "ba"], { cwd: knowledgeRepo, env: baseEnv });
+    const refused = runBin(targetBin, ["init", "--role", "ba"], { cwd: knowledgeRepo, env: baseEnv });
     expectCond(
-      "--role is accepted and ignored with a warning",
-      warned.status === 0 && /--role is retired and ignored/i.test(warned.out),
-      warned.out.slice(0, 400),
+      "--role is refused as an unrecognized argument (V13 TASK-012 cutover)",
+      refused.status !== 0 && /unrecognized argument: --role/i.test(refused.out),
+      refused.out.slice(0, 400),
     );
   }
 

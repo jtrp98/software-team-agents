@@ -36,7 +36,8 @@ export interface ThreeRepoRequestRoots {
 export class TargetPreflightError extends Error {}
 
 function needsCode(stage: AgentStage): boolean {
-  return [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER, AgentStage.SECURITY, AgentStage.DEVOPS].includes(stage);
+  // The reviewer reads the implementation it reviews, like QA and security: read access, never write.
+  return [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER, AgentStage.SECURITY, AgentStage.DEVOPS].includes(stage);
 }
 
 function accessFor(
@@ -45,12 +46,8 @@ function accessFor(
   task: Pick<PersistedTask, "targetBindings">,
 ): WorkspaceAccess {
   if (stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER) {
-    // The unit of write scope is the task's Target set, not the role binding:
-    // one module's code is reachable from every Target the task binds, so
-    // narrowing an engineer to its own binding strands the sibling Target's
-    // half of the same change as read-only. The upper bound stays the module's
-    // declared `## Targets` in `validateBindingPolicy`.
-    return uniqueBoundTargetIds(task.targetBindings).includes(targetId) ? "write" : "read";
+    return task.targetBindings.targets.some((binding) => binding.target_id === targetId && binding.role === stage)
+      ? "write" : "read";
   }
   if (stage === AgentStage.DEVOPS) return "write";
   return "read";
@@ -231,8 +228,11 @@ function resolvedModuleScope(
   moduleName: string,
   knowledgeRoot: string,
   frameworkRoot: string,
+  preparation = false,
 ): TaskBindingModuleScope {
-  const resolved = resolveModuleTargets(moduleName, knowledgeRoot, { frameworkRoot });
+  const resolved = resolveModuleTargets(moduleName, knowledgeRoot, { frameworkRoot, preparation });
+  const errors = resolved.problems.filter(problem => problem.severity === "error");
+  if (errors.length) throw new TargetPreflightError(errors.map(problem => problem.message).join("; "));
   return {
     module: resolved.module,
     designPath: resolved.designPath,
@@ -252,7 +252,7 @@ function persistedModuleScope(
   const relative = path.relative(modulesRoot, planPath);
   const parts = relative.split(path.sep);
   if (parts.length !== 2 || parts[0] === ".." || path.isAbsolute(relative) || parts[1] !== "plan.md") return undefined;
-  return resolvedModuleScope(parts[0], knowledgeRoot, frameworkRoot);
+  return resolvedModuleScope(parts[0], knowledgeRoot, frameworkRoot, runtimeTask.contract?.version === "workflow-1");
 }
 
 /** Resolves every root before an adapter is started.  It never writes. */
@@ -315,7 +315,7 @@ export function preflightThreeRepoTask(
       moduleScope:
         opts.moduleScope ??
         (opts.moduleName
-          ? resolvedModuleScope(opts.moduleName, knowledgeRoot, opts.frameworkRoot)
+          ? resolvedModuleScope(opts.moduleName, knowledgeRoot, opts.frameworkRoot, task.runtimeTask?.contract?.version === "workflow-1")
           : persistedModuleScope(task, knowledgeRoot, opts.frameworkRoot)),
     });
     const warn = opts.bindingWarning ?? ((message: string) => console.warn(`[orchestrator] WARNING: ${message}`));

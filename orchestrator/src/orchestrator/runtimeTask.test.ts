@@ -7,10 +7,12 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 import { classifyTask, type ClassificationInput, type ClassificationResult } from "../classification/taskClassifier.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { AgentStage, TaskLevel, TaskState } from "../types.js";
-import { catalogWorkflows } from "../workflow/workflowCatalog.js";
+import { catalogWorkflows, generateWorkflowFiles } from "../workflow/workflowCatalog.js";
 import { pipelineFromWorkflow } from "../workflow/workflowDefinition.js";
 import { TaskRegistry } from "./taskRegistry.js";
-import { buildRuntimeTask, type RuntimeTaskWorkRoot } from "./runtimeTask.js";
+import { buildRuntimeTask, assertRuntimeTaskFresh, type RuntimeTaskV2, type RuntimeTaskWorkRoot } from "./runtimeTask.js";
+import { workflowPath } from "../workflow/workflowDefinition.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
 
 const adapterTripwire = vi.hoisted(() => ({ constructions: 0 }));
 
@@ -227,7 +229,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(known.required_verification).toMatchObject({
       status: "selected",
       levels: ["lint", "typecheck", "unit", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       task_types: ["business-rule"],
       selection_source: "task-classification",
     });
@@ -242,7 +244,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(unknown.required_verification).toMatchObject({
       status: "full-order",
       levels: ["lint", "typecheck", "unit", "integration", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       task_types: [],
       selection_source: "full-order",
     });
@@ -276,14 +278,14 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(compatibility.required_verification).toEqual({
       status: "full-order",
       levels: ["lint", "typecheck", "unit", "integration", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       reason: expect.stringContaining('task type "schema-change" is absent'),
     });
   });
 
   it("triage persists no RuntimeTask and keeps the existing human-stop sequence", () => {
     const store = new MemoryTaskStore();
-    const registry = new TaskRegistry({ store });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
     const orchestrator = registry.create({ taskId: "T-TRIAGE", classification: classifyTask({}), workflow: "triage" });
 
     expect(orchestrator.runtimeTask).toBeNull();
@@ -296,7 +298,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
   it("survives TaskRegistry resume without being reconstructed", () => {
     const { docsRoot, targetRoot } = fixture();
     const store = new MemoryTaskStore();
-    const registry = new TaskRegistry({ store });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const created = registry.create({
       taskId: "T-RESUME",
@@ -309,6 +311,109 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       targetWorkRoots: workRoots(classification, targetRoot),
     });
     const before = structuredClone(created.runtimeTask);
+
+    expect(registry.resume("T-RESUME").runtimeTask).toEqual(before);
+    expect(store.loadTask("T-RESUME")!.runtimeTask).toEqual(before);
+  });
+});
+
+describe("workflow_plan (V13 TASK-004)", () => {
+  function tmpWorkflowsRoot(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-task-wf-"));
+    roots.push(root);
+    generateWorkflowFiles(root);
+    return root;
+  }
+
+  it("compiles and persists workflow_plan from the raw classification input, and scope is filtered by its pipeline rather than classification.pipeline a second time", () => {
+    const { docsRoot, targetRoot } = fixture();
+    // Real contracts/ live at the Framework root; a bare tmp dir has none, and
+    // the drift/mutation scenario below is the only one that actually needs a
+    // private, mutable workflows/ copy.
+    const projectRoot = defaultProjectRoot();
+    const input: ClassificationInput = { isClearBugFix: true, touchesBackend: true, touchesFrontend: true };
+    const classification = classifyTask(input);
+    const runtimeTask = buildRuntimeTask({
+      taskId: "T-bugfix",
+      workflow: "bugfix",
+      classification,
+      classificationInput: input,
+      projectRoot,
+      docsRoot,
+      moduleName: "orders",
+      targetWorkRoots: [
+        { stage: AgentStage.BACKEND_ENGINEER, targetId: "backend", path: targetRoot },
+        { stage: AgentStage.FRONTEND_ENGINEER, targetId: "frontend", path: targetRoot },
+        { stage: AgentStage.REVIEWER, targetId: "reviewer", path: targetRoot },
+        { stage: AgentStage.QA_ENGINEER, targetId: "qa", path: targetRoot },
+      ],
+    })!;
+
+    expect(runtimeTask.workflow_plan).toBeDefined();
+    expect(runtimeTask.workflow_plan!.workflow_id).toBe("bugfix");
+    expect(runtimeTask.workflow_plan!.pipeline).toEqual(classification.pipeline);
+    expect(runtimeTask.scope.work_roots.map((r) => r.stage)).toEqual(
+      classification.pipeline.filter((s) => s !== AgentStage.HUMAN),
+    );
+    expect(() => assertRuntimeTaskFresh(runtimeTask)).not.toThrow();
+  });
+
+  it("omits workflow_plan when no raw classification input was supplied (legacy/programmatic callers), unchanged from before this task", () => {
+    const { docsRoot, targetRoot } = fixture();
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const runtimeTask = buildRuntimeTask({
+      taskId: "T-bugfix",
+      workflow: "bugfix",
+      classification,
+      projectRoot: defaultProjectRoot(),
+      docsRoot,
+      moduleName: "orders",
+      targetWorkRoots: [{ stage: AgentStage.BACKEND_ENGINEER, targetId: "backend", path: targetRoot }],
+    })!;
+    expect(runtimeTask.workflow_plan).toBeUndefined();
+    expect(runtimeTask.scope.work_roots.map((r) => r.stage)).toEqual([AgentStage.BACKEND_ENGINEER]);
+  });
+
+  it("refuses a resume once the workflow file it was compiled from has drifted — a byte change to workflows/<id>.yml is not silently absorbed", () => {
+    const { docsRoot } = fixture();
+    const projectRoot = tmpWorkflowsRoot();
+    const input: ClassificationInput = { isClearBugFix: true, touchesBackend: true };
+    const runtimeTask = buildRuntimeTask({
+      taskId: "T-bugfix",
+      workflow: "bugfix",
+      classification: classifyTask(input),
+      classificationInput: input,
+      projectRoot,
+      docsRoot,
+      moduleName: "orders",
+    })!;
+    expect(() => assertRuntimeTaskFresh(runtimeTask)).not.toThrow();
+
+    const file = workflowPath("bugfix", projectRoot);
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("Bug fix", "Bug-fix"), "utf8");
+
+    expect(() => assertRuntimeTaskFresh(runtimeTask)).toThrow(/workflow plan drift/);
+  });
+
+  it("stays stable across a TaskRegistry resume when nothing about the workflow changed", () => {
+    const { docsRoot, targetRoot } = fixture();
+    const store = new MemoryTaskStore();
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
+    const projectRoot = defaultProjectRoot();
+    const input: ClassificationInput = { isClearBugFix: true, touchesBackend: true };
+    const classification = classifyTask(input);
+    const created = registry.create({
+      taskId: "T-RESUME",
+      workflow: "bugfix",
+      classification,
+      classificationInput: input,
+      projectRoot,
+      docsRoot,
+      moduleName: "orders",
+      targetWorkRoots: [{ stage: AgentStage.BACKEND_ENGINEER, targetId: "backend", path: targetRoot }],
+    });
+    const before = structuredClone(created.runtimeTask) as RuntimeTaskV2;
+    expect(before.workflow_plan).toBeDefined();
 
     expect(registry.resume("T-RESUME").runtimeTask).toEqual(before);
     expect(store.loadTask("T-RESUME")!.runtimeTask).toEqual(before);
