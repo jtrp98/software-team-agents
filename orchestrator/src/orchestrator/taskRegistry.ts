@@ -119,7 +119,7 @@ export class TaskRegistry {
     const supplied = this.planTasks?.();
     if (supplied) return supplied;
     const tasks = taskId ? [this.store.loadTask(taskId)].filter((t): t is PersistedTask => t !== null) : this.store.listTasks();
-    const sources = [...new Set(tasks.flatMap(t => t.runtimeTask && "version" in t.runtimeTask && t.runtimeTask.version === 2 ? [t.runtimeTask.plan_source] : []))];
+    const sources = [...new Set(tasks.flatMap(t => t.runtimeTask && "version" in t.runtimeTask && t.runtimeTask.version === 2 && t.runtimeTask.contract.version === 1 ? [t.runtimeTask.plan_source] : []))];
     if (sources.length > 1) throw new Error("graph spans multiple plans; select an explicit module plan context");
     if (!sources.length) return null;
     const parsed = readWorkPlan(fs.readFileSync(sources[0], "utf8"));

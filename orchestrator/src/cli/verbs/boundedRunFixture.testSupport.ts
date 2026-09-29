@@ -52,6 +52,18 @@ export class BoundedRunCodexFixture extends CodexAdapter {
   override async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
     this.requests.push(req);
     const over = this.respond(req, this.workspace.files);
+    // A three-repo document belongs to the resolved Knowledge workspace.
+    // Materialize this scripted fixture output there, as a real role would;
+    // the adapter's startup workspace is not the artifact authority.
+    if (req.knowledgeRoot && ["reviewer", "qa-engineer"].includes(req.role)) {
+      const filename = req.role === "reviewer" ? "review.md" : "qa.md";
+      for (const [relative, text] of this.workspace.files) {
+        if (!relative.startsWith("_docs/module/") || !relative.endsWith(`/${filename}`)) continue;
+        const destination = path.join(req.knowledgeRoot, relative);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, text);
+      }
+    }
     return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] }, ...over });
   }
 }

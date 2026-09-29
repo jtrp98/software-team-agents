@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { LocalWorkspace } from "./localWorkspace.js";
 import { AgentStage } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
@@ -1204,22 +1205,24 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));
     }
 
-    // reviewer, qa-engineer and security report their verdict in a document,
-    // not in an exit status — read it back through the runtime's own workspace
-    // so this works wherever the run happened, not only where the
-    // orchestrator's `fs` can reach.
+    const documentWorkspace = threeRepo
+      ? new LocalWorkspace({ root: threeRepo.roots.knowledgeRoot, readOnly: true })
+      : activeRuntime.workspace;
+    // In three-repo execution, the role's cwd is Knowledge while the adapter
+    // may have been constructed at a Product root. Read the resolved artifact
+    // home, never a same-named Product file or the adapter's startup directory.
     if (req.stage === AgentStage.REVIEWER) {
       const docName = OWNED_MODULE_DOC[AgentStage.REVIEWER]!;
-      const verdict = await fingerprintVerdict(reviewerArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, docName)), opts.projectRoot);
+      const verdict = await fingerprintVerdict(reviewerArtifactResult(req, metrics, moduleName, await readModuleDocVia(documentWorkspace, moduleName, docName)), opts.projectRoot);
       return finish(verdict.artifact ? { ...verdict, sourceArtifact: { path: `_docs/module/${moduleName}/${docName}` } } : verdict);
     }
     if (req.stage === AgentStage.QA_ENGINEER) {
-      const verdict = await fingerprintVerdict(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "qa.md")), opts.projectRoot);
+      const verdict = await fingerprintVerdict(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(documentWorkspace, moduleName, "qa.md")), opts.projectRoot);
       return finish(verdict.artifact ? { ...verdict, sourceArtifact: { path: `_docs/module/${moduleName}/qa.md` } } : verdict);
     }
     if (req.stage === AgentStage.SECURITY) {
       return finish(await fingerprintVerdict(
-        securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")),
+        securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(documentWorkspace, moduleName, "security.md")),
         opts.projectRoot,
       ));
     }
@@ -1232,7 +1235,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // a deliverable nobody can read is not a deliverable.
     const ownedDoc = OWNED_MODULE_DOC[req.stage];
     if (ownedDoc) {
-      const doc = await readModuleDocVia(activeRuntime, moduleName, ownedDoc);
+      const doc = await readModuleDocVia(documentWorkspace, moduleName, ownedDoc);
       if (doc === null || doc.trim() === "") {
         return finish(failResult(
           `${role} reported success but _docs/module/${moduleName}/${ownedDoc} doesn't exist (or is empty) — ` +
@@ -1291,9 +1294,9 @@ const OWNED_MODULE_DOC: Partial<Record<AgentStage, string>> = {
 };
 
 /** The module-doc path convention (`policies/documentation.md` §1), read through the workspace rather than off disk directly. */
-async function readModuleDocVia(runtime: RuntimeAdapter, moduleName: string, filename: string): Promise<string | null> {
+async function readModuleDocVia(workspace: RuntimeAdapter["workspace"], moduleName: string, filename: string): Promise<string | null> {
   try {
-    return await runtime.workspace.readFile(`_docs/module/${moduleName}/${filename}`);
+    return await workspace.readFile(`_docs/module/${moduleName}/${filename}`);
   } catch {
     // A workspace that cannot answer is the same situation as a missing
     // document, and both fail closed one layer up: a round nobody can read is

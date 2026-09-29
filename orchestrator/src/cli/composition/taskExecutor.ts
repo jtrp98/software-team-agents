@@ -212,74 +212,77 @@ export async function composeProductionTaskExecutor(
     },
   });
 
-  const qaRoots = qaWorkRoots();
-  const qaChangedFiles = async (): Promise<string[]> => {
-    const roots = qaWorkRoots();
-    const { files } = await collectQaChangedFiles(roots);
-    return files;
-  };
-  // Resolved once, before composition: the contract carries the real file
-  // manifest, and `withQaOptimization`'s contract hook is synchronous because
-  // a packet's identity must not depend on a call that can still be in flight.
-  const qaDiscovery = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
-  const qaContractChangedFiles = qaDiscovery.files;
-  const qaInputs = await productionQaInputs({
-    docsRoot: resolveDocsRoot(options.projectRoot, runRootName),
-    moduleName: options.module ?? "",
-    taskId,
-    roots: qaRoots,
-    projectRoot: options.projectRoot,
-    changedFiles: qaContractChangedFiles,
-    unreadableTargets: qaDiscovery.failedTargets.length > 0 ? qaDiscovery.failedTargets : undefined,
-  });
+  const executor: AgentExecutor = async (req) => {
+    const qaRoots = qaWorkRoots();
+    const qaChangedFiles = async (): Promise<string[]> => {
+      const roots = qaWorkRoots();
+      const { files } = await collectQaChangedFiles(roots);
+      return files;
+    };
+    // Resolve at each stage invocation: PM may have created the plan since this
+    // executor was composed, and Engineer may have changed the Product files.
+    // Each invocation owns its immutable snapshot before synchronous QA hooks run.
+    const qaDiscovery = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
+    const qaContractChangedFiles = qaDiscovery.files;
+    const qaInputs = await productionQaInputs({
+      docsRoot: resolveDocsRoot(options.projectRoot, runRootName),
+      moduleName: options.module ?? "",
+      taskId,
+      roots: qaRoots,
+      projectRoot: options.projectRoot,
+      changedFiles: qaContractChangedFiles,
+      unreadableTargets: qaDiscovery.failedTargets.length > 0 ? qaDiscovery.failedTargets : undefined,
+    });
 
-  // V13 TASK-017 — the post-Dev deterministic sweep is unconditional. There is
-  // no disabled fallback executor: the hook always wraps the runtime executor.
-  const verificationHook = createPostDevVerificationHook({
-    inner: runtimeExecutor,
-    deterministicRunner: () => combineProjectRunners(qaRoots.map((root) => ({
-      targetId: root.targetId,
-      root: root.path,
-      runner: createProjectRunner({
+    // V13 TASK-017 — the post-Dev deterministic sweep is unconditional. There is
+    // no disabled fallback executor: the hook always wraps the runtime executor.
+    const verificationHook = createPostDevVerificationHook({
+      inner: runtimeExecutor,
+      deterministicRunner: () => combineProjectRunners(qaRoots.map((root) => ({
+        targetId: root.targetId,
         root: root.path,
-        workspace: new LocalWorkspace({ root: root.path }),
-        staticGatePath: path.join(options.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
-      }),
-    }))),
-    requiredVerification: () => orchestrator.runtimeTask?.required_verification,
-    changeAware: {
+        runner: createProjectRunner({
+          root: root.path,
+          workspace: new LocalWorkspace({ root: root.path }),
+          staticGatePath: path.join(options.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
+        }),
+      }))),
+      requiredVerification: () => orchestrator.runtimeTask?.required_verification,
+      changeAware: {
+        changedFiles: qaChangedFiles,
+        scopeInputs: qaInputs.scopeInputs,
+        projectRoot: resolveFrameworkRoot(),
+        workflow: orchestrator.runtimeTask?.workflow ?? "",
+        classification: orchestrator.classification,
+        verificationRoots: qaRoots,
+      },
+    });
+    const postDevExecutor = verificationHook.executor;
+    const documentHook = createDocumentVerificationHook({
+      inner: postDevExecutor,
+      projectRoot: resolveDocsRoot(options.projectRoot, runRootName),
+      moduleName: options.module,
+    });
+    const docVerifiedExecutor = documentHook.executor;
+    const optimizedExecutor = withQaOptimization({
+      inner: docVerifiedExecutor,
       changedFiles: qaChangedFiles,
+      packageInputs: qaInputs.packageInputs,
       scopeInputs: qaInputs.scopeInputs,
-      projectRoot: resolveFrameworkRoot(),
-      workflow: orchestrator.runtimeTask?.workflow ?? "",
-      classification: orchestrator.classification,
-      verificationRoots: qaRoots,
-    },
-  });
-  const postDevExecutor = verificationHook.executor;
-  const documentHook = createDocumentVerificationHook({
-    inner: postDevExecutor,
-    projectRoot: resolveDocsRoot(options.projectRoot, runRootName),
-    moduleName: options.module,
-  });
-  const docVerifiedExecutor = documentHook.executor;
-  const executor = withQaOptimization({
-    inner: docVerifiedExecutor,
-    changedFiles: qaChangedFiles,
-    packageInputs: qaInputs.packageInputs,
-    scopeInputs: qaInputs.scopeInputs,
-    taskContract: qaInputs.taskContract,
-    // T-V8-015: a repair whose route demands FULL cannot be discharged by
-    // a TARGETED round. Read live from the orchestrator (a derivation of
-    // the persisted last failure), so a resumed repair round is held to
-    // the same requirement as the one that raised it.
-    riskSignals: () => ({
-      ...riskSignalsFromClassification(orchestrator.classification),
-      ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
-    }),
-    taskLevel: () => orchestrator.classification.level,
-    previousRound: () => previousRoundFromDocs(resolveDocsRoot(options.projectRoot, runRootName), options.module ?? "", taskId),
-  });
+      taskContract: qaInputs.taskContract,
+      // T-V8-015: a repair whose route demands FULL cannot be discharged by
+      // a TARGETED round. Read live from the orchestrator (a derivation of
+      // the persisted last failure), so a resumed repair round is held to
+      // the same requirement as the one that raised it.
+      riskSignals: () => ({
+        ...riskSignalsFromClassification(orchestrator.classification),
+        ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
+      }),
+      taskLevel: () => orchestrator.classification.level,
+      previousRound: () => previousRoundFromDocs(resolveDocsRoot(options.projectRoot, runRootName), options.module ?? "", taskId),
+    });
+    return optimizedExecutor(req);
+  };
 
   return { executor };
 }

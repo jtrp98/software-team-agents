@@ -337,7 +337,7 @@ describe("Phase 2 preflight", () => {
       expect(warnings).toEqual([]);
 
       fs.writeFileSync(path.join(moduleDir, "design.md"), "# Design\n\n## Targets\n\n- another-target\n");
-      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(/Target "backend".*outside module "sales"/);
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(/another-target.*not present/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

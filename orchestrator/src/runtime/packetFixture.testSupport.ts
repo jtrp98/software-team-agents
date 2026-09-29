@@ -8,6 +8,8 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage } from "../types.js";
 import { compileExecutionPacket } from "./agentRunAssembly.js";
 import { contentHash } from "../artifacts/executionPacket.js";
+import { pathRulesFor } from "../agents/pathPermissions.js";
+import { STAGE_DOCUMENT } from "./agentRunAssembly.js";
 
 export const FIXTURE_REVISION = "a".repeat(40);
 export const fixtureTask = (overrides: Partial<PlanTask> = {}): PlanTask => ({
@@ -63,8 +65,9 @@ export function runtimeTaskFixture(root: string, opts: { taskId?: string; module
 export function packetFixture(root: string, opts: { attempt?: number; taskId?: string; stage?: AgentStage } = {}) {
   const task = runtimeTaskFixture(root, opts);
   const stage = opts.stage ?? AgentStage.BACKEND_ENGINEER;
+  const allow = STAGE_DOCUMENT[stage] ? pathRulesFor(stage, defaultProjectRoot()).write : ["server/**"];
   return compileExecutionPacket({
     req: { stage, taskId: task.task_id, context: [] }, role: stage, runtimeTask: task,
-    contractScope: { allow: ["server/**"], deny: [".git/**"] }, attempt: opts.attempt ?? 1, baseRevision: FIXTURE_REVISION,
+    contractScope: { allow, deny: [".git/**"] }, attempt: opts.attempt ?? 1, baseRevision: FIXTURE_REVISION,
   });
 }

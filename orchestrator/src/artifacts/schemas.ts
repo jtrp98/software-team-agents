@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { AgentStage } from "../types.js";
-import { PacketFieldsSchema, renderPacketText, stableHash, Sha256Schema, contentHash } from "./executionPacket.js";
-import { planTaskHash } from "../docs/planTask.js";
+import { PacketFieldsSchema, renderPacketText, stableHash, Sha256Schema, contentHash, taskContractHash } from "./executionPacket.js";
 
 /**
  * Required-field schemas for every artifact type in the pipeline. An agent's
@@ -55,7 +54,9 @@ export const ExecutionPacketSchema = PacketFieldsSchema.extend({
   if (packet.text !== renderPacketText(packet)) fail("packet text diverges from its semantic fields");
   const { packet_hash, ...payload } = packet;
   if (packet_hash !== stableHash(payload)) fail("packet hash drift");
-  if (packet.identity.task_hash !== planTaskHash({ ...packet.contract, status: "pending" })) fail("canonical task hash drift");
+  if (packet.identity.task_hash !== taskContractHash(packet.contract)) fail("canonical task hash drift");
+  if (packet.contract.version === 1 && (packet.selected_traces.length === 0 || packet.identity.artifact_hashes.length < 2)) fail("planned task requires requirement/design traces and hashes");
+  if (packet.contract.version === "workflow-1" && ![AgentStage.BUSINESS_ANALYST, AgentStage.SYSTEM_ANALYST, AgentStage.PROJECT_MANAGER].includes(packet.stage)) fail("workflow preparation cannot dispatch an implementation or verification role");
   if (packet.task_id !== packet.contract.id || packet.role !== packet.stage) fail("packet task/stage identity mismatch");
   for (const composition of [packet.composition, packet.budgetComposition]) if (Object.values(composition).reduce((sum, n) => sum + n, 0) !== packet.text.length) fail("packet composition does not cover the rendered text");
   const selected = packet.selected_traces.map(t => t.id);

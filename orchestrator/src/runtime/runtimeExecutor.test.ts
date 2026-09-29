@@ -1256,6 +1256,26 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     const runtimeTask = runtimeTaskFixture(knowledgeRoot, { taskId, targetRoot, allow: [] });
     return { bindingRoot, knowledgeRoot, targetRoot, runtimeTask };
   }
+  it.each([false, true])("reads the actual Knowledge artifact and refuses a Product substitute (missing=%s)", async (missing) => {
+    const taskId = `T-knowledge-read-${missing}`;
+    const scoped = scopedFixture(taskId);
+    scoped.runtimeTask = runtimeTaskFixture(scoped.knowledgeRoot, { taskId, targetRoot: scoped.targetRoot, allow: [], moduleName: "sales-crm" });
+    const docPath = path.join(scoped.knowledgeRoot, "_docs/module/sales-crm/requirement.md");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", files: { "_docs/module/sales-crm/requirement.md": "Product decoy must never be used" }, respond: () => {
+      if (missing) fs.unlinkSync(docPath);
+      return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } });
+    } });
+    const reads = vi.spyOn(runtime.workspace, "readFile");
+    const task = { runtimeTask: scoped.runtimeTask, taskId, classification: classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }),
+      targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
+    const result = await createRuntimeExecutor({ runtime, projectRoot: scoped.targetRoot, runtimeTask: () => scoped.runtimeTask,
+      moduleName: () => "sales-crm", guards: () => NO_GUARDS,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, knowledgeRootName: "default", workRoots: [] } }),
+    })({ taskId, stage: AgentStage.BUSINESS_ANALYST, context: [] });
+    expect(result.outcome.result, result.outcome.failure_reason ?? undefined).toBe(missing ? "FAIL" : "PASS");
+    if (missing) expect(result.outcome.failure_reason).toMatch(/doesn't exist/);
+    expect(reads).not.toHaveBeenCalledWith("_docs/module/sales-crm/requirement.md");
+  });
   it("records the exact packet and contract before invoking the adapter", async () => {
     let dispatchCount = 0;
     const runtime = new MockRuntimeAdapter({ id: "codex", respond: () => {

@@ -40,7 +40,9 @@ export function verifiedRoleAttemptProvenance(store: TaskStore, evidenceId: stri
       const real = fs.realpathSync(absolute);
       const within = path.relative(root, real);
       if (within.startsWith("..") || path.isAbsolute(within) || absolute !== real) throw new Error(`role dispatch ${dispatch.evidenceId} escapes its Knowledge root`);
-      const packet = readExecutionPacket(real, { packetHash: payload.packetHash, planHash: canonical.plan_hash });
+      // The immutable dispatch hash binds this historical input revision. A later
+      // accepted BA/SA/PM output must not rewrite the identity of earlier packets.
+      const packet = readExecutionPacket(real, { packetHash: payload.packetHash });
       if (packet.task_id !== run.taskId || packet.stage !== run.stage || packet.role !== role ||
           payload.scopeDigest !== stableHash({ scope: canonical.scope, knowledgeRoot: task.knowledgeRoot, targetBindings: task.targetBindings })) {
         throw new Error(`role dispatch ${dispatch.evidenceId} does not match frozen task/role/scope`);
@@ -79,7 +81,8 @@ export function verifiedArtifactProvenance(store: TaskStore, evidenceId: string)
   if (!AGENT_REGISTRY[artifact.stage].outputs.includes(payload.artifactType)) {
     throw new Error(`artifact ${evidenceId} is not registered output of ${artifact.stage}`);
   }
-  if (payload.location !== `task-store:${artifact.taskId}/artifacts/${payload.artifactType}`) {
+  const artifactKey = `${artifact.stage}/${artifact.attempt}/${payload.artifactType}`;
+  if (payload.location !== `task-store:${artifact.taskId}/artifacts/${artifactKey}`) {
     throw new Error(`artifact ${evidenceId} has a forged storage location`);
   }
   const dispatch = artifact.refs.map((id) => store.loadEvidence(id)).find(
@@ -91,7 +94,7 @@ export function verifiedArtifactProvenance(store: TaskStore, evidenceId: string)
   }
   const verifiedRun = verifiedRoleAttemptProvenance(store, dispatch.evidenceId);
   const task = store.loadTask(artifact.taskId);
-  const bytes = task?.artifacts[payload.artifactType];
+  const bytes = task?.artifacts[artifactKey];
   if (!bytes || contentHash(bytes) !== payload.contentDigest) {
     throw new Error(`artifact ${evidenceId} does not match persisted artifact bytes`);
   }

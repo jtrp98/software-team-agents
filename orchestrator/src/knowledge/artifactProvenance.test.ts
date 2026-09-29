@@ -20,7 +20,7 @@ function fixture(stage: AgentStage, artifactType?: ArtifactType) {
   const taskId = `T-PROVENANCE-${stage}`;
   const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
   const task = newPersistedTask({ taskId, classification, machine: initTaskMachine(classification.pipeline, false), now: 1 });
-  if (artifactType) task.artifacts[artifactType] = "verified bytes";
+  if (artifactType) task.artifacts[`${stage}/1/${artifactType}`] = "verified bytes";
   store.createTask(task);
   const role = AGENT_REGISTRY[stage].role;
   const contractDigest = "a".repeat(64);
@@ -38,7 +38,7 @@ function fixture(stage: AgentStage, artifactType?: ArtifactType) {
     taskId, stage, attempt: 1, role, subject: artifactType, refs: [run.evidenceId], recordedAt: 2,
     payload: { kind: "artifact", artifactType, contentDigest: contentHash("verified bytes"),
       roleAttemptId: `${taskId}:${stage}:1`, ownerRole: stage, contractDigest, sourceDigest: null,
-      knowledgePath: null, location: `task-store:${taskId}/artifacts/${artifactType}`, verdict: null },
+      knowledgePath: null, location: `task-store:${taskId}/artifacts/${stage}/1/${artifactType}`, verdict: null },
   })) : null;
   return { store, dispatch, run, artifact, taskId, contractDigest };
 }
@@ -60,7 +60,7 @@ describe("role artifact provenance", () => {
       const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
       const task = newPersistedTask({ taskId, classification, machine: initTaskMachine(classification.pipeline, false),
         now: 1, runtimeTask, knowledgeRoot });
-      task.artifacts[kind] = "verified bytes";
+      task.artifacts[`${stage}/1/${kind}`] = "verified bytes";
       const store = new MemoryTaskStore();
       store.createTask(task);
       const role = AGENT_REGISTRY[stage].role;
@@ -87,7 +87,7 @@ describe("role artifact provenance", () => {
         payload: { kind: "artifact", artifactType: kind, contentDigest: contentHash("verified bytes"),
           roleAttemptId: `${taskId}:${stage}:1`, ownerRole: stage, contractDigest,
           sourceDigest: contentHash(fs.readFileSync(docPath)), knowledgePath: relativeDoc,
-          location: `task-store:${taskId}/artifacts/${kind}`, verdict: null },
+          location: `task-store:${taskId}/artifacts/${stage}/1/${kind}`, verdict: null },
       }));
       expect(verifiedArtifactProvenance(store, artifact.evidenceId)).toMatchObject({
         stage, attempt: 1, role, dispatchEvidenceId: dispatch.evidenceId, roleRunEvidenceId: run.evidenceId,
@@ -140,7 +140,7 @@ describe("role artifact provenance", () => {
     const unregistered = append("unregistered", { artifactType: ArtifactType.QA_REPORT });
     expect(() => verifiedArtifactProvenance(store, unregistered.evidenceId)).toThrow(/not registered/);
     const task = store.loadTask(taskId)!;
-    task.artifacts[ArtifactType.HANDOFF] = "tampered";
+    task.artifacts[`${AgentStage.BUSINESS_ANALYST}/1/${ArtifactType.HANDOFF}`] = "tampered";
     store.saveTask(task);
     expect(() => verifiedArtifactProvenance(store, original.evidenceId)).toThrow(/does not match persisted artifact bytes/);
   });

@@ -114,7 +114,11 @@ Preserve the response contract while handling empty line items.
 Roots:
 - <fixture>
 Allow:
-- server/**
+- _docs/module/*/qa.md
+- _docs/module/*/qa/**
+- _docs/module/*/plan.md
+- _docs/status.md
+- _docs/status-archive.md
 Deny:
 - .git/**
 

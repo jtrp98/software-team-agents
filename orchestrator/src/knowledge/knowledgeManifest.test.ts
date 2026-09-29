@@ -83,7 +83,7 @@ function seedPriorSession(root: string, store: MemoryTaskStore): { taskId: strin
     runtimeTask,
     knowledgeRoot,
   });
-  task.artifacts[ArtifactType.HANDOFF] = "authored requirement bytes";
+  task.artifacts[`${AgentStage.BUSINESS_ANALYST}/1/${ArtifactType.HANDOFF}`] = "authored requirement bytes";
   store.createTask(task);
 
   const role = AGENT_REGISTRY[AgentStage.BUSINESS_ANALYST].role;
@@ -116,7 +116,7 @@ function seedPriorSession(root: string, store: MemoryTaskStore): { taskId: strin
       kind: "artifact", artifactType: ArtifactType.HANDOFF, contentDigest: contentHash("authored requirement bytes"),
       roleAttemptId: `${taskId}:${AgentStage.BUSINESS_ANALYST}:1`, ownerRole: AgentStage.BUSINESS_ANALYST, contractDigest,
       sourceDigest: contentHash(fs.readFileSync(docPath, "utf8")), knowledgePath: relativeDoc,
-      location: `task-store:${taskId}/artifacts/${ArtifactType.HANDOFF}`, verdict: null,
+      location: `task-store:${taskId}/artifacts/${AgentStage.BUSINESS_ANALYST}/1/${ArtifactType.HANDOFF}`, verdict: null,
     },
   }));
   store.appendEvidence(buildEvidence({

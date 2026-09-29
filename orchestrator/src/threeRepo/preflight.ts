@@ -228,8 +228,11 @@ function resolvedModuleScope(
   moduleName: string,
   knowledgeRoot: string,
   frameworkRoot: string,
+  preparation = false,
 ): TaskBindingModuleScope {
-  const resolved = resolveModuleTargets(moduleName, knowledgeRoot, { frameworkRoot });
+  const resolved = resolveModuleTargets(moduleName, knowledgeRoot, { frameworkRoot, preparation });
+  const errors = resolved.problems.filter(problem => problem.severity === "error");
+  if (errors.length) throw new TargetPreflightError(errors.map(problem => problem.message).join("; "));
   return {
     module: resolved.module,
     designPath: resolved.designPath,
@@ -249,7 +252,7 @@ function persistedModuleScope(
   const relative = path.relative(modulesRoot, planPath);
   const parts = relative.split(path.sep);
   if (parts.length !== 2 || parts[0] === ".." || path.isAbsolute(relative) || parts[1] !== "plan.md") return undefined;
-  return resolvedModuleScope(parts[0], knowledgeRoot, frameworkRoot);
+  return resolvedModuleScope(parts[0], knowledgeRoot, frameworkRoot, runtimeTask.contract?.version === "workflow-1");
 }
 
 /** Resolves every root before an adapter is started.  It never writes. */
@@ -312,7 +315,7 @@ export function preflightThreeRepoTask(
       moduleScope:
         opts.moduleScope ??
         (opts.moduleName
-          ? resolvedModuleScope(opts.moduleName, knowledgeRoot, opts.frameworkRoot)
+          ? resolvedModuleScope(opts.moduleName, knowledgeRoot, opts.frameworkRoot, task.runtimeTask?.contract?.version === "workflow-1")
           : persistedModuleScope(task, knowledgeRoot, opts.frameworkRoot)),
     });
     const warn = opts.bindingWarning ?? ((message: string) => console.warn(`[orchestrator] WARNING: ${message}`));

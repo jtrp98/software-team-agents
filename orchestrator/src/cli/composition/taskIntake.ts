@@ -179,7 +179,10 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, 
     if (args.module) {
       const resolved = resolveModuleTargets(args.module, selectedKnowledgeRoot, {
         frameworkRoot: resolveFrameworkRoot(),
+        preparation: args.classification.isNewFeatureModuleOrProject === true && readModuleDoc(selectedKnowledgeRoot, args.module, "plan.md") === null,
       });
+      const errors = resolved.problems.filter(problem => problem.severity === "error");
+      if (hasTargetBindings(args.targetBindings) && errors.length) throw new CliUsageError(errors.map(problem => problem.message).join("; "));
       moduleScope = {
         module: resolved.module,
         designPath: resolved.designPath,

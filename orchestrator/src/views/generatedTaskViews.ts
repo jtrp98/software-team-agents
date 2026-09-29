@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import { ExecutionPacketSchema, type ExecutionPacket } from "../artifacts/schemas.js";
-import { contentHash, renderPacketSections, renderPacketText } from "../artifacts/executionPacket.js";
+import { contentHash, renderPacketSections, renderPacketText, taskContractHash, type TaskContract } from "../artifacts/executionPacket.js";
 import { planTaskHash, type PlanTask } from "../docs/planTask.js";
 
 export const GENERATED_VIEW_AUTHORITY = {
@@ -39,7 +39,7 @@ function semanticLines(value: string): string[] {
 }
 
 /** A disposable checklist: no checked state is accepted or stored here. */
-export function generateChecklist(task: Omit<PlanTask, "status">): GeneratedChecklistView {
+export function generateChecklist(task: TaskContract): GeneratedChecklistView {
   const items: GeneratedChecklistItem[] = [];
   const add = (sourceField: ChecklistSourceField, values: readonly string[]) => {
     for (const [index, text] of values.entries()) {
@@ -58,7 +58,7 @@ export function generateChecklist(task: Omit<PlanTask, "status">): GeneratedChec
   return {
     authority: GENERATED_VIEW_AUTHORITY,
     task_id: task.id,
-    task_hash: planTaskHash({ ...task, status: "pending" }),
+    task_hash: taskContractHash(task),
     items,
   };
 }

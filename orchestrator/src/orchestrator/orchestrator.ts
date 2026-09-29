@@ -61,7 +61,9 @@ import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
 import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
 import type { StageEntryGuard } from "./stageGuards.js";
-import type { RuntimeTask } from "./runtimeTask.js";
+import { acceptWorkflowDocument, assertRuntimeTaskFresh, type RuntimeTask } from "./runtimeTask.js";
+import { ownedDocumentProblems } from "../qa/documentVerificationHook.js";
+import { verifiedArtifactProvenance } from "../knowledge/artifactProvenance.js";
 import {
   assessBusinessInput,
   businessGateReason,
@@ -94,8 +96,12 @@ const CODE_PRODUCING_STAGES: ReadonlySet<AgentStage> = new Set([AgentStage.BACKE
 const ROLE_DOCUMENT: Partial<Record<AgentStage, string>> = {
   [AgentStage.BUSINESS_ANALYST]: "requirement.md",
   [AgentStage.SYSTEM_ANALYST]: "design.md",
+  [AgentStage.PROJECT_MANAGER]: "plan.md",
+  [AgentStage.TEST_PLANNER]: "test-plan.md",
+  [AgentStage.UXUI_DESIGNER]: "uxui/design.md",
   [AgentStage.REVIEWER]: "review.md",
   [AgentStage.QA_ENGINEER]: "qa.md",
+  [AgentStage.SECURITY]: "security.md",
 };
 
 /** The stages a reviewer round reviews — the one table `reviewSeparation.ts` states. */
@@ -359,7 +365,8 @@ export class Orchestrator {
   readonly store: TaskStore;
   readonly dependsOn: string[];
   readonly classification: ClassificationResult;
-  readonly runtimeTask: RuntimeTask | null;
+  private compiledTask: RuntimeTask | null;
+  get runtimeTask(): RuntimeTask | null { return this.compiledTask; }
   private readonly pipeline: AgentStage[];
   private readonly implementationStartIndex: number;
   private readonly budget: Budget;
@@ -370,7 +377,7 @@ export class Orchestrator {
   private readonly humanDecisionVerifier: HumanDecisionVerifier;
   private readonly contractRoot: string;
   private readonly stageEntryGuard: StageEntryGuard;
-  private artifactStore: Partial<Record<ContextCategory, string>>;
+  private artifactStore: Record<string, string>;
   private pipelineCursor: number;
   private blockedReason: string | undefined;
   private lastFailure: StructuredFailure | null;
@@ -426,7 +433,7 @@ export class Orchestrator {
     this.store = opts.store ?? new MemoryTaskStore();
     this.budget = opts.budget ?? DEFAULT_BUDGET;
     this.classification = classification;
-    this.runtimeTask = restore?.runtimeTask ?? opts.runtimeTask ?? null;
+    this.compiledTask = restore?.runtimeTask ?? opts.runtimeTask ?? null;
     this.createdAt = restore?.createdAt ?? this.now();
     this.dependsOn = restore ? [...restore.dependsOn] : [...(opts.dependsOn ?? [])];
     this.pipeline = restore ? restore.machine.pipeline : classification.pipeline;
@@ -438,7 +445,7 @@ export class Orchestrator {
     if (restore) {
       this.run = { machine: restore.machine, retries: { ...restore.retries } };
       this.gateContext = { ...restore.gateContext };
-      this.artifactStore = { ...restore.artifacts } as Partial<Record<ContextCategory, string>>;
+      this.artifactStore = { ...restore.artifacts };
       this.pipelineCursor = restore.pipelineCursor;
       this.blockedReason = restore.blockedReason ?? undefined;
       this.lastFailure = restore.lastFailure;
@@ -599,6 +606,7 @@ export class Orchestrator {
   private atomic<T>(fn: () => T): T {
     if (this.atomicDepth > 0) return fn();
     const saved = {
+      compiledTask: this.compiledTask,
       run: this.run,
       gateContext: { ...this.gateContext },
       artifactStore: { ...this.artifactStore },
@@ -626,6 +634,7 @@ export class Orchestrator {
       this.atomicDepth -= 1;
       this.pendingEmits = [];
       this.run = saved.run;
+      this.compiledTask = saved.compiledTask;
       this.gateContext = saved.gateContext;
       this.artifactStore = saved.artifactStore;
       this.pipelineCursor = saved.pipelineCursor;
@@ -693,6 +702,15 @@ export class Orchestrator {
         throw new Error(`${stage}: dispatch does not match assigned attempt`);
       }
       if (this.inFlightAttempt) throw new Error(`attempt ${this.inFlightAttempt.idempotencyKey} already has a dispatch`);
+      assertRuntimeTaskFresh(this.runtimeTask);
+      for (const predecessor of this.runtimeTask.workflow_origin?.accepted ?? []) {
+        const verified = verifiedArtifactProvenance(this.store, predecessor.evidence_id);
+        const completion = this.evidence().find(item => item.kind === "stage-completion" && item.stage === predecessor.stage && item.attempt === verified.attempt && item.refs.includes(predecessor.evidence_id));
+        if (verified.taskId !== this.taskId || verified.stage !== predecessor.stage || verified.sourceDigest !== predecessor.hash ||
+            !verified.knowledgePath || path.resolve(this.knowledgeRoot.path, verified.knowledgePath) !== predecessor.source || !completion) {
+          throw new Error(`${stage}: workflow predecessor lacks matching accepted artifact/completion evidence`);
+        }
+      }
       const root = fs.realpathSync(this.knowledgeRoot.path);
       const absolute = path.resolve(root, identity.packetPath);
       const real = fs.realpathSync(absolute);
@@ -1387,6 +1405,10 @@ export class Orchestrator {
       if (dispatch?.payload.kind !== "role-dispatch" || dispatch.payload.sourceBeforeDigest === knowledgeSource.digest) {
         throw new Error(`${stage}: Knowledge document bytes were not authored in the dispatched attempt`);
       }
+      if (this.runtimeTask.contract.version === "workflow-1" && result.outcome.result === "PASS") {
+        const problems = ownedDocumentProblems(stage, root, path.basename(path.dirname(expected)));
+        if (problems.length) throw new Error(`${stage}: document verification failed: ${problems.join("; ")}`);
+      }
     }
     let verification: z.infer<typeof DeterministicVerificationSchema> | undefined;
     if (result.deterministicVerification !== undefined) {
@@ -1454,13 +1476,17 @@ export class Orchestrator {
       },
       refs: [...(consumed ? [consumed] : []), ...(dispatch ? [dispatch.evidenceId] : [])],
     });
+    let acceptedArtifact: EvidenceRecord | undefined;
     if (artifact) {
       this.artifactStore[artifact.type] = artifact.stored;
+      const artifactKey = `${stage}/${attempt}/${artifact.type}`;
+      if (this.artifactStore[artifactKey] !== undefined) throw new Error(`${stage}: immutable artifact snapshot already exists`);
+      this.artifactStore[artifactKey] = artifact.stored;
       const parsed = JSON.parse(artifact.stored) as unknown;
       if (artifact.type === ArtifactType.REVIEW_REPORT) this.gateContext.reviewReport = parsed as ReviewReportArtifact;
       if (artifact.type === ArtifactType.QA_REPORT) this.gateContext.qaReport = parsed as QaReportArtifact;
       if (artifact.type === ArtifactType.SECURITY_REPORT) this.gateContext.securityReport = parsed as SecurityReportArtifact;
-      this.recordEvidence({
+      acceptedArtifact = this.recordEvidence({
         stage,
         attempt,
         role,
@@ -1474,7 +1500,7 @@ export class Orchestrator {
           contractDigest: authoritativeContractDigest,
           sourceDigest: knowledgeSource?.digest ?? null,
           knowledgePath: knowledgeSource?.path ?? null,
-          location: `task-store:${this.taskId}/artifacts/${artifact.type}`,
+          location: `task-store:${this.taskId}/artifacts/${artifactKey}`,
           verdict: artifact.verdict,
         },
         refs: [roleRun.evidenceId],
@@ -1536,13 +1562,19 @@ export class Orchestrator {
     }
     this.lastStageDecision = { stage, attempt, decision };
     if (decision.complete) {
+      if (this.runtimeTask?.contract.version === "workflow-1") {
+        if (!knowledgeSource || !acceptedArtifact) throw new Error(`${stage}: workflow progression requires a changed, verified role-owned document`);
+        this.compiledTask = acceptWorkflowDocument(this.runtimeTask, stage, {
+          source: path.resolve(this.knowledgeRoot!.path, knowledgeSource.path), hash: knowledgeSource.digest, evidence_id: acceptedArtifact.evidenceId,
+        }, this.classification);
+      }
       const completion = this.recordEvidence({
         stage,
         attempt,
         role: "orchestrator",
         subject: "completion",
         payload: { kind: "stage-completion", satisfied: decision.satisfied },
-        refs: decision.evidenceIds,
+        refs: [...new Set([...decision.evidenceIds, ...(acceptedArtifact ? [acceptedArtifact.evidenceId] : [])])],
       });
       this.emitAndStore("STAGE_COMPLETED", {
         taskId: this.taskId,

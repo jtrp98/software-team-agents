@@ -23,6 +23,27 @@ const STAGE_OWNED_DOC: Partial<Record<AgentStage, { file: string; docType: DocTy
   [AgentStage.TEST_PLANNER]: { file: "test-plan.md", docType: null },
 };
 
+/** The state owner can repeat the owned-document check from bytes. An executor's
+ * `document_gate` marker is observability, never proof of validation. */
+export function ownedDocumentProblems(stage: AgentStage, projectRoot: string, moduleName: string): string[] {
+  const owned = STAGE_OWNED_DOC[stage];
+  if (!owned) return [];
+  const file = path.join(projectRoot, "_docs", "module", moduleName, ...owned.file.split("/"));
+  let markdown: string;
+  try { markdown = fs.readFileSync(file, "utf8"); }
+  catch { return [`${moduleName}/${owned.file}: required artifact is missing at the Knowledge root (${projectRoot})`]; }
+  if (!markdown.trim()) return [`${moduleName}/${owned.file}: required artifact is empty`];
+  const problems = owned.docType ? [...checkOneDoc(owned.docType, markdown, `${moduleName}/${owned.file}`).problems] : [];
+  if (stage === AgentStage.PROJECT_MANAGER) {
+    problems.push(...checkPlanGraphs(projectRoot, moduleName).problems);
+    const dir = path.dirname(file);
+    const requirementMd = fs.readFileSync(path.join(dir, "requirement.md"), "utf8");
+    const designMd = fs.readFileSync(path.join(dir, "design.md"), "utf8");
+    problems.push(...checkTraceability(buildTraceChain({ requirementMd, designMd, planMd: markdown })).problems.filter(problem => problem.includes("plan.md has no task for it yet")));
+  }
+  return problems;
+}
+
 export interface DocumentVerificationHookOptions {
   inner: AgentExecutor;
   /**

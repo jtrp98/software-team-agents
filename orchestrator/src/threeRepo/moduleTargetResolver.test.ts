@@ -75,6 +75,21 @@ afterEach(() => {
 });
 
 describe("T-V9-007 module to Target resolver", () => {
+  it("uses explicit requirement Targets only during preparation, then requires the SA design declaration", () => {
+    const { knowledge, framework } = fixture();
+    writeModule(knowledge, "preparation");
+    fs.writeFileSync(path.join(knowledge, "_docs/module/preparation/requirement.md"), "# Requirement\n## Targets\n- sales-api\n");
+    expect(resolveModuleTargets("preparation", knowledge, { frameworkRoot: framework }).declaredTargetIds).toEqual([]);
+    const initial = resolveModuleTargets("preparation", knowledge, { frameworkRoot: framework, preparation: true });
+    expect(initial.declaredTargetIds).toEqual(["sales-api"]);
+    expect(initial.designPath).toMatch(/requirement\.md$/);
+    expect(initial.problems.filter(problem => problem.severity === "error")).toEqual([]);
+    writeModule(knowledge, "preparation", "# Design\n## Targets\n- sales-web\n");
+    expect(resolveModuleTargets("preparation", knowledge, { frameworkRoot: framework, preparation: true }).declaredTargetIds).toEqual(["sales-web"]);
+    writeModule(knowledge, "preparation", "# Design\nNo Targets declared.\n");
+    expect(resolveModuleTargets("preparation", knowledge, { frameworkRoot: framework, preparation: true }).declaredTargetIds).toEqual([]);
+  });
+
   it("resolves one or three declarations with registry entries and local paths without inferring from type", () => {
     const { knowledge, framework, paths } = fixture();
     writeModule(knowledge, "single", "# Design\n\n## Targets\n\n- sales-api (backend-engineer)\n");

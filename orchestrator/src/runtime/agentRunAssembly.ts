@@ -2,11 +2,11 @@ import { AgentStage } from "../types.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { RuntimeTaskV2Schema, assertRuntimeTaskFresh, type RuntimeTaskV2 } from "../orchestrator/runtimeTask.js";
-import { planTaskHash } from "../docs/planTask.js";
+import { RuntimeTaskV2Schema, assertRuntimeTaskFresh, PRE_PLAN_STAGES, type RuntimeTaskV2 } from "../orchestrator/runtimeTask.js";
 import { z } from "zod";
-import { PacketFieldsSchema, RoleContractDigestSchema, ExpectedOutputSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import { PacketFieldsSchema, RoleContractDigestSchema, ExpectedOutputSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, taskContractHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
 import type { AgentContract } from "../agents/agentContract.js";
+import { pathRulesFor } from "../agents/pathPermissions.js";
 import { verifyDesignEvidence } from "../docs/designEvidence.js";
 import {
   ArtifactType,
@@ -602,7 +602,7 @@ export function packetCompilerHash(): string {
 function deriveKnowledgeRoot(task: RuntimeTaskV2, targetRoots: readonly string[]): string | undefined {
   const artifactSource = task.artifact_hashes[0]?.source;
   if (!artifactSource) return undefined;
-  const candidate = path.resolve(artifactSource, "..", "..", "..");
+  const candidate = path.resolve(artifactSource, "..", "..", "..", "..");
   if (targetRoots.map(root => path.resolve(root)).includes(candidate)) return undefined;
   if (!fs.existsSync(path.join(candidate, "_docs", "module"))) return undefined;
   return candidate;
@@ -615,6 +615,7 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   const task = parsed.data;
   if (task.task_id !== input.req.taskId) throw new Error(`RuntimeTask ${task.task_id} cannot compile packet for ${input.req.taskId}`);
   assertRuntimeTaskFresh(task);
+  if (task.contract.version === "workflow-1" && input.req.stage !== PRE_PLAN_STAGES[task.workflow_origin!.accepted.length]) throw new Error("workflow preparation can dispatch only its next unaccepted BA/SA/PM stage");
   const roots = task.scope.work_roots.filter(root => root.stage === input.req.stage);
   if (!task.design_evidence) throw new Error(`task ${task.task_id}: design evidence migration required before unattended packet compilation`);
   if (!input.baseRevision) throw new Error(`task ${task.task_id}: base revision is required to verify design evidence`);
@@ -628,7 +629,10 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
     const problems = verifyDesignEvidence([ref], { targetRoot: evidenceRoot, knowledgeRoot, currentRevision: input.baseRevision, allowContentStableRevision: singleRepoKnowledge });
     if (problems.length) throw new Error(`design evidence drift: ${problems.join("; ")}`);
   }
-  const allow = unique(roots.flatMap(root => root.allow.map(entry => entry.contract_glob)).filter(glob => input.contractScope.allow.includes(glob)));
+  const documentGrants = pathRulesFor(input.req.stage, task.workflow_plan ? path.dirname(path.dirname(task.workflow_plan.workflow_source)) : undefined).write;
+  const allow = unique(STAGE_DOCUMENT[input.req.stage] && !roots.some(root => root.access === "write")
+    ? input.contractScope.allow.filter(glob => documentGrants.includes(glob))
+    : roots.flatMap(root => root.allow.map(entry => entry.contract_glob)).filter(glob => input.contractScope.allow.includes(glob)));
   const candidates = input.retrievalCandidates ?? [];
   for (const candidate of candidates) {
     if (candidate.revision !== input.baseRevision || contentHash(fs.readFileSync(candidate.path)) !== candidate.hash) throw new Error(`retrieval evidence drift: ${candidate.path}`);
@@ -697,7 +701,7 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
     code_intel_evidence: input.codeIntelEvidence ?? "",
     verification_context: input.req.context.filter(item => item.source === "qa-evidence"),
     identity: {
-      task_hash: planTaskHash({ ...task.contract, status: "pending" }), plan_hash: task.plan_hash,
+      task_hash: taskContractHash(task.contract), plan_hash: task.plan_hash,
       artifact_hashes: task.artifact_hashes,
       config_hash: packetConfigHash({
         config: input.config ?? null,
