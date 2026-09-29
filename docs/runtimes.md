@@ -30,7 +30,7 @@ Guard coverage per runtime คือ verdict เดียวกับที่ `
 
 | Runtime | สถานะ | Guard coverage |
 |---|---|---|
-| **Claude Code** | ✅ **Supported** — hooks/pipeline เคย verify แล้ว แต่ V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel; unattended Target writes ไม่ certified | **hook enforced** สำหรับ guard เดิม; ไม่ใช้เป็นหลักฐาน approval isolation |
+| **Claude Code** | ✅ **Supported** — V13 TASK-031: headless run รัน `claude` ทั้ง process ภายใต้ Windows elevated sandbox ของ Codex (`codex sandbox`) ด้วย profile ต่อ run: อ่านกว้าง, approval channel เป็น OS deny ทั้งอ่าน/เขียน, เขียนได้เฉพาะ path ที่ packet อนุญาต (VCS/runtime binding อ่านอย่างเดียว), `CLAUDE_CONFIG_DIR`/`TEMP`/`CODEX_HOME` ต่อ run ลบหลังจบ, ปิด network ที่ OS และออกได้ทาง loopback CONNECT proxy ไป api.anthropic.com:443 เท่านั้น; UAT บน Claude Code 2.1.283 + codex-cli 0.158.0 ปฏิเสธ glob/ตัวแปร/encoded/junction ต่อไฟล์จำลองและ egress นอก allowlist โดย workspace ใช้ได้; certified for unattended Target writes **เฉพาะ Windows**, ต้องมี Codex ติดตั้งและ login ที่คนเตรียมใน environment (`claude setup-token`) | **headless enforced** — OS sandbox profile ต่อ run + network lock; hooks ยังเป็นชั้นเสริม ไม่ใช่หลักฐาน isolation; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
 | **Codex** | ✅ **Supported** — interactive และ headless adapter verify บน Codex 0.154.0/0.155.1 แล้ว; headless enforcement = per-run native permission profile (เขียนเฉพาะ path ที่ packet อนุญาต ปิด network บล็อก Git ด้วย execpolicy + OS deny) และ TASK-027 เพิ่ม OS read/write deny ของ approval channel; UAT กับโปรไฟล์ที่ adapter สร้างบน Codex 0.155.0-alpha.16.4 ปฏิเสธ read/write แบบ glob, ตัวแปร และ encoded command ต่อไฟล์จำลอง โดยยังอ่าน/เขียน workspace ได้; certified for unattended Target writes; **interactive session ยัง unguarded** — direct-mode launch ปฏิเสธการรัน (ไม่มี acknowledgement bypass แล้ว — V13 TASK-012) และจำกัดเฉพาะ analysis/proposal ผ่าน STA dispatch | **headless enforced / interactive unguarded** — adapter ใช้ native permission profile + isolated execpolicy โดยไม่พึ่ง project hook; `.codex/hooks.json` ยังเป็น compatibility payload สำหรับ interactive เท่านั้น (default trust ข้าม hooks, hook พัง fail-open — ไม่ถูก claim เป็น enforcement ฝั่ง headless); exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
 | **OpenCode** | 🧪 **Experimental** — plugin/adapter เคย verify แล้ว; V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel | **partial** — plugin บังคับ guard บางส่วน; ไม่ใช้เป็นหลักฐาน approval isolation |
 | **Antigravity** | ✅ **Supported** — bridge hook เคย verify แล้ว แต่ V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel; unattended Target writes ไม่ certified | **bridge hook enforced** สำหรับ guard เดิม; ไม่ใช้เป็นหลักฐาน approval isolation |
@@ -45,7 +45,7 @@ enforce จริง (`orchestrator/src/runtime/runtimeSupport.test.ts` pin ไ�
 
 การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` — default (`propose`) ติด permission prompt
 ที่ไม่มีคนกดใน headless run สิทธิ์เขียน Target แบบ unattended เป็นของ runtime ที่ได้รับ certification
-(ดูตาราง — หลัง V13 TASK-027 a1 เหลือ Codex headless adapter; runtime อื่นหยุด production role dispatch)
+(ดูตาราง — หลัง V13 TASK-027 a1 และ TASK-031 เหลือ Codex headless adapter และ Claude Code headless ภายใต้ Codex sandbox บน Windows; runtime อื่นหยุด production role dispatch)
 
 ### ตรวจสถานะ login ก่อน run ยาว
 

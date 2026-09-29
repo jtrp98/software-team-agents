@@ -262,9 +262,10 @@ describe("V13 TASK-016 — the executor and its version are pinned to the attemp
     expect(freezeAttempt(freezeInput()).runtime_version).toBeNull();
   });
 
-  // V13 TASK-027 R14C (a1): Claude Code and Antigravity lost Target-write
-  // certification with the approval isolation boundary; zcode never had it.
-  it.each(["zcode", "claude-code", "antigravity"])("refuses to freeze a governed write on uncertified executor %s", (runtime) => {
+  // V13 TASK-027 R14C (a1): Antigravity lost Target-write certification with the
+  // approval isolation boundary; zcode never had it. Claude Code regained it in
+  // TASK-031 (whole-process OS sandbox + network lock).
+  it.each(["zcode", "antigravity"])("refuses to freeze a governed write on uncertified executor %s", (runtime) => {
     expect(() =>
       freezeAttempt(freezeInput({
         requested: { runtime },
@@ -281,12 +282,12 @@ describe("V13 TASK-016 — the executor and its version are pinned to the attemp
     expect(() => rerouteAttempt(ledger.readAttempt(first.attempt_id)!, {
       ...freezeInput({
         attempt: 2,
-        requested: { runtime: "claude-code", model: "claude-opus-5", effort: "high" },
-        observed: { runtime: "claude-code", model: "claude-opus-5", effort: "high" },
-        capabilityReport: capabilityReport({ runtimeId: "claude-code" }),
-        availability: { available: true, version: "2.1.0" },
+        requested: { runtime: "antigravity", model: "gemini-3-pro", effort: "high" },
+        observed: { runtime: "antigravity", model: "gemini-3-pro", effort: "high" },
+        capabilityReport: capabilityReport({ runtimeId: "antigravity" }),
+        availability: { available: true, version: "1.2.12" },
       }),
-    })).toThrow(/runtime "claude-code" is not certified for unattended Target writes/);
+    })).toThrow(/runtime "antigravity" is not certified for unattended Target writes/);
     expect(ledger.attemptsForTask(runId, "BE-004").map((a) => a.attempt)).toEqual([1]);
     expect(ledger.readAttempt(first.attempt_id)!.status).toBe("UNAVAILABLE");
   });

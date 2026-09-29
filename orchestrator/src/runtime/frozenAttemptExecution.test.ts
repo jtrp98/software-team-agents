@@ -183,9 +183,10 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(1);
   });
 
-  // V13 TASK-027 R14C (a1): a previously frozen antigravity/claude-code
-  // Target-write attempt no longer dispatches once certification is withdrawn.
-  it.each(["antigravity", "claude-code"])("refuses a frozen %s Target-write attempt after a1 withdrew its certification", async (id) => {
+  // V13 TASK-027 R14C (a1): a previously frozen antigravity Target-write attempt
+  // no longer dispatches once certification is withdrawn (zcode never had it;
+  // claude-code regained it in TASK-031).
+  it.each(["antigravity", "zcode"])("refuses a frozen %s Target-write attempt after a1 withdrew its certification", async (id) => {
     const runtime = new MockRuntimeAdapter({
       id,
       models: ["glm-4.7"],

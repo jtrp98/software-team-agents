@@ -123,14 +123,14 @@ describe("TASK-016 — selection requires certification, capability and availabi
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] })]),
-      config: { schema_version: 1, routing: { order: ["claude-code", "codex"] } },
-      availability: { "claude-code": { available: true }, codex: { available: true } },
+      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "antigravity", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] })]),
+      config: { schema_version: 1, routing: { order: ["antigravity", "codex"] } },
+      availability: { antigravity: { available: true }, codex: { available: true } },
       hasTargetWrite: true,
       modelPolicy: null,
     });
     expect(result.selected?.runtime.id).toBe("codex");
-    expect(result.attempts[0]!.skipReason).toMatch(/runtime "claude-code" is not certified for unattended Target writes/);
+    expect(result.attempts[0]!.skipReason).toMatch(/runtime "antigravity" is not certified for unattended Target writes/);
   });
 
   it("refuses an uncertified runtime for a governed write even when named explicitly, but lets it run analysis", () => {
@@ -197,7 +197,8 @@ describe("TASK-016 — selection requires certification, capability and availabi
       expect(governedExecutorGap(runtime), runtime.id).toBeNull();
       for (const capability of EXECUTOR_LIFECYCLE_CAPABILITIES) expect(runtime.capabilities.has(capability), runtime.id).toBe(true);
     }
-    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteCertified)).toEqual(["codex"]);
+    // V13 TASK-031 added Claude Code (whole-process Codex sandbox + OS network lock, Windows).
+    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteCertified)).toEqual(["claude-code", "codex"]);
   });
 });
 

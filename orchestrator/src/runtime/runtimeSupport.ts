@@ -51,9 +51,10 @@ export interface RuntimeSupport {
 export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   "claude-code": {
     level: "supported",
-    unattendedTargetWrites: false,
+    unattendedTargetWrites: true,
     claim:
-      "headless pipeline and hooks were verified, but the V13 TASK-027 a1 approval isolation boundary is absent: production role dispatch is refused before spawn, including analysis/proposal; unattended Target writes are not certified. V10 does not change this status",
+      "headless pipeline and hooks were verified. V13 TASK-031: every headless run launches the whole `claude` process inside Codex's Windows elevated restricted-token sandbox (`codex sandbox`) with a per-run profile — broad read, the approval channel an exact OS read/write deny, writes only at packet-authorized paths with VCS and runtime-binding directories read-only, a per-run `CLAUDE_CONFIG_DIR`/`TEMP`/`CODEX_HOME` deleted after the run, and OS network disabled with a loopback CONNECT proxy that tunnels only api.anthropic.com:443 — live-verified on Claude Code 2.1.283 with codex-cli 0.158.0 (R14F: glob, variable, encoded and junction reads/writes of a decoy approval directory denied; direct egress and non-allowlisted hosts denied; workspace reads/writes allowed; production adapter run OK). " +
+      "This headless path is certified for unattended Target writes on Windows only; it requires a Codex install and a person-provisioned login in the environment (`claude setup-token`), and exit checks run fail-closed through the provider-neutral ExitCheckRunner. V10 does not change this status",
   },
   codex: {
     level: "supported",
