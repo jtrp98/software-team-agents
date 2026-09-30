@@ -1,8 +1,59 @@
 # Release Notes
 
-## Unreleased — composable execution layer
+## software-team-agents 8.0.0 — composable execution layer + Large File Context Policy (2026-09-30)
 
-> Version bucket and date are not set: the release owner decides them.
+> **Version 8.0.0 and release date 2026-09-30 confirmed by the release owner.** The Major bucket is
+> the mechanical result of the version rule at the bottom of this file: a new guard refuses
+> whole-file reads of large files that passed before, and two defaults flip (a hard context
+> ceiling enforced in warn mode, and per-role turn limits). `templates/manifest.json` is re-stamped
+> by `npm run build`. The private development package `@software-team-agents/orchestrator` remains
+> independently versioned at `0.3.0`.
+
+**Bucket: Major (`7.0.0 → 8.0.0`, confirmed).** Track A (the composable execution layer) is
+Minor on its own; Track B is what makes this release Major.
+
+### Track B — Large File Context Policy (breaking)
+
+Motivated by BA → SA runs reaching 250k+ cumulative input tokens: `sta context` returned a
+413,133-char `design.md` whole to every role (511,443 chars for BA/SA), and prompts/policies told
+owners to read documents "in full", so one tool result was re-sent on every later turn.
+
+- **`policies/documentation.md` §10a** — a file above `large_file_chars` (default 100,000 chars,
+  any file type) is never read whole: search or take the section index first, read bounded ranges
+  (`max_read_window_chars`, default 40,000), expand incrementally, and never fall back to the whole
+  file. CLAUDE.md, the shared agent preamble, §4 catch-up and the §10 owner "read in full" rules
+  now follow it.
+- **`sta context` / module-doc slicing** renders any selection over the threshold — including the
+  former "passed through whole" fallbacks — as a line-ranged section index rated READ/CHECK/skip,
+  with an aggregate cap across documents. Small documents are unchanged. On the real 413k-char
+  document: BA/SA context 511,443 → ~16.5k chars; worst case across roles 691,073 → ≤ ~90k.
+- **New guard `block-large-read.js`** (PreToolUse, Read/Bash/PowerShell; Claude Code, Codex
+  mirror, ZCode): refuses a whole or oversized read of a large file, new ranges past
+  `max_file_read_share` (default 50%) of one file per session, and bare `cat`/`type`/`Get-Content`
+  dumps; returns the file's section index once per file per session and records every read
+  (metadata only) to a read ledger. `STA_LARGE_READ_GUARD=off` disables it for a person's own
+  session. OpenCode and AGY have no equivalent yet (`GUARD GAP`).
+- **Effective context budget** — budgets compare the execution packet plus always-on instructions
+  (`CLAUDE.md` + the role definition body), without double counting.
+  `context_budget.hard_max_estimated_tokens` (default 100,000 estimated tokens; `0` disables) now
+  fails a stage **before the model is invoked, in warn mode too**, naming the contributors and a
+  remedy.
+- **Turn limits** — per-role `max_turns` defaults (BA 60, SA 80, PM 60, test-planner/uxui 50,
+  reviewer/security 80, QA 120, engineers 200, setup 150, devops 120, other 150), overridable with
+  `max_turns.default` / `max_turns.roles.<role>` (`0` = no limit), forwarded as Claude Code
+  `--max-turns` for orchestrated stages and `sta execute`. A run stopped by the limit is ERROR with
+  a diagnostic.
+- **Observability** — each run records `context_telemetry` (packet, always-on, effective initial
+  context, turns vs limit, tool reads/duplicates/blocked); `sta tokens <task-id>` prints it per
+  stage beside runtime-reported input/output/cache-read/cache-created. SQLite state schema 22 → 23
+  (additive nullable column; migrates in place).
+
+**What you may need to do:** a stage whose effective initial context exceeds ~100k estimated tokens
+now fails instead of running — narrow the task's references or archive closed material (§4), or
+set `context_budget.hard_max_estimated_tokens`. Stages that legitimately need more turns than the
+defaults need a `max_turns` override.
+
+### Track A — composable execution layer
 
 - **`sta execute` / `createSta().execute()`** is the single execution primitive:
   caller → STA → runtime adapter → normalized result (`completed` · `partial` · `needs_approval` ·
