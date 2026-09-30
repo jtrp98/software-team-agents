@@ -40,6 +40,16 @@
             "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-path-permissions.js"]
           }
         ]
+      },
+      {
+        "matcher": "Read|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-large-read.js"]
+          }
+        ]
       }
     ],
     "SubagentStop": [

@@ -41,6 +41,18 @@ options: `--target-root <path>` · `--root <name>` (init/sync/status/open — �
 
 ## `sta` — orchestrated pipeline CLI
 
+### Direct execution (ไม่ต้องมี workflow, module หรือ role) — คู่มือ: [`execution.md`](execution.md)
+
+```bash
+sta execute --runtime <claude-code|codex|antigravity|zcode|opencode> --task <text> [--workspace <dir>] [--role <persona>] [--write] [--write-path <glob>]... [--no-delegate] [--action <side-effect>]... [--max-depth <n>] [--max-runs <n>]
+sta execute resume  <run-id> [--context <text>]      # รันต่อหลัง approval / partial
+sta execute approve <run-id> --request <id> (--yes|--no) --by <name>   # relay คำตอบของคนสำหรับ side effect ที่ประกาศไว้
+sta execute show    <run-id>                         # run tree ทั้งต้น
+```
+
+พิมพ์ผล JSON เสมอ; exit `0` completed · `1` failed · `3` needs_approval · `4` partial. เรียกจากข้างใน run
+(`STA_RUN_ID` อยู่ใน env) = run ลูกของ run นั้น
+
 ### Task lifecycle
 
 ```bash

@@ -22,6 +22,7 @@ import {
   reviewerArtifactResult,
   securityArtifactResult,
   measureRolePrefixChars,
+  measureAlwaysOnInstructionChars,
   STAGE_DOCUMENT,
   referencedKnowledgeIds,
   type PromptPartsResult,
@@ -59,7 +60,9 @@ import { deriveHandoff } from "../agents/moduleDocs.js";
 import { parseDesignEvidence } from "../docs/designEvidence.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { generatePromptPreview } from "../views/generatedTaskViews.js";
-import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, hardCeilingRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, resolveHardContextCeilingFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { resolveMaxTurnsFromProject } from "./turnLimits.js";
+import type { ContextTelemetry } from "../observability/runLog.js";
 import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
 import { resolveTargetRevision } from "../codeintel/targetRevision.js";
@@ -77,6 +80,7 @@ import {
   type ExitCheckRunner,
 } from "./exitCheckRunner.js";
 import { verifyChangedFilesScope, type PostflightRoot } from "./postflight.js";
+import { openWorkflowStageRun, type WorkflowStageRun } from "../execute/execute.js";
 import type { PostflightGuardOutcome } from "../orchestrator/orchestrator.js";
 
 /**
@@ -281,6 +285,10 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   budgetComposition: ContextBudgetComposition;
   /** T-V8-012 — measured once per attempt by `measureRolePrefixChars`; null when unmeasurable, never fabricated as 0. */
   role_prefix_chars: number | null;
+  /** `measureAlwaysOnInstructionChars` — the part of the effective initial context the runtime injects itself. */
+  always_on_chars: number | null;
+  hard_ceiling_estimated_tokens: number | null;
+  max_turns?: number;
 }): RunMetrics {
   const input_tokens = result.usage.inputTokens;
   const output_tokens = result.usage.outputTokens;
@@ -334,6 +342,30 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     context_code_chars: declared.budgetComposition.code,
     context_tool_output_chars: declared.budgetComposition.tool_output,
     context_reserve_chars: declared.budgetComposition.reserve,
+    context_telemetry: contextTelemetryFrom(declared, result),
+  };
+}
+
+/**
+ * What a person debugging a large run needs in one record: the effective
+ * initial context split into packet and always-on instructions, the turn
+ * count against its ceiling, and what the Large File Context Policy guard saw
+ * the agent read. Only measured values; every absent one is null.
+ */
+function contextTelemetryFrom(
+  declared: { context_chars: number; always_on_chars: number | null; contextBudget: ReturnType<typeof assessContextBudget>; hard_ceiling_estimated_tokens: number | null; max_turns?: number },
+  result?: RuntimeAgentResult,
+): ContextTelemetry {
+  return {
+    packet_chars: declared.context_chars,
+    always_on_chars: declared.always_on_chars,
+    effective_initial_chars: declared.contextBudget.contextChars,
+    effective_initial_estimated_tokens: declared.contextBudget.estimatedInputTokens,
+    hard_ceiling_estimated_tokens: declared.hard_ceiling_estimated_tokens,
+    max_turns: declared.max_turns ?? null,
+    turns: result?.turns ?? null,
+    max_turns_reached: result?.maxTurnsReached === true,
+    tool_reads: result?.reads ?? null,
   };
 }
 
@@ -772,11 +804,18 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     const contextBudgetMode = resolveContextBudgetModeFromProject(opts.projectRoot);
+    // Effective initial context = this packet + what the runtime injects on
+    // its own every turn (CLAUDE.md + role definition). Measured once: role,
+    // binding and execution root are fixed for the whole retry loop below.
+    const alwaysOnChars = measureAlwaysOnInstructionChars(threeRepo?.roots.bindingRoot ?? opts.projectRoot, req.stage, executionRoot);
+    const hardCeiling = resolveHardContextCeilingFromProject(opts.projectRoot);
+    const maxTurns = resolveMaxTurnsFromProject(opts.projectRoot, role);
     let contextBudget = assessContextBudget(
       prompt.length,
       promptParts.budgetComposition,
       resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
       contextBudgetMode,
+      alwaysOnChars ?? 0,
     );
 
     const candidateBudgetRejections = (): ReturnType<typeof contextBudgetRejections> => {
@@ -839,12 +878,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 
     let result!: RuntimeAgentResult;
     let metrics!: RunMetrics;
+    let stageRun: WorkflowStageRun | undefined;
     for (;;) {
       contextBudget = assessContextBudget(
         prompt.length,
         promptParts.budgetComposition,
         resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
         contextBudgetMode,
+        alwaysOnChars ?? 0,
       );
       if (contextBudget.warning && !contextBudget.rejected) {
         // Deliberately observation-only: happens after assembly and before
@@ -860,9 +901,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // trigger that moves a stage, so an inadmissible candidate fails the
       // stage closed with every rejection recorded, hop or no hop.
       const budgetRejections = candidateBudgetRejections();
-      if (contextBudgetMode === "reject" && budgetRejections.length > 0) {
+      // The hard ceiling holds in warn mode too: a stage this large fails
+      // before the model is invoked, never after it has re-sent the context
+      // on every turn.
+      const hardRejection = hardCeilingRejection(contextBudget, promptParts.budgetComposition, hardCeiling, {
+        taskId: req.taskId, role, stage: req.stage, runtime: activeRuntime.id, model: activeModel ?? null,
+      });
+      if (hardRejection || (contextBudgetMode === "reject" && budgetRejections.length > 0)) {
         return finish(failResult(
-          budgetRejections.map(formatBudgetRejection).join(" | "),
+          [...(hardRejection ? [hardRejection] : []), ...(contextBudgetMode === "reject" ? budgetRejections : [])].map(formatBudgetRejection).join(" | "),
           {
             model: activeModel,
             promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
@@ -891,6 +938,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             context_code_chars: promptParts.budgetComposition.code,
             context_tool_output_chars: promptParts.budgetComposition.tool_output,
             context_reserve_chars: promptParts.budgetComposition.reserve,
+            context_telemetry: contextTelemetryFrom({
+              context_chars: prompt.length, always_on_chars: alwaysOnChars, contextBudget, hard_ceiling_estimated_tokens: hardCeiling, max_turns: maxTurns,
+            }),
           },
         ));
       }
@@ -905,6 +955,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         composition: promptParts.composition,
         doc_chars_before: promptParts.composition.doc_chars,
         role_prefix_chars: rolePrefixChars,
+        always_on_chars: alwaysOnChars,
+        hard_ceiling_estimated_tokens: hardCeiling,
+        max_turns: maxTurns,
         runtime: activeRuntime.id,
         // V13 TASK-016 — the executor version selection saw, pinned to this attempt's record.
         runtime_version: routeAvailability[activeRuntime.id]?.version,
@@ -1003,6 +1056,20 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         // the same flow. A probe/execute-only adapter rides `executorPortFor`'s
         // typed-refusal wrapper — there is no port-less dispatch path left.
         const port = executorPortFor(activeRuntime);
+        // The stage attempt is a node in the run tree, like any direct run:
+        // its agent may delegate with `sta execute`, and a workflow started
+        // from inside a run counts against that tree's limits.
+        const opened = openWorkflowStageRun({
+          stateRoot: threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot,
+          runtime: activeRuntime.id,
+          role,
+          task: `${req.taskId}/${req.stage}`,
+          workspace: executionRoot,
+          writePaths: guards.writeAllow,
+          autonomy,
+        });
+        if ("refused" in opened) return finish(failResult(`cannot start ${role}: ${opened.refused}`, declared));
+        stageRun = opened;
         const adapterRequest: RuntimeAgentRequest = {
           role,
           // `cwd` selects the repository the agent works in; scope stays
@@ -1028,6 +1095,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           // told which agent it is guarding. An adapter may add its own variables
           // on top; the contract says it must not drop these.
           env: {
+            ...stageRun.env,
             STA_ROLE: role,
           ...guardStackRules,
             // Guard hooks receive only tool paths, not this task's binding. Give
@@ -1046,15 +1114,21 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
               : {}),
           },
           timeoutMs: opts.timeoutMs,
+          ...(maxTurns !== undefined ? { maxTurns } : {}),
         };
         const isolationDenial = opts.approvalIsolationPreflight?.(activeRuntime, adapterRequest);
-        if (isolationDenial) return finish(failResult(`cannot start ${role}: ${isolationDenial}`, declared));
+        if (isolationDenial) {
+          stageRun.close({ status: "ERROR", text: isolationDenial, usage: {}, diagnostics: [] });
+          return finish(failResult(`cannot start ${role}: ${isolationDenial}`, declared));
+        }
         if (req.recordDispatch) {
           if (!packetPath || !packetHash) throw new Error("governed dispatch has no persisted execution packet");
           req.recordDispatch({ packetPath, packetHash, contractDigest, runtimeId: activeRuntime.id });
         }
         const preparedAttempt = await port.prepare(adapterRequest);
         result = await port.execute(preparedAttempt);
+        stageRun.close(result);
+        stageRun = undefined;
         attemptId = preparedAttempt.attemptId;
         if (port.capabilities.has(RuntimeCapability.EVIDENCE_COLLECTION)) {
           try {
@@ -1067,6 +1141,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           evidenceCollectError = `executor "${activeRuntime.id}" does not declare EVIDENCE_COLLECTION`;
         }
       } catch (e) {
+        stageRun?.close({ status: "ERROR", text: String(e), usage: {}, diagnostics: [] });
         if (e instanceof ExecutorPortRefusalError) {
           // A typed refusal is the port refusing a lifecycle operation before
           // any spawn — a refusal to run this attempt, not an adapter bug.

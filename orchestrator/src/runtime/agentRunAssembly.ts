@@ -31,6 +31,8 @@ import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { renderBusinessInputEvidence } from "../gates/businessInput.js";
 import { buildTaskRetrievalQuery, type TaskRetrievalQuery } from "../context/retrievalQuery.js";
+import { resolveLargeFilePolicyFromProject } from "../context/largeFile.js";
+import type { ContextTelemetry } from "../observability/runLog.js";
 
 /**
  * This module is the deterministic Task Compiler: everything about running a
@@ -87,6 +89,8 @@ export interface RunMetrics {
   context_code_chars?: number;
   context_tool_output_chars?: number;
   context_reserve_chars?: number;
+  /** Effective-context, turn and retrieval attribution (`observability/runLog.ts` ContextTelemetry). */
+  context_telemetry?: ContextTelemetry;
   /**
    * T-V8-012 — prompt-cache tokens *written* this run (see
    * `RuntimeUsage.cacheCreationInputTokens`). Sibling of `cache_read_tokens`;
@@ -166,6 +170,46 @@ export const DEPLOY_PHASE_INSTRUCTION: Record<"prepare" | "execute", string> = {
  * empty prefix.
  */
 export function measureRolePrefixChars(frameworkRoot: string, stage: AgentStage): number | null {
+  return measureRolePrefixCharsUnchanged(frameworkRoot, stage);
+}
+
+/**
+ * The instructions a named-agent runtime injects on *every* model turn
+ * without this framework sending them: the `CLAUDE.md` the runtime loads from
+ * the stage's working directory, plus the role definition's body (its
+ * frontmatter is configuration, not prompt). Policies are not included —
+ * nothing auto-loads them; an agent reads a section on demand with `sta
+ * policy`, and that read is tool output, not initial context.
+ *
+ * This is the half `assessContextBudget` adds to the packet's own length
+ * (`alwaysOnChars`), so a budget sees the effective initial context rather
+ * than the packet alone. `measureRolePrefixChars` above stays the wider
+ * "reachable instruction surface" telemetry (every policy file included).
+ *
+ * Each file is looked up in the execution root first (the runtime's cwd, where
+ * a synced Target keeps its own copies), then the framework binding root.
+ * Returns null when the role definition cannot be found in either — an
+ * unmeasurable prefix is a fact about the run, not a zero.
+ */
+export function measureAlwaysOnInstructionChars(frameworkRoot: string, stage: AgentStage, executionRoot?: string): number | null {
+  const roots = [...new Set([executionRoot, frameworkRoot].filter((root): root is string => typeof root === "string"))];
+  const firstReadable = (relative: string): string | null => {
+    for (const root of roots) {
+      try {
+        return fs.readFileSync(path.join(root, relative), "utf8");
+      } catch {
+        // try the next root
+      }
+    }
+    return null;
+  };
+  const definition = firstReadable(path.join(".claude", "agents", `${stage}.md`));
+  if (definition === null) return null;
+  const body = definition.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  return (firstReadable("CLAUDE.md") ?? "").length + body.length;
+}
+
+function measureRolePrefixCharsUnchanged(frameworkRoot: string, stage: AgentStage): number | null {
   try {
     const chars = (file: string): number => fs.readFileSync(file, "utf8").length;
     const policyRoot = path.join(frameworkRoot, "policies");
@@ -208,7 +252,11 @@ export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager
   }
   for (const s of selected) {
     parts.push("", `### ${s.doc}.md`);
-    if (s.fullDocument) {
+    if (s.indexed) {
+      // The index carries its own header (size, reason, how to read a range);
+      // the only thing to add is that no section was dropped from reach.
+      parts.push(`_Every section below stays readable at the listed line range of \`${cm.path(s.doc)}\`._`, "");
+    } else if (s.fullDocument) {
       // A fallback to the whole document is a fact about this run's context,
       // not just a number in `sta context`'s composition report; naming it
       // here makes it attributable in the one place an agent (and a run log
@@ -266,7 +314,7 @@ export interface SlicedModuleDocs {
 
 export function sliceModuleDocsWithSavings(stage: AgentStage, opts: SliceOptions): SlicedModuleDocs {
   try {
-    const cm = new ContextManager({ projectRoot: opts.projectRoot, moduleName: opts.moduleName });
+    const cm = new ContextManager({ projectRoot: opts.projectRoot, moduleName: opts.moduleName, largeFilePolicy: resolveLargeFilePolicyFromProject(opts.projectRoot) });
     const referenced = opts.handoff ? handoffReferencedSections(stage, opts.handoff) : undefined;
     const selected = cm.forStage(stage, opts.phases, opts.taskId, referenced);
     // `savings()` is the single source of the before/after calculation. The

@@ -27,6 +27,7 @@ import type {
   RuntimeWorkspace,
   SpawnSync,
 } from "./runtimeAdapter.js";
+import { roleEnv, roleLabel } from "./runtimeAdapter.js";
 
 /**
  * V13 TASK-015 — the governed `RuntimeAdapter` for ZCode.
@@ -327,16 +328,19 @@ export class ZcodeAdapter implements ExecutorPort {
     const provider = this.providerEnv(entry);
     if ("missing" in provider) return refuse([String(provider.missing)], undefined, "UNAVAILABLE");
 
-    let roleDefinition: string | null;
-    try {
-      roleDefinition = await this.workspace.readFile(req.definitionPath);
-    } catch (e) {
-      return refuse([`could not read role binding ${req.definitionPath}: ${String(e)}`]);
-    }
-    if (roleDefinition === null) {
-      return refuse([
-        `no role binding found at ${req.definitionPath} — ZCode has no named-agent selector, so the adapter folds that file into the prompt; regenerate bindings via sta init/sync`,
-      ]);
+    // A direct run with no persona sends the task as-is.
+    let roleDefinition: string | null = null;
+    if (req.definitionPath !== undefined) {
+      try {
+        roleDefinition = await this.workspace.readFile(req.definitionPath);
+      } catch (e) {
+        return refuse([`could not read role binding ${req.definitionPath}: ${String(e)}`]);
+      }
+      if (roleDefinition === null) {
+        return refuse([
+          `no role binding found at ${req.definitionPath} — ZCode has no named-agent selector, so the adapter folds that file into the prompt; regenerate bindings via sta init/sync`,
+        ]);
+      }
     }
 
     if (req.model && req.modelExplicit) {
@@ -348,7 +352,7 @@ export class ZcodeAdapter implements ExecutorPort {
       return refuse([`refusing to run: the ZCode CLI exposes no effort control, so "${req.effort}" would be ignored rather than observed`]);
     }
 
-    const prompt = `${stripFrontmatter(roleDefinition).trim()}\n\n---\n\n${req.prompt}`;
+    const prompt = roleDefinition === null ? req.prompt : `${stripFrontmatter(roleDefinition).trim()}\n\n---\n\n${req.prompt}`;
     if (this.platform === "win32" && prompt.length > WINDOWS_PROMPT_BUDGET) {
       return refuse([
         `refusing to run: the packet is ${prompt.length} chars and \`zcode -p\` takes it from argv only; Windows caps a command line near 32 767, ` +
@@ -389,7 +393,7 @@ export class ZcodeAdapter implements ExecutorPort {
       proc = this.run(entry, args, {
         cwd: req.cwd,
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
-        env: { ...provider, ...(req.env ?? {}), STA_ROLE: req.role },
+        env: { ...provider, ...(req.env ?? {}), ...roleEnv(req.role) },
       });
     } catch (e) {
       return refuse([`failed to spawn the ZCode CLI: ${String(e)}`], baseGuards, "UNAVAILABLE");
@@ -397,7 +401,7 @@ export class ZcodeAdapter implements ExecutorPort {
     if (proc.error) {
       const code = (proc.error as NodeJS.ErrnoException).code;
       if (code === "ETIMEDOUT") {
-        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards: baseGuards, diagnostics: [`\`zcode -p\` for ${req.role} timed out: ${proc.error.message}`] };
+        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards: baseGuards, diagnostics: [`\`zcode -p\` for ${roleLabel(req.role)} timed out: ${proc.error.message}`] };
       }
       return refuse([`failed to spawn the ZCode CLI: ${proc.error.message}`], baseGuards, "UNAVAILABLE");
     }

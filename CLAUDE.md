@@ -19,7 +19,8 @@
 
 # software-team-agents — Agent Pipeline
 
-Twelve agents, each owning one artifact. No agent invokes the next — none holds the `Agent` tool.
+Twelve agents, each owning one artifact. No agent invokes the next stage — none holds the `Agent` tool;
+any run may delegate a sub-task via `sta execute` (`docs/execution.md`).
 Rationale: `docs/`. Shared conventions live in `policies/` — read the section you need with
 `sta policy <area> [<section>]`, never the whole file.
 
@@ -44,7 +45,7 @@ Rationale: `docs/`. Shared conventions live in `policies/` — read the section 
 phase. `test-planner` runs after `project-manager`. `reviewer` runs after the last engineer and before
 `qa-engineer` wherever QA runs. Every agent reads `_docs/status.md` on start and
 regenerates it (`node .claude/scripts/generate-status.js`) on finish.
-Authority: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime**.
+Authority: **PM = Work Graph · Graphify = Code Graph · STA = execution layer, caller decides**.
 
 ## Rules nothing enforces — yours alone
 
@@ -55,7 +56,7 @@ Authority: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime*
 - **No test suite means nothing ever executes the logic.** Tests are opt-in and default to none, so `qa-engineer` verifies by reading code plus `typecheck`/`lint`/`build` — which cannot tell a right answer from a wrong one. When there's no suite, QA lists the specific rules it could only read under `## Unverified Behaviour — undeployed phases`, and `devops` puts that list in front of the user before deploying.
 - **An unsourced number is an assumption, in writing.** `business-analyst` has no web access by design; external facts come from the user and land in `requirement.md`'s `## References` table with their source. Anything used as a fact without a row there is written `(สมมติฐาน — ยังไม่ยืนยัน)`, and `system-analyst` must resolve it with the user before designing around it instead of promoting it to fact by using it.
 - **`qa.md` stays small.** It holds `Open Issues — all phases`, the current verify round, and `Unverified Behaviour` for phases that haven't deployed; `qa-engineer` moves closed rounds verbatim into `qa/phase-N.md`. The first and third sections outlive their round on purpose — a later stage reads them after the round that produced them stopped being current, so they are never archived. Every engineer/`security`/`devops` run reads `qa.md` in full, so closed-phase detail left in it taxes the whole pipeline. Nobody opens an archive file at normal startup.
-- **Read the section, not the file.** `plan.md` → Plan Summary + your phase + Sequencing Notes + Open Questions. `design.md` → always Feature-by-Feature Feasibility, Risks and Open Questions (they carry the confirmed decisions and the "don't implement this" list), plus your phase's contract section and your own module's entry. Exceptions by design: `project-manager` owns `plan.md`, `system-analyst` owns `design.md`, `qa-engineer` reads the Data Model in full every round. When a document's structure isn't the one `policies/documentation.md` §10 describes, read it whole — slicing is an optimization, completeness is a correctness requirement. Because those three `design.md` sections are mandatory on *every* run, `system-analyst` keeps them small on a concrete trigger, not a size check: **the moment an amend round's decision is settled** — its rule now lives in a Contract section, the Data Model or `## Modules` — the question-and-answer record moves verbatim into `design-archive.md`, **as part of that same amend**, not as later cleanup. If a document grew bloated before this discipline was applied to it, whichever run would pay to read the bloat does a one-time catch-up instead of waiting. `policies/documentation.md` §4 has both procedures (`sta policy documentation §4`).
+- **Read the section, not the file.** `plan.md` → Plan Summary + your phase + Sequencing Notes + Open Questions. `design.md` → always Feature-by-Feature Feasibility, Risks and Open Questions (they carry the confirmed decisions and the "don't implement this" list), plus your phase's contract section and your own module's entry. Exceptions by design (whole only while small, §10a): `project-manager` owns `plan.md`, `system-analyst` owns `design.md`, `qa-engineer` reads the Data Model in full every round. An unfamiliar structure or a large file is never read whole: grep its headings/ids, read the sections you need (§10a) — completeness means finding every relevant section. Because those three `design.md` sections are mandatory on *every* run, `system-analyst` keeps them small on a concrete trigger, not a size check: **the moment an amend round's decision is settled** — its rule now lives in a Contract section, the Data Model or `## Modules` — the question-and-answer record moves verbatim into `design-archive.md`, **as part of that same amend**, not as later cleanup. If a document grew bloated before this discipline was applied to it, whichever run would pay to read the bloat does a one-time catch-up instead of waiting. `policies/documentation.md` §4 has both procedures (`sta policy documentation §4`).
 
 ## Where documents live
 
@@ -98,6 +99,7 @@ change bypassing `system-analyst` is the exact failure this pipeline exists to p
 | A bug where requirement + schema are already clear | engineer → `reviewer` → `qa-engineer` | BA, SA, PM, test-planner | **Judgement retained; P3 insufficient** — all bug attempts failed the frozen oracle. |
 | Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `reviewer` → `qa-engineer` (+`security`) | BA, PM | **Judgement** — P3 did not isolate schema-change work. |
 | Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `reviewer` → `qa-engineer` | PM | **Judgement** — P3 did not isolate business-rule work. |
+| A small task the caller already understands | `sta execute` (direct run) | every stage | **Judgement** |
 | A new feature, module, or project | `business-analyst`, full chain — confirmed intake may be normalized without a redundant interview; unresolved material business choices stop first, and schema confirmation follows when needed | nothing | **Judgement retained; P3 insufficient** — all feature attempts failed the frozen oracle. |
 
 `project-manager` earns its run only when there is enough work to phase; one or two tasks go straight

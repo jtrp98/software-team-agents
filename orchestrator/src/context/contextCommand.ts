@@ -31,6 +31,8 @@ export interface ContextComposition {
   saved_pct: number;
   fallback_to_full_documents: number;
   fallback_documents: { doc: string; reason: string }[];
+  /** Documents too large to inline (Large File Context Policy) — rendered as a line-ranged section index. */
+  indexed_documents?: { doc: string; source_chars: number; index_chars: number }[];
   direct_file_reads: number;
   /** T-V8-011 — provenance for the retrieval query codeIntel was actually queried with. */
   retrieval_query_source: "task" | "module-fallback";
@@ -234,6 +236,9 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
       fallback_documents: context.selected
         .filter((doc) => doc.fullDocument)
         .map((doc) => ({ doc: doc.doc, reason: doc.reason })),
+      indexed_documents: context.selected
+        .filter((doc) => doc.indexed === true)
+        .map((doc) => ({ doc: doc.doc, source_chars: doc.bytesBefore, index_chars: doc.bytesAfter })),
       direct_file_reads: context.directFileReads,
       retrieval_query_source: context.retrievalQuery.source,
       retrieval_query_reason: context.retrievalQuery.reason,
@@ -271,6 +276,7 @@ export function renderContextCommand(result: ContextCommandResult): string {
     ...(codeIntelFallback ? [`- code_intel_fallback: ${codeIntelFallback}`] : []),
     `- retrieval_query: source=${c.retrieval_query_source} — ${c.retrieval_query_reason}`,
     ...c.fallback_documents.map((f) => `  - fallback: ${f.doc} — ${f.reason}`),
+    ...(c.indexed_documents ?? []).map((d) => `  - indexed (large file): ${d.doc} — ${d.source_chars} source chars → ${d.index_chars}-char section index; read ranges, not the file`),
     ...fallbackUnknownLines,
   ].join("\n");
   return `${body}${report}`;
@@ -306,6 +312,7 @@ export function contextCommandJson(result: ContextCommandResult): object {
       bytes_after: doc.bytesAfter,
       saved_pct: doc.bytesBefore === 0 ? 0 : Math.round(((doc.bytesBefore - doc.bytesAfter) / doc.bytesBefore) * 100),
       full_document: doc.fullDocument,
+      indexed: doc.indexed === true,
       reason: doc.reason,
       kept: doc.kept,
       skipped: doc.skipped,

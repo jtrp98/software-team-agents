@@ -40,6 +40,16 @@
             "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-path-permissions.js'); exit $LASTEXITCODE"
           }
         ]
+      },
+      {
+        "matcher": "Read|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/block-large-read.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-large-read.js'); exit $LASTEXITCODE"
+          }
+        ]
       }
     ],
     "SubagentStop": [

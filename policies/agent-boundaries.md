@@ -10,6 +10,8 @@ work in front of it.
 
 **No agent invokes the next agent.** This is structural, not just a rule: none of the eleven agents has the `Agent` tool in its own toolset, so none of them can call another one even if it wanted to. Every run ends the same way — telling the user (or the session driving the pipeline) what was produced, what state it leaves the module in, and which agent should pick it up next — then stops. What differs between the two modes below is **who decides to make that next call**, not whether an agent is allowed to make it itself. It never is.
 
+**Delegating a sub-task is different from invoking the next stage.** Any run — a workflow stage or a direct one — may hand part of its own work to another runtime with `sta execute`. The child is a run of its own: it runs inside its parent's workspace and permissions, it counts against the tree's depth/run limits, and its result comes back to the run that started it. It does not advance the workflow, and it does not produce the stage's artifact on that stage's behalf. Controller and Executor are roles per run, not per product; see `docs/execution.md`.
+
 ### Manual mode (the default)
 
 The user reads each agent's report and decides, explicitly, whether and when to invoke the next stage. Never assume your own output was accepted, never act as if "and now QA runs on it" was decided for you, and never act on behalf of the user's decision about routing. This stays the default because it's the safest one — nothing moves without a person having seen it.

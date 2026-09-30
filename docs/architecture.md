@@ -143,6 +143,30 @@ overflow แต่ไม่แก้ prompt ไม่ปฏิเสธ stage; `
 `sta tokens` และใช้ใน `sta audit`; `effort` (reasoning effort) ไม่ใช่ `qa_effort` (ระดับงานของ QA risk
 gate)
 
+Budget วัดจาก **effective initial context** = execution packet + always-on instructions ที่ runtime
+inject เองทุก turn (`CLAUDE.md` + body ของ `.claude/agents/<role>.md` — `measureAlwaysOnInstructionChars`;
+policies ไม่นับเพราะอ่าน on-demand) โดย composition ของ packet ยังต้องรวมเท่ากับ packet เท่านั้น
+(ไม่นับซ้ำ) `context_budget.hard_max_estimated_tokens` (default 100,000 est. tokens; `0` = ปิด) บังคับ
+ทั้ง `warn` และ `reject`: stage ที่ effective initial context เกินจะ fail **ก่อนเรียก model** พร้อมรายชื่อ
+contributor และคำแนะนำ
+
+Large File Context Policy (`context/largeFile.ts`): `sta context` render module document (หรือชุดเอกสาร
+รวมกัน) ที่เกิน `large_file_chars` เป็น section index (heading → บรรทัด 1-based, ขนาด, ids, READ/CHECK/skip
+ตาม §10) แทนการส่งทั้งไฟล์ — รวมถึงกรณี fallback "passed through whole" เดิม; ค่าตั้งอยู่ใต้
+`context_budget:` (`large_file_chars`, `max_read_window_chars`, `max_file_read_share`) และส่งให้ hook
+`block-large-read.js` ผ่าน env
+
+`max_turns` (`runtime/turnLimits.ts`): เพดาน model turn ต่อ stage แบบ runaway guard — default ต่อ role
+(BA 60, SA 80, PM 60, test-planner/uxui 50, reviewer/security 80, QA 120, engineer 200, setup 150, devops
+120, อื่น ๆ 150), override ด้วย `max_turns.default` / `max_turns.roles.<role>` (`0` = ไม่จำกัด); Claude Code
+รับเป็น `--max-turns` (hidden แต่ parse จริงใน 2.1.283) run ที่หยุดเพราะเพดานเป็น ERROR พร้อม diagnostic;
+runtime อื่นยังไม่มีกลไกนี้ — timeout ของ stage เป็น backstop
+
+`sta tokens <task-id>` แสดงต่อ stage: execution packet, always-on instructions, effective initial
+context (ทั้งหมดเป็น chars และ tokens est. = chars/4), retrieval จาก read ledger (จำนวน, chars,
+duplicate, blocked, ช่วงที่ใหญ่สุด), model turns เทียบเพดาน และ usage ที่ runtime รายงาน (input /
+output / cache-read / cache-created)
+
 ### Tier ต่อ phase และ camp
 
 [`model-tiers.yaml`](../model-tiers.yaml) (human-owned) map Tier → model/effort ต่อ camp — cells ข้าม

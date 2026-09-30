@@ -22,6 +22,8 @@
 ## Operate STA
 
 - คำสั่งทั้งสอง surface → [`cli.md`](cli.md) — `software-team-agents` (workspace) + `sta` (pipeline)
+- รันงานเดียวบน runtime ใดก็ได้ / delegate ซ้อนกัน → [`execution.md`](execution.md) — `sta execute`, run tree,
+  permission ต่อ run, approval ข้าม tree
 - Pipeline / workflow / gates → [`pipeline.md`](pipeline.md)
 - มาตรฐาน external ที่ agent แต่ละ role ทำงานเข้า → [`policies/standards.md`](../policies/standards.md)
   §1–§10 — อ่านเป็น section ด้วย `sta policy standards <role>`; registry แม่ =

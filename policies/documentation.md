@@ -1,4 +1,4 @@
-# Policy — Documentation discipline (§0, §1, §2, §3, §4, §5b, §10, §11, §12)
+# Policy — Documentation discipline (§0, §1, §2, §3, §4, §5b, §10, §10a, §11, §12)
 
 Everything about where a document lives, how
 it's kept current, how it's amended without losing history, how big it's allowed to get before
@@ -198,7 +198,7 @@ The same move-verbatim pattern applies to `design.md`'s `## Change Log`. Once a 
 
 The three rules above (`qa.md`, `design.md`'s always-read sections, and `status.md` in §2) all assume archiving has been happening round by round. Nothing here retroactively splits a document — if `qa.md`, `design.md`, or a `status.md` module section has simply never been archived and is now carrying rounds of history it shouldn't, the agent that notices does a one-time **catch-up round** instead of leaving it for "later":
 
-1. Read the whole document once — the cost is paid once, here, instead of paid partially by every future run that keeps reading the bloat.
+1. Take the document's section index (`Grep -n "^#{1,3} "`, or `sta context`) and work through it section by section — the cost is paid once, here, instead of by every future run that keeps reading the bloat. A large document (§10a) is still never ingested in one read: read, move and verify one section range at a time.
 2. Decide what's actually closed by that document's own rule: a `qa.md` round that's superseded (a later round covers the same phase, or the phase deployed); a `design.md` decision whose rule now lives in a Contract section, the Data Model, or `## Modules`, or a `design.md` Change Log entry whose contract version is no longer current; a `status.md` module section holding anything beyond its four fields (§2).
 3. Move the closed material **verbatim** into that document's archive file (`qa/phase-N.md`, `design-archive.md`, `status-archive.md`) — never summarize, never prune, exactly the same move as the steady-state rule makes each round.
 4. Leave a one-line pointer where the material was, and keep whatever the steady-state rule says must stay behind (`qa.md`'s `Open Issues` and `Unverified Behaviour`; `design.md`'s current, still-open decisions and its Change Log's pointer plus current-contract-version entries; `status.md`'s current four fields).
@@ -234,7 +234,7 @@ How, without reading the file to find out where things are:
 
 Nothing is lost by skipping the other phases: cross-phase dependencies live in `Sequencing Notes`, which you always read, and unfinished work from an earlier phase surfaces in `qa.md`'s `## Open Issues — all phases`, which you also always read. If the user asks you to work across several phases, read each of those phases' blocks — the rule is "the phases your run touches", not "exactly one".
 
-`project-manager` is the exception: it owns `plan.md` and reads it in full when amending, because it has to place new work in the right order relative to everything already there.
+`project-manager` is the exception: it owns `plan.md` and reads it in full when amending, because it has to place new work in the right order relative to everything already there — while the file is small. A large `plan.md` (§10a) is amended from its section index: the phase blocks the new work touches, `## Sequencing Notes`, and a `Grep` for every task id the new work depends on.
 
 ### `design.md`
 
@@ -253,7 +253,7 @@ Same technique — `Grep` for `^## ` to get the section map, then `Read` the ran
 
 **Skip:** `## Feasibility Summary` (an executive summary of sections you're reading anyway), `## Change Log`, and `## Data Model` — read `schema.prisma` for that instead, per `policies/architecture.md` §7, once it exists.
 
-`system-analyst` owns this document and reads it in full when amending. `qa-engineer` reads the Data Model in full every round — see `policies/architecture.md` §7 for why that one isn't optional. `project-manager` also reads the Data Model — to know what the work areas are when phasing (one task = one independently verifiable unit of work, batched by shared boundary; nothing mandates a task per model), not because each model becomes its own row; it usually runs before scaffold, when `design.md` is the only copy anyway.
+`system-analyst` owns this document and reads it in full when amending while it is small; a large `design.md` (§10a) is amended from its section index — the always-read sections, every section the amend touches, and a `Grep` for each DES/REQ/Contract id and term the change affects, so a conflicting rule elsewhere is still found. `qa-engineer` reads the Data Model in full every round — see `policies/architecture.md` §7 for why that one isn't optional. `project-manager` also reads the Data Model — to know what the work areas are when phasing (one task = one independently verifiable unit of work, batched by shared boundary; nothing mandates a task per model), not because each model becomes its own row; it usually runs before scaffold, when `design.md` is the only copy anyway.
 
 ### `qa.md`
 
@@ -263,7 +263,25 @@ Don't open `qa/phase-N.md` as part of startup. Go there only when an `Open Issue
 
 ### `requirement.md`
 
-Read it in full. It's the shortest of the four, it has no per-phase structure to slice along, and the business rule you skipped is exactly the one you'd have implemented wrong.
+Read it in full while it is small. It's usually the shortest of the four, it has no per-phase structure to slice along, and the business rule you skipped is exactly the one you'd have implemented wrong. A large `requirement.md` (§10a) is read by `REQ-NNN`/`AC-NNN`: `Grep` each id your task traces to plus the always-read `Scope`, `References` and `Open Questions` sections, and read those ranges completely.
+
+---
+
+## 10a. Large File Context Policy — never load a large file to find something in it
+
+A tool result stays in the conversation, and every later turn re-sends the conversation. One whole-file read of a 400k-character document is ~100k+ tokens on *every* remaining turn of the run. So, for **any** file type — module docs, ADRs, source, JSON, YAML, SQL, logs, fixtures, snapshots, generated code:
+
+1. **A file above `large_file_chars` (default 100,000 chars) is never read whole** during normal work — not with `Read`, not with `cat`/`Get-Content`, not by paging through it window after window.
+2. **Discover first.** `Grep -n` for the rule, id (`REQ-`/`DES-`/`Contract:`), symbol, key or term; or `Grep -n "^#{1,3} "` for a Markdown section map. `sta context` already renders a large module document as exactly that map — heading → 1-based line range, size, ids. A file with very long lines (prose paragraphs, minified JSON) makes even a `Grep` print a lot: ask for line numbers or counts first (`-c`, `-l`, or `grep -n … | cut -d: -f1`), then read the range.
+3. **Read bounded ranges only**: `Read` with `offset`/`limit` (or `sed -n 'start,endp'`), at most `max_read_window_chars` (default 40,000) per read.
+4. **Expand incrementally.** Not enough evidence? Read the adjacent range, or search again with other terms — then reassess.
+5. **Keep only task-relevant evidence**, and cite it precisely: path, heading/symbol, line range, revision where it matters. Targeted retrieval is how QA/review/security evidence gets *more* precise, not less.
+6. **No automatic whole-file fallback.** If structured lookup finds nothing, run another bounded search (headings, other ids, synonyms). If the section truly does not exist, say so — name the file, what you searched for, and what the index shows — and route the gap to its owner instead of ingesting the file.
+7. **Don't re-read what you already have** in this run unless it may have changed; a targeted re-read of one range is fine, re-reading a whole section map every turn is not.
+
+Optimize for *minimum sufficient* context, never minimum context at the expense of correctness: read every section your change or verdict depends on, completely.
+
+**Enforced**, not just asked: `sta context` renders any document (or combined selection) over the threshold as a section index; `.claude/hooks/block-large-read.js` refuses whole or oversized reads of large files (and distinct coverage above `max_file_read_share`, default 50%) with the file's index in the refusal; and a stage whose effective initial context exceeds `context_budget.hard_max_estimated_tokens` fails before the model is invoked. Thresholds live under `context_budget:` in `.sta/config.yaml`.
 
 ---
 

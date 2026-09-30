@@ -1,5 +1,29 @@
 import { AgentStage } from "../types.js";
 import type { ChangeSetFingerprint } from "../qa/changeSource.js";
+import type { ReadLedgerSummary } from "../context/largeFile.js";
+
+/**
+ * Per-run context/token attribution, kept as one record so a person can
+ * answer "what consumed those tokens" for one stage. Every value is either
+ * measured or null; estimates are labelled as such (chars/4).
+ */
+export interface ContextTelemetry {
+  /** The execution packet / assembled prompt this framework sent (== context_chars). */
+  packet_chars: number;
+  /** CLAUDE.md + role definition the runtime injects itself every turn; null when unmeasured. */
+  always_on_chars: number | null;
+  /** packet + always-on — what the budget and the hard ceiling are checked against. */
+  effective_initial_chars: number;
+  /** Estimate (chars/4) of the effective initial context. */
+  effective_initial_estimated_tokens: number;
+  hard_ceiling_estimated_tokens: number | null;
+  max_turns: number | null;
+  /** Model turns the runtime reports; null when it reports none. */
+  turns: number | null;
+  max_turns_reached: boolean;
+  /** What the Large File Context Policy guard saw the agent read; null when no guard ledger exists. */
+  tool_reads: ReadLedgerSummary | null;
+}
 
 export interface RunRecord {
   task_id: string;
@@ -77,6 +101,8 @@ export interface RunRecord {
   /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
   deterministic_gate: "enabled" | "disabled" | null;
   document_gate: "enabled" | "disabled" | null;
+  /** Effective-context, turn and retrieval attribution for this run; null for historical rows and unmeasured paths. */
+  context_telemetry?: ContextTelemetry | null;
   /** Source snapshot captured for a QA/security verdict; null when absent. */
   verification_fingerprint?: ChangeSetFingerprint | null;
   /** V13 TASK-005 — sha256 of the `contracts/<stage>.yaml` bytes resolved and enforced before this attempt started. Absent for historical rows; null for an attempt refused before a contract resolved. */
@@ -137,6 +163,7 @@ export interface RunOutcome {
   deterministic_gate?: "enabled" | "disabled";
   document_gate?: "enabled" | "disabled";
   verification_fingerprint?: ChangeSetFingerprint;
+  context_telemetry?: ContextTelemetry;
   contract_digest?: string;
   attempt_id?: string;
   session_ref?: string;
@@ -249,6 +276,7 @@ export class RunLog {
       attempt_id: params.outcome.attempt_id ?? null,
       session_ref: params.outcome.session_ref ?? null,
       runtime_version: params.outcome.runtime_version ?? null,
+      ...(params.outcome.context_telemetry ? { context_telemetry: params.outcome.context_telemetry } : {}),
       ...(params.outcome.verification_fingerprint ? { verification_fingerprint: params.outcome.verification_fingerprint } : {}),
     };
     this.records.push(entry);

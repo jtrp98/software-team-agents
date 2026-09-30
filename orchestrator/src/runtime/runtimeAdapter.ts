@@ -1,3 +1,4 @@
+import type { ReadLedgerSummary } from "../context/largeFile.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import type { SpawnSyncReturns } from "node:child_process";
 
@@ -131,6 +132,20 @@ export const NO_GUARDS: RuntimeGuards = Object.freeze({
   exitChecks: [],
 });
 
+/**
+ * The `STA_ROLE` a run's guards read. Always set — to "" for a run with no
+ * persona — so a nested run never inherits its parent process's role through
+ * the environment it was spawned from.
+ */
+export function roleEnv(role: string | undefined): { STA_ROLE: string } {
+  return { STA_ROLE: role ?? "" };
+}
+
+/** How a log line names a run's persona. */
+export function roleLabel(role: string | undefined): string {
+  return role ?? "(no role)";
+}
+
 export interface RuntimeAgentRequest {
   /**
    * V13 TASK-013 — the task this attempt belongs to, as the orchestrator
@@ -141,16 +156,23 @@ export interface RuntimeAgentRequest {
   readonly taskId?: string;
   /** The stage this attempt executes, alongside `role`. */
   readonly stage?: string;
-  /** This framework's own name for the role — `AGENT_REGISTRY[stage].role`, which is also how the binding addresses it. */
-  readonly role: string;
+  /**
+   * An optional persona: this framework's name for a role —
+   * `AGENT_REGISTRY[stage].role` on a workflow stage — which is also how the
+   * binding addresses it. Absent on a direct `sta execute` run that names no
+   * persona: the runtime then runs the task with its own default agent. A
+   * role is an instruction set, never an authority — write scope rides
+   * `guards`/`workRoots`.
+   */
+  readonly role?: string;
   /** Absolute directory the run happens in. Honours `stageRoots` for a multi-repo project. */
   readonly cwd: string;
   /** Framework, Knowledge and Target roots are explicit; cwd is never scope. */
   readonly bindingRoot?: string;
   readonly knowledgeRoot?: string;
   readonly workRoots?: readonly RuntimeWorkRoot[];
-  /** Repo-relative path of this role's definition in this runtime's binding, resolved by `RuntimeBinding.definitionPath`. */
-  readonly definitionPath: string;
+  /** Repo-relative path of this role's definition in this runtime's binding, resolved by `RuntimeBinding.definitionPath`. Present exactly when `role` is. */
+  readonly definitionPath?: string;
   /** The task instruction, already assembled and sliced by `agentRunAssembly.ts`. */
   readonly prompt: string;
   /** Model to run on, or undefined to take the runtime's own default. */
@@ -179,6 +201,13 @@ export interface RuntimeAgentRequest {
   /** Extra environment for the run. An adapter may add to it; it must not drop what it is given. */
   readonly env?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
+  /**
+   * Runaway-loop ceiling on model turns (`runtime/turnLimits.ts`). Forwarded as
+   * the runtime's own turn limit where it has one (Claude Code `--max-turns`);
+   * an adapter without one ignores it and the stage timeout stays the backstop.
+   * Undefined = no limit.
+   */
+  readonly maxTurns?: number;
 }
 
 export type RuntimeRunStatus =
@@ -285,6 +314,16 @@ export interface RuntimeAgentResult {
    * without a re-run.
    */
   readonly raw?: unknown;
+  /** Model turns the runtime reports for this run, as its own envelope counts them. Undefined when not reported. */
+  readonly turns?: number;
+  /** True when the run ended because it hit `RuntimeAgentRequest.maxTurns`. */
+  readonly maxTurnsReached?: boolean;
+  /**
+   * What the Large File Context Policy guard saw this run
+   * (`.claude/hooks/block-large-read.js`'s ledger). Undefined when the runtime
+   * ran no such guard or wrote no ledger — never a fabricated zero.
+   */
+  readonly reads?: ReadLedgerSummary;
 }
 
 /** Whether this runtime can be used on this machine right now. */

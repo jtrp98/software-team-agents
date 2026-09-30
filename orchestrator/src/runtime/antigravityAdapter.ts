@@ -25,6 +25,7 @@ import type {
   RuntimeWorkspace,
   SpawnSync,
 } from "./runtimeAdapter.js";
+import { roleEnv, roleLabel } from "./runtimeAdapter.js";
 
 /**
  * The `RuntimeAdapter` for Google Antigravity — binary `agy`, runtime id
@@ -214,16 +215,21 @@ export class AntigravityAdapter implements ExecutorPort {
   async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
     const guards = guardReportFor(req.guards, this.guardConfigPath);
 
-    let roleDefinition: string | null;
-    try {
-      roleDefinition = await this.workspace.readFile(req.definitionPath);
-    } catch (e) {
-      return fail("UNAVAILABLE", guards, [`cannot read role binding ${req.definitionPath}: ${String(e)}`]);
-    }
-    if (!roleDefinition?.trim()) {
-      return fail("ERROR", guards, [
-        `no role binding found at ${req.definitionPath} — \`${ANTIGRAVITY_BINARY} -p\` has no named-agent store to fall back on, so the run would execute with no role at all`,
-      ]);
+    // A direct run with no persona sends the task as-is; a named role must resolve.
+    let persona = "";
+    if (req.definitionPath !== undefined) {
+      let roleDefinition: string | null;
+      try {
+        roleDefinition = await this.workspace.readFile(req.definitionPath);
+      } catch (e) {
+        return fail("UNAVAILABLE", guards, [`cannot read role binding ${req.definitionPath}: ${String(e)}`]);
+      }
+      if (!roleDefinition?.trim()) {
+        return fail("ERROR", guards, [
+          `no role binding found at ${req.definitionPath} — \`${ANTIGRAVITY_BINARY} -p\` has no named-agent store to fall back on, so the run would execute with no role at all`,
+        ]);
+      }
+      persona = `${roleDefinition.trim()}\n\n`;
     }
 
     const diagnostics: string[] = [];
@@ -238,7 +244,7 @@ export class AntigravityAdapter implements ExecutorPort {
         }
       }
     }
-    args.push("-p", `${roleDefinition.trim()}\n\n${req.prompt}`, "--output-format", "json");
+    args.push("-p", `${persona}${req.prompt}`, "--output-format", "json");
 
     if (req.model && req.modelExplicit) {
       // `RuntimeAgentRequest.modelExplicit` contracts for refusal over
@@ -271,7 +277,7 @@ export class AntigravityAdapter implements ExecutorPort {
         encoding: "utf8",
         timeout: timeoutMs,
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, ...req.env, STA_ROLE: req.role, STA_WORKSPACE_ROOT: req.cwd },
+        env: { ...process.env, ...req.env, ...roleEnv(req.role), STA_WORKSPACE_ROOT: req.cwd },
       });
     } catch (e) {
       return fail("UNAVAILABLE", guards, [`failed to spawn \`${ANTIGRAVITY_BINARY}\`: ${String(e)}`]);

@@ -32,6 +32,7 @@ import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
 import { runChangedVerb } from "./cli/verbs/changed.js";
 import { runReportVerb } from "./cli/verbs/report.js";
 import { runBoundedRunVerb, BOUNDED_RUN_USAGE } from "./cli/verbs/boundedRun.js";
+import { runExecuteVerb } from "./cli/verbs/execute.js";
 import { runGrantVerb, GRANT_USAGE } from "./cli/verbs/grant.js";
 import { runProjectsVerb } from "./cli/verbs/projects.js";
 import { runInitVerb } from "./cli/verbs/init.js";
@@ -203,6 +204,8 @@ export function retiredWaveFlagMessage(flag: string): string {
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
+  "  sta execute --runtime <claude-code|codex|antigravity|zcode|opencode> --task <text> [--workspace <dir>] [--role <persona>] [--context <text>] [--write] [--write-path <glob>]... [--no-delegate] [--autonomy <read-only|propose|edit|full>] [--action <side-effect>]... [--max-depth <n>] [--max-children <n>] [--max-runs <n>] [--timeout-ms <n>] [--model <m>] [--effort <e>] [--parent-run <run-id>]   run one task on any runtime and print its JSON result (0 completed, 1 failed, 3 needs_approval, 4 partial); inside a run, STA_RUN_ID makes it a child run; no workflow, module or role required\n" +
+  "  sta execute resume <run-id> [--context <text>] | approve <run-id> --request <id> (--yes|--no) --by <name> [--note <text>] | show <run-id>   continue a run, relay a person's decision on a declared side effect, or print its run tree\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> --request <request-id> [--yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   Controller shows the pending gate in chat, then relays the human answer with its chat reference\n" +
@@ -603,6 +606,7 @@ const VERBS = [
   "changed",
   "report",
   "bounded-run",
+  "execute",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -681,6 +685,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, d
       return runReportVerb(rest, defaultProjectRoot);
     case "bounded-run":
       return runBoundedRunVerb(rest, defaultProjectRoot, dependencies);
+    case "execute":
+      return runExecuteVerb(rest, defaultProjectRoot, dependencies);
   }
 }
 

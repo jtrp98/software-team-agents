@@ -25,6 +25,7 @@ import type {
   RuntimeWorkspace,
   SpawnSync,
 } from "./runtimeAdapter.js";
+import { roleEnv, roleLabel } from "./runtimeAdapter.js";
 
 /**
  * The `RuntimeAdapter` for OpenCode — the third runtime behind the seam
@@ -204,7 +205,7 @@ export class OpenCodeAdapter implements ExecutorPort {
     // Fail fast with recovery advice when the role's rendering is missing —
     // OpenCode would otherwise fall back to its default agent silently (the
     // spike's nastiest finding), so a missing binding must never reach spawn.
-    const definitionExists = await this.workspace.exists(req.definitionPath).catch(() => false);
+    const definitionExists = req.definitionPath === undefined || (await this.workspace.exists(req.definitionPath).catch(() => false));
     if (!definitionExists) {
       return {
         status: "ERROR",
@@ -269,7 +270,8 @@ export class OpenCodeAdapter implements ExecutorPort {
 
     const guards = await this.guardReportFor(req.guards);
 
-    const args = ["run", "--format", "json", "--agent", req.role];
+    // A direct run with no persona runs OpenCode's default agent.
+    const args = ["run", "--format", "json", ...(req.role ? ["--agent", req.role] : [])];
     // `provider/model#effort` → `-m provider/model --variant effort` (spike-verified flags).
     if (req.model) {
       const hashIndex = req.model.indexOf("#");
@@ -294,7 +296,7 @@ export class OpenCodeAdapter implements ExecutorPort {
         encoding: "utf8",
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, ...req.env, STA_ROLE: req.role },
+        env: { ...process.env, ...req.env, ...roleEnv(req.role) },
       }));
     } catch (e) {
       return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics: [`failed to spawn \`opencode\`: ${String(e)}`] };
@@ -312,7 +314,7 @@ export class OpenCodeAdapter implements ExecutorPort {
         return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics };
       }
       if (code === "ETIMEDOUT") {
-        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [`\`opencode run --agent ${req.role}\` timed out: ${proc.error.message}`] };
+        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [`\`opencode run --agent ${roleLabel(req.role)}\` timed out: ${proc.error.message}`] };
       }
       return { status: "UNAVAILABLE", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [`failed to spawn \`opencode\`: ${proc.error.message}`] };
     }

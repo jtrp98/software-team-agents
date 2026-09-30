@@ -318,7 +318,7 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     { caseId: "agent-launch", verdict: result.status === "OK" ? "PASS" : "FAIL", detail: `status ${result.status}` },
     {
       caseId: "workspace-detection",
-      verdict: (await adapter.workspace.exists(request.definitionPath)) === true && (await adapter.workspace.exists(".claude/absent.md")) === false ? "PASS" : "FAIL",
+      verdict: (await adapter.workspace.exists(request.definitionPath!)) === true && (await adapter.workspace.exists(".claude/absent.md")) === false ? "PASS" : "FAIL",
     },
     {
       caseId: "role-contract-loading",

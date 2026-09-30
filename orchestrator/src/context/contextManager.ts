@@ -2,7 +2,8 @@ import { AgentStage } from "../types.js";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { moduleDocPath, readModuleDoc } from "../agents/moduleDocs.js";
 import { CONTEXT_POLICY, ContextLeakageError, type ContextCategory } from "./contextSelection.js";
-import { narrowSelectedContext, selectDocContext, type SelectedContext } from "./docSelection.js";
+import { boundLargeSelection, narrowSelectedContext, selectDocContext, type SelectedContext } from "./docSelection.js";
+import { DEFAULT_LARGE_FILE_POLICY, type LargeFilePolicy } from "./largeFile.js";
 import { needsTraceability, traceabilityScopeFor, unavailableTrace, type TraceabilityScope } from "./traceability.js";
 
 /** The module documents this understands. `test-plan`/`security`/`deploy` have no §10 slicing rule, so they pass through whole. */
@@ -73,12 +74,22 @@ export function handoffReferencedSections(stage: AgentStage, handoff: HandoffArt
 export interface ContextManagerOptions {
   projectRoot: string;
   moduleName: string;
+  /** Large File Context Policy; absent → the defaults. Selections above it render as a section index. */
+  largeFilePolicy?: LargeFilePolicy;
 }
 
 export class ContextManager {
   private lastReadCount = 0;
 
   constructor(private readonly opts: ContextManagerOptions) {}
+
+  private get largeFilePolicy(): LargeFilePolicy {
+    return this.opts.largeFilePolicy ?? DEFAULT_LARGE_FILE_POLICY;
+  }
+
+  private bounded(selected: SelectedContext, doc: DocKind, markdown: string, force?: string): SelectedContext {
+    return boundLargeSelection(selected, markdown, this.path(doc), this.largeFilePolicy, force);
+  }
 
   path(doc: DocKind): string {
     return moduleDocPath(this.opts.projectRoot, this.opts.moduleName, DOC_FILENAME[doc]);
@@ -98,7 +109,7 @@ export class ContextManager {
     }
     const trace = traceability ?? (needsTraceability(stage, doc) ? this.traceability(phases, taskId, load) : unavailableTrace("this document/owner does not need traceability slicing"));
     this.lastReadCount = cache.size;
-    return selectDocContext({ stage, doc, phases, moduleName: this.opts.moduleName, traceability: trace }, markdown);
+    return this.bounded(selectDocContext({ stage, doc, phases, moduleName: this.opts.moduleName, traceability: trace }, markdown), doc, markdown);
   }
 
   private traceability(phases?: number[], taskId?: string, load?: (doc: DocKind) => string | null): TraceabilityScope {
@@ -128,8 +139,24 @@ export class ContextManager {
       const markdown = load(doc);
       if (markdown !== null) {
         const normal = selectDocContext({ stage, doc, phases, moduleName: this.opts.moduleName, traceability }, markdown);
-        out.push(referencedSections === undefined ? normal : narrowSelectedContext(normal, referencedSections[doc] ?? [], stage));
+        // Narrow first (a HANDOFF can shrink a large document below the
+        // threshold), then bound whatever is still too large to inline.
+        const narrowed = referencedSections === undefined ? normal : narrowSelectedContext(normal, referencedSections[doc] ?? [], stage);
+        out.push(this.bounded(narrowed, doc, markdown));
       }
+    }
+    // Aggregate cap: several documents each just under the per-file threshold
+    // would still arrive as one oversized render (one `sta context` tool
+    // result). Index the largest inline one until the whole fits.
+    const limit = this.largeFilePolicy.largeFileChars;
+    const total = (): number => out.reduce((sum, selected) => sum + selected.text.length, 0);
+    while (total() > limit) {
+      const candidates = out.map((selected, index) => ({ selected, index })).filter(({ selected }) => !selected.indexed);
+      if (candidates.length === 0) break;
+      const { selected, index } = candidates.reduce((a, b) => (b.selected.text.length > a.selected.text.length ? b : a));
+      const markdown = load(selected.doc);
+      if (markdown === null) break;
+      out[index] = this.bounded(selected, selected.doc, markdown, `the documents this stage reads total ${total().toLocaleString("en-US")} chars > large_file_chars ${limit.toLocaleString("en-US")} for one render; the largest are indexed`);
     }
     this.lastReadCount = cache.size;
     return out;

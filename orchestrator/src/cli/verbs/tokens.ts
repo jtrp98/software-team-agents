@@ -58,7 +58,14 @@ export async function runTokensVerb(rest: string[], defaultProjectRoot: string):
       store.listTasks().filter((task) => task.machine.current === TaskState.DEPLOYED).map((task) => task.taskId),
     );
     const report = tokenMetricsExport(runs, { completedTaskIds });
-    if (by === "task") for (const metric of report.tasks) printTokenTask(metric);
+    if (by === "task") {
+      for (const metric of report.tasks) printTokenTask(metric);
+      // Per-stage attribution only when one task was asked for — the question
+      // "what consumed this run's tokens" is about one task's stages.
+      if (taskId !== undefined) {
+        for (const run of runs) for (const line of renderRunContextAttribution(run)) console.log(`[orchestrator]   ${line}`);
+      }
+    }
     else if (by === "role" || by === "stage") {
       for (const role of report.roles) console.log(
         `[orchestrator] ${by} ${role.role}: runs=${role.runCount} static=${displayMetric(role.staticChars)} retrieved=${displayMetric(role.retrievedChars)} ` +
@@ -113,3 +120,4 @@ import { CliUsageError } from "../../cli.js";
 import { TaskState } from "../../types.js";
 import { compareTokenBaselines, tokenMetricsExport, type TaskTokenMetrics, type TokenMetricsExport } from "../../qa/metrics.js";
 import { configuredTokenBudget, flagValue, openStore, positionalArg } from "../support.js";
+import { renderRunContextAttribution } from "../../observability/contextAttribution.js";
