@@ -28,6 +28,7 @@ import type {
   RuntimeWorkspace,
   SpawnSync,
 } from "./runtimeAdapter.js";
+import { roleEnv, roleLabel } from "./runtimeAdapter.js";
 
 /**
  * Pulls `developer_instructions` out of one of this framework's own
@@ -550,49 +551,52 @@ export class CodexAdapter implements ExecutorPort {
 
     // NAMED_AGENTS is not claimed (no documented exec-level selector): the
     // role's official `.toml` binding is read and its developer_instructions
-    // folded into the prompt on every run.
-    let roleDefinition: string | null;
-    try {
-      roleDefinition = await this.workspace.readFile(req.definitionPath);
-    } catch (e) {
-      return {
-        status: "ERROR",
-        exitCode: null,
-        text: "",
-        usage: {},
-        guards,
-        diagnostics: [`could not read role binding ${req.definitionPath}: ${String(e)}`],
-      };
+    // folded into the prompt on every run that names a role. A direct run
+    // with no persona sends the task as-is.
+    let prompt = req.prompt;
+    if (req.definitionPath !== undefined) {
+      let roleDefinition: string | null;
+      try {
+        roleDefinition = await this.workspace.readFile(req.definitionPath);
+      } catch (e) {
+        return {
+          status: "ERROR",
+          exitCode: null,
+          text: "",
+          usage: {},
+          guards,
+          diagnostics: [`could not read role binding ${req.definitionPath}: ${String(e)}`],
+        };
+      }
+      if (roleDefinition === null) {
+        return {
+          status: "ERROR",
+          exitCode: null,
+          text: "",
+          usage: {},
+          guards,
+          diagnostics: [
+            `no role binding found at ${req.definitionPath} — no exec-level named-agent flag is documented, ` +
+              `so this adapter needs that file to fold into the prompt (see codexAdapter.ts header)`,
+          ],
+        };
+      }
+      const instructions = extractDeveloperInstructions(roleDefinition);
+      if (instructions === null) {
+        return {
+          status: "ERROR",
+          exitCode: null,
+          text: "",
+          usage: {},
+          guards,
+          diagnostics: [
+            `role binding ${req.definitionPath} has no developer_instructions — this binding does not match ` +
+              `the generated schema (name/description/developer_instructions); regenerate it via sta init`,
+          ],
+        };
+      }
+      prompt = `${instructions}\n\n---\n\n${req.prompt}`;
     }
-    if (roleDefinition === null) {
-      return {
-        status: "ERROR",
-        exitCode: null,
-        text: "",
-        usage: {},
-        guards,
-        diagnostics: [
-          `no role binding found at ${req.definitionPath} — no exec-level named-agent flag is documented, ` +
-            `so this adapter needs that file to fold into the prompt (see codexAdapter.ts header)`,
-        ],
-      };
-    }
-    const instructions = extractDeveloperInstructions(roleDefinition);
-    if (instructions === null) {
-      return {
-        status: "ERROR",
-        exitCode: null,
-        text: "",
-        usage: {},
-        guards,
-        diagnostics: [
-          `role binding ${req.definitionPath} has no developer_instructions — this binding does not match ` +
-            `the generated schema (name/description/developer_instructions); regenerate it via sta init`,
-        ],
-      };
-    }
-
-    const prompt = `${instructions}\n\n---\n\n${req.prompt}`;
 
     // Tier bindings are explicit runtime choices.  Unlike role frontmatter,
     // they must become Codex CLI arguments or the run merely records the
@@ -678,7 +682,7 @@ export class CodexAdapter implements ExecutorPort {
         env: {
           ...process.env,
           ...req.env,
-          STA_ROLE: req.role,
+          ...roleEnv(req.role),
           ...(runHome ? { CODEX_HOME: runHome.path } : {}),
         },
       }));

@@ -9,6 +9,11 @@ import { UntrustedHumanDecisionError, type HumanDecisionVerifier } from "../gate
 import { createChatRelayChannel } from "../gates/chatRelayChannel.js";
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
 import type { AgentExecutorResult } from "../orchestrator/orchestrator.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { MockRuntimeAdapter, okResult } from "../runtime/mockAdapter.js";
+import { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import {
   createStaApi,
   CallerAuthorityError,
@@ -97,7 +102,7 @@ describe("StaApi (V13 TASK-021)", () => {
       expect(res.status).toBeDefined();
     });
 
-    it("rejects caller trying to dispatch an arbitrary role", async () => {
+    it("a workflow step refuses a caller-chosen role and points at a direct run", async () => {
       const { registry, api } = setupTestApi();
       registry.create({ taskId: "TASK-1", classification: trivial() });
 
@@ -113,10 +118,10 @@ describe("StaApi (V13 TASK-021)", () => {
           taskId: "TASK-1",
           ...({ role: "security" } as Record<string, unknown>),
         }),
-      ).rejects.toThrow(/Controller cannot dispatch an arbitrary role/);
+      ).rejects.toThrow(/workflow step takes its role .* direct run/);
     });
 
-    it("rejects caller trying to specify execution paths", async () => {
+    it("a workflow step refuses caller-chosen paths and points at a direct run", async () => {
       const { registry, api } = setupTestApi();
       registry.create({ taskId: "TASK-1", classification: trivial() });
 
@@ -132,10 +137,10 @@ describe("StaApi (V13 TASK-021)", () => {
           taskId: "TASK-1",
           ...({ paths: ["src/**"] } as Record<string, unknown>),
         }),
-      ).rejects.toThrow(/Controller cannot specify execution paths/);
+      ).rejects.toThrow(/workflow step takes its write scope .* direct run/);
     });
 
-    it("rejects caller trying to specify executor commands", async () => {
+    it("a workflow step refuses an executor command and points at a direct run", async () => {
       const { registry, api } = setupTestApi();
       registry.create({ taskId: "TASK-1", classification: trivial() });
 
@@ -151,7 +156,25 @@ describe("StaApi (V13 TASK-021)", () => {
           taskId: "TASK-1",
           ...({ command: "node build.js" } as Record<string, unknown>),
         }),
-      ).rejects.toThrow(/Controller cannot specify executor commands/);
+      ).rejects.toThrow(/does not take an executor command.*direct run/);
+    });
+
+    it("runs a direct task on a named runtime with no workflow task at all", async () => {
+      const store = new MemoryTaskStore();
+      const codex = new MockRuntimeAdapter({ id: "codex", respond: () => okResult({ text: "done directly" }) });
+      const api = createStaApi({
+        store,
+        projectRoot: fs.mkdtempSync(path.join(os.tmpdir(), "sta-api-direct-")),
+        runtimeRegistry: new RuntimeRegistry([codex]),
+        stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD,
+      });
+
+      const result = await api.execute({ runtime: "codex", task: "rename a variable", role: "backend-engineer", permissions: { write: true } });
+
+      expect(result).toMatchObject({ status: "completed", output: "done directly", run: { runtime: "codex", depth: 0 } });
+      expect(codex.requests[0].role).toBe("backend-engineer");
+      expect(store.listTasks()).toEqual([]);
+      expect(api.runs.run(result.run.runId)?.status).toBe("completed");
     });
 
     it("rejects caller trying to impersonate a governed role", async () => {

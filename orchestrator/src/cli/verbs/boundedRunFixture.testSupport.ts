@@ -55,7 +55,7 @@ export class BoundedRunCodexFixture extends CodexAdapter {
     // A three-repo document belongs to the resolved Knowledge workspace.
     // Materialize this scripted fixture output there, as a real role would;
     // the adapter's startup workspace is not the artifact authority.
-    if (req.knowledgeRoot && ["reviewer", "qa-engineer"].includes(req.role)) {
+    if (req.knowledgeRoot && ["reviewer", "qa-engineer"].includes(req.role ?? "")) {
       const filename = req.role === "reviewer" ? "review.md" : "qa.md";
       for (const [relative, text] of this.workspace.files) {
         if (!relative.startsWith("_docs/module/") || !relative.endsWith(`/${filename}`)) continue;
@@ -240,7 +240,7 @@ Undated canonical fixture; no human sign-off is implied.
  * composition root and tests may name a concrete adapter - portBoundaries.)
  */
 export function playPlanTaskStage(
-  req: { role: string },
+  req: { role?: string },
   workspaceFiles: Map<string, string>,
   targetRoot: string,
   options: { module?: string; engineerCall?: number; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},

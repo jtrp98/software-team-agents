@@ -131,6 +131,20 @@ export const NO_GUARDS: RuntimeGuards = Object.freeze({
   exitChecks: [],
 });
 
+/**
+ * The `STA_ROLE` a run's guards read. Always set — to "" for a run with no
+ * persona — so a nested run never inherits its parent process's role through
+ * the environment it was spawned from.
+ */
+export function roleEnv(role: string | undefined): { STA_ROLE: string } {
+  return { STA_ROLE: role ?? "" };
+}
+
+/** How a log line names a run's persona. */
+export function roleLabel(role: string | undefined): string {
+  return role ?? "(no role)";
+}
+
 export interface RuntimeAgentRequest {
   /**
    * V13 TASK-013 — the task this attempt belongs to, as the orchestrator
@@ -141,16 +155,23 @@ export interface RuntimeAgentRequest {
   readonly taskId?: string;
   /** The stage this attempt executes, alongside `role`. */
   readonly stage?: string;
-  /** This framework's own name for the role — `AGENT_REGISTRY[stage].role`, which is also how the binding addresses it. */
-  readonly role: string;
+  /**
+   * An optional persona: this framework's name for a role —
+   * `AGENT_REGISTRY[stage].role` on a workflow stage — which is also how the
+   * binding addresses it. Absent on a direct `sta execute` run that names no
+   * persona: the runtime then runs the task with its own default agent. A
+   * role is an instruction set, never an authority — write scope rides
+   * `guards`/`workRoots`.
+   */
+  readonly role?: string;
   /** Absolute directory the run happens in. Honours `stageRoots` for a multi-repo project. */
   readonly cwd: string;
   /** Framework, Knowledge and Target roots are explicit; cwd is never scope. */
   readonly bindingRoot?: string;
   readonly knowledgeRoot?: string;
   readonly workRoots?: readonly RuntimeWorkRoot[];
-  /** Repo-relative path of this role's definition in this runtime's binding, resolved by `RuntimeBinding.definitionPath`. */
-  readonly definitionPath: string;
+  /** Repo-relative path of this role's definition in this runtime's binding, resolved by `RuntimeBinding.definitionPath`. Present exactly when `role` is. */
+  readonly definitionPath?: string;
   /** The task instruction, already assembled and sliced by `agentRunAssembly.ts`. */
   readonly prompt: string;
   /** Model to run on, or undefined to take the runtime's own default. */

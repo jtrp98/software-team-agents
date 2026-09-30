@@ -1,5 +1,36 @@
 # Release Notes
 
+## Unreleased — composable execution layer
+
+> Version bucket and date are not set: the release owner decides them.
+
+- **`sta execute` / `createSta().execute()`** is the single execution primitive:
+  caller → STA → runtime adapter → normalized result (`completed` · `partial` · `needs_approval` ·
+  `failed`) → caller. It needs no workflow, module, plan task or role. See `docs/execution.md`.
+- **Controller/Executor are roles per run.** Runs form a tree (`runId`, `parentRunId`, `rootRunId`,
+  `depth`) stored one file per run under `.workflow/runs/`. An executor delegates by calling
+  `sta execute` again: `STA_RUN_ID`/`STA_RUN_STORE` in its environment make the new run its child.
+  The same runtime may appear anywhere in a tree, and any runtime may call any other.
+- **Recursion is bounded** by `maxDepth`/`maxChildren`/`maxTotalRuns`/`timeoutMs`. The root fixes
+  these limits; a child may tighten them but never loosen them. Permissions narrow in the same way:
+  - a child stays inside its parent's workspace
+  - a child never gains write, autonomy or paths its parent lacks
+- **Approvals compose.** A run that declares a side effect (`--action production-deploy`, ...) waits
+  for a human decision before it spawns. The pending request surfaces through every ancestor as
+  `needs_approval` with its `chain`. The tree owner relays the decision with
+  `sta execute approve`, and the tree continues with `sta execute resume`. A run inside the same tree
+  cannot decide that tree's approvals.
+- **Workflow stages join the run tree.** `sta run` / `sta bounded-run` behave as before. Each stage
+  attempt is now a run node, so a stage's agent may delegate with `sta execute`, and a workflow
+  started inside a run counts against that tree's limits.
+- **Adapters accept persona-less runs.** `RuntimeAgentRequest.role`/`definitionPath` are optional:
+  - Claude Code and OpenCode omit `--agent`.
+  - Codex, ZCode and Antigravity send the task without a role preamble.
+  - `STA_ROLE` is always set (`""` when no role is named), so a child never inherits its parent's role.
+- **`createStaApi().execute`** accepts `{runtime, task, ...}` for a direct run alongside
+  `{taskId}` for a workflow step. A role/paths/command on a workflow step is still refused, and the
+  error now points to the direct form. Impersonating a human is still refused.
+
 ## software-team-agents 7.0.0 — V13 (2026-09-29)
 
 > **Version 7.0.0 and release date 2026-09-29 confirmed by the release owner during the V13 close

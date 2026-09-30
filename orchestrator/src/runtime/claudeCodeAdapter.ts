@@ -29,6 +29,7 @@ import type {
   RuntimeWorkspace,
   SpawnSync,
 } from "./runtimeAdapter.js";
+import { roleEnv, roleLabel } from "./runtimeAdapter.js";
 
 /**
  * The spawn primitive lives on the port (`runtimeAdapter.ts`) so no adapter
@@ -600,8 +601,8 @@ export class ClaudeCodeAdapter implements ExecutorPort {
     }
     const args = [
       "-p",
-      "--agent",
-      req.role,
+      // A direct run with no persona runs Claude Code's default agent.
+      ...(req.role ? ["--agent", req.role] : []),
       "--output-format",
       "json",
       "--permission-mode",
@@ -681,7 +682,7 @@ export class ClaudeCodeAdapter implements ExecutorPort {
         maxBuffer: 64 * 1024 * 1024,
         input: req.prompt,
         // STA_ROLE is the one way a PreToolUse hook can know which agent is writing.
-        env: { ...runEnv, ...isolation.env, ...egressEnv, STA_ROLE: req.role },
+        env: { ...runEnv, ...isolation.env, ...egressEnv, ...roleEnv(req.role) },
       }));
     } catch (e) {
       // A spawn that throws outright — not one that returns with `.error` set —
@@ -707,7 +708,7 @@ export class ClaudeCodeAdapter implements ExecutorPort {
         return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics };
       }
       if (code === "ETIMEDOUT") {
-        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [...modelDiagnostics, `\`claude --agent ${req.role}\` timed out: ${proc.error.message}`] };
+        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [...modelDiagnostics, `\`claude --agent ${roleLabel(req.role)}\` timed out: ${proc.error.message}`] };
       }
       return { status: "ERROR", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [...modelDiagnostics, `\`claude\` errored: ${proc.error.message}`] };
     }

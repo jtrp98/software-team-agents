@@ -10,7 +10,7 @@ import {
   type ExecutorEvidence,
   type PreparedExecutorAttempt,
 } from "./executorPort.js";
-import type { RuntimeAgentRequest, RuntimeAgentResult } from "./runtimeAdapter.js";
+import { roleLabel, type RuntimeAgentRequest, type RuntimeAgentResult } from "./runtimeAdapter.js";
 
 /**
  * V13 TASK-014 — the lifecycle every headless adapter here actually has.
@@ -83,7 +83,8 @@ interface AttemptJournal {
   readonly attempt_id: string;
   readonly task_id?: string;
   readonly stage?: string;
-  readonly role: string;
+  /** Absent for a direct run with no persona. */
+  readonly role?: string;
   readonly cwd: string;
   state: AttemptState;
   readonly request: RuntimeAgentRequest;
@@ -154,7 +155,7 @@ export class SingleShotLifecycle {
         prepared_at: Date.now(),
         updated_at: Date.now(),
         result: null,
-        logs: [`attempt prepared for role ${req.role}`],
+        logs: [`attempt prepared for role ${roleLabel(req.role)}`],
         recoveries: [],
       };
       this.writeJournal(record);

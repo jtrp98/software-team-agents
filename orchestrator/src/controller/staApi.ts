@@ -31,6 +31,9 @@ import {
   type TaskExecutorOptions,
 } from "../cli/composition/taskExecutor.js";
 import { parseArgs } from "../cli.js";
+import { createSta, defaultRunStoreDir, type ExecuteRequest, type ExecuteResult, type Sta } from "../execute/execute.js";
+import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
+import { createProductionRuntimeRegistry } from "../cli/composition/runtimeRegistry.js";
 
 /**
  * Base error for semantic STA Controller API operations.
@@ -43,9 +46,10 @@ export class StaApiError extends Error {
 }
 
 /**
- * Thrown when a Controller caller attempts to exceed its authority:
- * e.g. impersonate a governed role/human, supply arbitrary execution paths or roles,
- * or bypass STA's canonical governance.
+ * Thrown when a workflow-step call carries something only a direct run takes
+ * (a role, paths, a command) or claims to be a human. A caller that wants to
+ * choose the runtime, persona and scope itself calls `execute({runtime, task})`
+ * — a direct run — instead of stepping a workflow task.
  */
 export class CallerAuthorityError extends StaApiError {
   constructor(message: string) {
@@ -257,6 +261,10 @@ export interface StaApiOptions {
   humanDecisionVerifier?: HumanDecisionVerifier;
   stageEntryGuard?: StageEntryGuard;
   executorOptions?: Partial<TaskExecutorOptions>;
+  /** Runtimes a direct `execute({runtime, task})` may use. Default: the production registry for `projectRoot`. */
+  runtimeRegistry?: RuntimeRegistry;
+  /** Run-tree store for direct runs. Default: `STA_RUN_STORE`, else `<projectRoot>/.workflow/runs`. */
+  runStore?: string;
   /** Optional custom executor factory (e.g. for testing); defaults to production composition. */
   executorFactory?: (orchestrator: Orchestrator) => Promise<AgentExecutor> | AgentExecutor;
   now?: () => number;
@@ -267,7 +275,12 @@ export interface StaApi {
   status(params?: { taskId?: undefined }): Promise<SemanticOverviewResponse>;
   status(params?: { taskId?: string }): Promise<SemanticTaskStatus | SemanticOverviewResponse>;
   plan(params?: { taskId?: string; moduleName?: string }): Promise<SemanticPlanResponse>;
+  /** A direct run: this runtime, this task, no workflow. The result returns to the caller. */
+  execute(params: ExecuteRequest): Promise<ExecuteResult>;
+  /** One step of a workflow task: STA picks the stage from the task's workflow state. */
   execute(params: SemanticExecuteParams): Promise<SemanticExecuteResponse>;
+  /** The run tree behind direct runs: resume, approve, inspect. */
+  readonly runs: Sta;
   result(params: { taskId: string }): Promise<SemanticResultResponse>;
   approve(params: SemanticApproveParams): Promise<SemanticApproveResponse>;
   laneDecision(params: SemanticLaneDecisionParams): Promise<SemanticLaneDecisionResponse>;
@@ -297,6 +310,14 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
       stageEntryGuard,
       humanDecisionVerifier,
     });
+
+  let runs: Sta | undefined;
+  const directRuns = (): Sta =>
+    (runs ??= createSta({
+      registry: options.runtimeRegistry ?? createProductionRuntimeRegistry(projectRoot),
+      runStore: options.runStore ?? defaultRunStoreDir(process.env, projectRoot),
+      cwd: projectRoot,
+    }));
 
   /** Publishes the task's pending request on the trusted channel; returns the failure, if any. Never decides anything. */
   async function announcePending(orch: Orchestrator): Promise<string | undefined> {
@@ -473,22 +494,29 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
       };
     },
 
-    async execute(params: SemanticExecuteParams): Promise<SemanticExecuteResponse> {
-      // 1. Caller authority check: Controller cannot impersonate roles or dispatch arbitrary paths/commands
+    get runs(): Sta {
+      return directRuns();
+    },
+
+    execute: (async (input: SemanticExecuteParams | ExecuteRequest): Promise<SemanticExecuteResponse | ExecuteResult> => {
+      if (!("taskId" in input) && "runtime" in input && "task" in input) return directRuns().execute(input);
+      const params = input as SemanticExecuteParams;
+      // 1. A workflow step takes its stage, role and scope from the task's
+      // workflow state; a caller choosing them itself wants a direct run.
       const untyped = params as unknown as Record<string, unknown>;
       if (untyped.role !== undefined) {
         throw new CallerAuthorityError(
-          "Controller cannot dispatch an arbitrary role: STA control plane determines the role and contract from canonical workflow state.",
+          "A workflow step takes its role from the task's workflow state; to choose the persona yourself, call execute({runtime, task, role}) for a direct run.",
         );
       }
       if (untyped.paths !== undefined) {
         throw new CallerAuthorityError(
-          "Controller cannot specify execution paths: write scope is governed strictly by the active role contract.",
+          "A workflow step takes its write scope from the stage contract; to grant scope yourself, call execute({runtime, task, permissions}) for a direct run.",
         );
       }
       if (untyped.command !== undefined || untyped.executorCommand !== undefined) {
         throw new CallerAuthorityError(
-          "Controller cannot specify executor commands: execution details are encapsulated within the STA control plane.",
+          "A workflow step does not take an executor command; name a registered runtime with execute({runtime, task}) for a direct run.",
         );
       }
       if (params.caller?.role !== undefined) {
@@ -604,7 +632,7 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
         denialReason: stepStatus.kind === "BLOCKED" ? stepStatus.reason : undefined,
         ...(announcementError === undefined ? {} : { announcementError }),
       };
-    },
+    }) as StaApi["execute"],
 
     async result(params: { taskId: string }): Promise<SemanticResultResponse> {
       const task = store.loadTask(params.taskId);

@@ -77,6 +77,7 @@ import {
   type ExitCheckRunner,
 } from "./exitCheckRunner.js";
 import { verifyChangedFilesScope, type PostflightRoot } from "./postflight.js";
+import { openWorkflowStageRun, type WorkflowStageRun } from "../execute/execute.js";
 import type { PostflightGuardOutcome } from "../orchestrator/orchestrator.js";
 
 /**
@@ -839,6 +840,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 
     let result!: RuntimeAgentResult;
     let metrics!: RunMetrics;
+    let stageRun: WorkflowStageRun | undefined;
     for (;;) {
       contextBudget = assessContextBudget(
         prompt.length,
@@ -1003,6 +1005,20 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         // the same flow. A probe/execute-only adapter rides `executorPortFor`'s
         // typed-refusal wrapper — there is no port-less dispatch path left.
         const port = executorPortFor(activeRuntime);
+        // The stage attempt is a node in the run tree, like any direct run:
+        // its agent may delegate with `sta execute`, and a workflow started
+        // from inside a run counts against that tree's limits.
+        const opened = openWorkflowStageRun({
+          stateRoot: threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot,
+          runtime: activeRuntime.id,
+          role,
+          task: `${req.taskId}/${req.stage}`,
+          workspace: executionRoot,
+          writePaths: guards.writeAllow,
+          autonomy,
+        });
+        if ("refused" in opened) return finish(failResult(`cannot start ${role}: ${opened.refused}`, declared));
+        stageRun = opened;
         const adapterRequest: RuntimeAgentRequest = {
           role,
           // `cwd` selects the repository the agent works in; scope stays
@@ -1028,6 +1044,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           // told which agent it is guarding. An adapter may add its own variables
           // on top; the contract says it must not drop these.
           env: {
+            ...stageRun.env,
             STA_ROLE: role,
           ...guardStackRules,
             // Guard hooks receive only tool paths, not this task's binding. Give
@@ -1048,13 +1065,18 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           timeoutMs: opts.timeoutMs,
         };
         const isolationDenial = opts.approvalIsolationPreflight?.(activeRuntime, adapterRequest);
-        if (isolationDenial) return finish(failResult(`cannot start ${role}: ${isolationDenial}`, declared));
+        if (isolationDenial) {
+          stageRun.close({ status: "ERROR", text: isolationDenial, usage: {}, diagnostics: [] });
+          return finish(failResult(`cannot start ${role}: ${isolationDenial}`, declared));
+        }
         if (req.recordDispatch) {
           if (!packetPath || !packetHash) throw new Error("governed dispatch has no persisted execution packet");
           req.recordDispatch({ packetPath, packetHash, contractDigest, runtimeId: activeRuntime.id });
         }
         const preparedAttempt = await port.prepare(adapterRequest);
         result = await port.execute(preparedAttempt);
+        stageRun.close(result);
+        stageRun = undefined;
         attemptId = preparedAttempt.attemptId;
         if (port.capabilities.has(RuntimeCapability.EVIDENCE_COLLECTION)) {
           try {
@@ -1067,6 +1089,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           evidenceCollectError = `executor "${activeRuntime.id}" does not declare EVIDENCE_COLLECTION`;
         }
       } catch (e) {
+        stageRun?.close({ status: "ERROR", text: String(e), usage: {}, diagnostics: [] });
         if (e instanceof ExecutorPortRefusalError) {
           // A typed refusal is the port refusing a lifecycle operation before
           // any spawn — a refusal to run this attempt, not an adapter bug.

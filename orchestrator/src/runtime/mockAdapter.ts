@@ -262,6 +262,6 @@ export class MockRuntimeAdapter implements ExecutorPort {
 
   /** The roles this adapter was asked to run, in order. The assertion most tests actually want. */
   rolesRun(): string[] {
-    return this.requests.map((r) => r.role);
+    return this.requests.map((r) => r.role ?? "");
   }
 }

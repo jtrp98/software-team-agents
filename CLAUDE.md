@@ -19,7 +19,8 @@
 
 # software-team-agents — Agent Pipeline
 
-Twelve agents, each owning one artifact. No agent invokes the next — none holds the `Agent` tool.
+Twelve agents, each owning one artifact. No agent invokes the next stage — none holds the `Agent` tool;
+any run may delegate a sub-task via `sta execute` (`docs/execution.md`).
 Rationale: `docs/`. Shared conventions live in `policies/` — read the section you need with
 `sta policy <area> [<section>]`, never the whole file.
 
@@ -44,7 +45,7 @@ Rationale: `docs/`. Shared conventions live in `policies/` — read the section 
 phase. `test-planner` runs after `project-manager`. `reviewer` runs after the last engineer and before
 `qa-engineer` wherever QA runs. Every agent reads `_docs/status.md` on start and
 regenerates it (`node .claude/scripts/generate-status.js`) on finish.
-Authority: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime**.
+Authority: **PM = Work Graph · Graphify = Code Graph · STA = execution layer, caller decides**.
 
 ## Rules nothing enforces — yours alone
 
@@ -98,6 +99,7 @@ change bypassing `system-analyst` is the exact failure this pipeline exists to p
 | A bug where requirement + schema are already clear | engineer → `reviewer` → `qa-engineer` | BA, SA, PM, test-planner | **Judgement retained; P3 insufficient** — all bug attempts failed the frozen oracle. |
 | Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `reviewer` → `qa-engineer` (+`security`) | BA, PM | **Judgement** — P3 did not isolate schema-change work. |
 | Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `reviewer` → `qa-engineer` | PM | **Judgement** — P3 did not isolate business-rule work. |
+| A small task the caller already understands | `sta execute` (direct run) | every stage | **Judgement** |
 | A new feature, module, or project | `business-analyst`, full chain — confirmed intake may be normalized without a redundant interview; unresolved material business choices stop first, and schema confirmation follows when needed | nothing | **Judgement retained; P3 insufficient** — all feature attempts failed the frozen oracle. |
 
 `project-manager` earns its run only when there is enough work to phase; one or two tasks go straight
