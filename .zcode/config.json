@@ -50,6 +50,18 @@
               ]
             }
           ]
+        },
+        {
+          "matcher": "Read|Bash|PowerShell",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-large-read.js"
+              ]
+            }
+          ]
         }
       ],
       "Stop": [

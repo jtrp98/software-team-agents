@@ -20,6 +20,7 @@ wire ผ่าน `.claude/settings.json`:
 | `block-outside-repo.js` | PreToolUse | ทุก write resolve อยู่ใน writable roots เท่านั้น |
 | `block-doc-rewrite.js` | PreToolUse (Write) | doc ที่มีอยู่ต้อง amend ไม่ regenerate |
 | `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `STA_ROLE` ของ orchestrated run หรือ scoped attempt grant ใน direct mode — ดู § Scoped attempt grant ด้านล่าง) + **Framework payload deny**: `contracts/**`, `workflows/**`, `stacks/**`, `layout.yaml`, `test-pyramid.yaml`, `escalation-policy.yaml` ถูก block เมื่อรู้จัก role — เปลี่ยนที่ Framework repo แล้ว sync; knowledge artifacts (requirement/design/test-plan/plan/`knowledge/**` ฯลฯ) ถูก deny ต่อ stage engineer/frontend/backend/devops |
+| `block-large-read.js` | PreToolUse (Read/Bash/PowerShell) | Large File Context Policy (`policies/documentation.md` §10a): ไฟล์ข้อความที่ใหญ่กว่า `large_file_chars` (default 100,000 chars — ทุกชนิดไฟล์ ไม่ใช่แค่ Markdown) อ่านทั้งไฟล์ไม่ได้ — `Read` ต้องมี `offset`/`limit` ไม่เกิน `max_read_window_chars` (default 40,000); อ่านช่วงใหม่ของไฟล์เดียวกันเกิน `max_file_read_share` (default 50%) ใน session เดียวถูก block (อ่านซ้ำช่วงเดิมได้); `cat`/`type`/`Get-Content` แบบไม่ pipe ถูก block; ข้อความที่ block แนบ section index (บรรทัดเริ่ม-จบ) ครั้งเดียวต่อไฟล์ต่อ session; ทุกการอ่านถูกบันทึก metadata ลง read ledger (`STA_READ_LEDGER`) ให้ `sta tokens` รายงาน; ไม่ขึ้นกับ role; ปิดได้เฉพาะคนด้วย `STA_LARGE_READ_GUARD=off`. Wire ใน Claude/Codex/ZCode; OpenCode และ AGY ยังไม่มี (ดู Runtime-side notes) |
 | `require-green-before-stop.js` | Stop/SubagentStop | engineer ส่งงานต่อไม่ได้ถ้า typecheck/lint แดง |
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
@@ -69,6 +70,10 @@ knowledge deny ของ backend/frontend/devops และ stack globs
   Antigravity อ่าน PreToolUse hooks จาก config ระดับเครื่อง (`~/.gemini/config/hooks.json`);
   interactive session ที่ไม่มี hook enforcement จะถูกปฏิเสธ (ไม่มี acknowledgement bypass แล้ว — V13 TASK-012) —
   รายละเอียดที่ [`runtimes.md`](runtimes.md)
+- **Large File Context Policy ข้าม runtime** — `block-large-read.js` wire ใน Claude, Codex (mirror) และ
+  ZCode; OpenCode plugin และ AGY wrapper ยังไม่มี equivalent (`GUARD GAP`) — runtime เหล่านั้นยังได้
+  section index จาก `sta context`, hard context ceiling และ policy §10a แต่ไม่มีการ block การอ่านทั้งไฟล์
+  ระดับ tool; `--max-turns` มีเฉพาะ Claude Code
 
 ## Profile-aware static analysis
 

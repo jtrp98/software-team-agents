@@ -394,6 +394,8 @@ export function renderZcodeManagedHooks(): {
         { matcher: "Write", hooks: [guard("block-doc-rewrite.js")] },
         // Reads and shell too: the approval-channel floor refuses them (V13 TASK-027).
         { matcher: "Bash|PowerShell|Read|Write|Edit|MultiEdit|NotebookEdit|NotebookRead|Grep|Glob|LS", hooks: [guard("block-path-permissions.js")] },
+        // Large File Context Policy: no whole-file read of a large file (policies/documentation.md §10a).
+        { matcher: "Read|Bash|PowerShell", hooks: [guard("block-large-read.js")] },
       ],
       Stop: [{ hooks: [guard("require-green-before-stop.js"), guard("block-secret-leak.js")] }],
     },

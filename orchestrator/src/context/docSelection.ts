@@ -3,6 +3,7 @@ import { extractIds } from "../traceability/traceability.js";
 import { nestedSections, preamble, sectionMap, sectionText, type Section } from "./sections.js";
 import { traceVerdict, type TraceabilityScope } from "./traceability.js";
 import type { DocKind } from "./contextManager.js";
+import { markdownOutline, renderLargeFileIndex, type LargeFilePolicy, type OutlineEntry, type SectionVerdict } from "./largeFile.js";
 
 const ALWAYS_DESIGN = [
   /feature[- ]by[- ]feature|feasibility/i,
@@ -41,6 +42,20 @@ export interface SelectedContext {
   /** Why each `unknownSections` entry came back unplaceable. Only populated for `design`. */
   unknownSectionReasons: { heading: string; reason: DesignSectionUnknownReason }[];
   fullDocument: boolean;
+  /**
+   * True when the selection exceeded the Large File Context Policy threshold
+   * and `text` is a line-ranged section index instead of document content
+   * (`boundLargeSelection`). `kept`/`skipped`/`unknownSections` still describe
+   * the §10 selection the index rates.
+   */
+  indexed?: boolean;
+  /**
+   * The §10 classification computed before a whole-document fallback was
+   * chosen, when there was one. `kept` of a full document lists everything,
+   * so without this an index of that document could not say which sections
+   * the stage actually needs.
+   */
+  attempted?: { kept: string[]; skipped: string[] };
   reason: string;
   bytesBefore: number;
   bytesAfter: number;
@@ -315,7 +330,10 @@ export function selectDocContext(req: ContextRequest, markdown: string): Selecte
       return whole(req.doc, markdown, "design.md has none of §10's always-read sections (Feasibility / Risks / Open Questions) — its structure is not the one this rule was written for, so it is passed through whole");
     }
     if (unknownSections.length / sections.length > 0.4) {
-      return whole(req.doc, markdown, `more than 40% of design.md sections have unknown relevance (${unknownSections.length}/${sections.length}) — parser confidence is insufficient, so the document is passed through whole`, unknownSections, unknownSectionReasons);
+      return {
+        ...whole(req.doc, markdown, `more than 40% of design.md sections have unknown relevance (${unknownSections.length}/${sections.length}) — parser confidence is insufficient, so the document is passed through whole`, unknownSections, unknownSectionReasons),
+        attempted: { kept: kept.map((s) => s.heading), skipped: [...skipped] },
+      };
     }
   } else if (req.doc === "requirement") {
     const phases = req.phases ?? [];
@@ -450,3 +468,72 @@ export function narrowSelectedContext(normal: SelectedContext, references: reado
     bytesAfter: text.length,
   };
 }
+
+/**
+ * Large File Context Policy for module documents: a selection — sliced, or a
+ * whole-document fallback — whose text exceeds `policy.largeFileChars` is
+ * replaced by a section index of the *source* file (1-based line ranges on
+ * disk), each heading rated by this stage's §10 verdict. Nothing becomes
+ * unreachable: every section, kept or not, is listed with the exact range to
+ * read. Selections at or below the threshold are returned untouched, so small
+ * documents keep today's inline behaviour.
+ *
+ * This deliberately replaces every "passed through whole" fallback above for
+ * large documents: parser uncertainty is resolved by listing more of the
+ * index as CHECK, never by pasting hundreds of thousands of characters.
+ */
+export function boundLargeSelection(
+  selected: SelectedContext,
+  source: string,
+  filePath: string,
+  policy: LargeFilePolicy,
+  /** Index even below the per-file threshold — the aggregate render cap in `ContextManager.forStage`. The value is the reason. */
+  force?: string,
+): SelectedContext {
+  if (selected.indexed) return selected;
+  if (force === undefined && selected.text.length <= policy.largeFileChars) return selected;
+  // A full document "keeps" every heading, so its own kept list rates
+  // nothing: use the classification attempted before the fallback, and
+  // otherwise only the always-read set §10 names for this document.
+  const classification = selected.fullDocument ? selected.attempted : { kept: selected.kept, skipped: selected.skipped };
+  const kept = new Set(classification?.kept ?? []);
+  const unknown = new Set(selected.unknownSections);
+  const skipped = new Set((classification?.skipped ?? []).map((entry) => entry.replace(/\s+\([^)]*\)$/, "")));
+  const alwaysRead = (heading: string): boolean =>
+    (selected.doc === "design" && isAlwaysReadDesignSection(heading)) ||
+    (selected.doc === "requirement" && REQUIREMENT_ALWAYS.some((matcher) => matcher.test(heading))) ||
+    (selected.doc === "plan" && PLAN_ALWAYS.some((matcher) => matcher.test(heading)));
+  const verdictOf = (heading: string): SectionVerdict | undefined => {
+    if (unknown.has(heading)) return "check";
+    if (kept.has(heading) || alwaysRead(heading)) return "read";
+    if (skipped.has(heading)) return "skip";
+    return undefined;
+  };
+  const verdictFor = (entry: OutlineEntry, parent: OutlineEntry | undefined): SectionVerdict | undefined => {
+    if (entry.level === 1) return undefined;
+    if (entry.level === 2) return verdictOf(entry.heading);
+    if (parent && skipped.has(`Modules > ${entry.heading}`)) return "skip";
+    return parent ? verdictOf(parent.heading) : undefined;
+  };
+  const cause = selected.fullDocument
+    ? `whole-document fallback — ${selected.reason}`
+    : `the ${selected.doc}.md slice for this stage is ${selected.text.length.toLocaleString("en-US")} chars`;
+  const text = renderLargeFileIndex({
+    filePath,
+    text: source,
+    policy,
+    reason: force ?? `${selected.text.length.toLocaleString("en-US")} chars > large_file_chars ${policy.largeFileChars.toLocaleString("en-US")}; ${cause}`,
+    verdictFor,
+  });
+  return {
+    ...selected,
+    text,
+    fullDocument: false,
+    indexed: true,
+    reason: `${selected.reason}; indexed by the Large File Context Policy (${force ?? `${selected.text.length} chars > ${policy.largeFileChars}`})`,
+    bytesAfter: text.length,
+  };
+}
+
+/** The outline a caller can show without rendering any section body. */
+export { markdownOutline };

@@ -19,7 +19,7 @@ So:
 
 - Before scaffold (`schema.prisma` doesn't exist yet): `setup`/`backend-engineer` read `design.md`'s Data Model. It's the only copy.
 - After scaffold: engineers read `schema.prisma` for the models their task touches, and go to `design.md`'s Data Model only when they need the reasoning behind a field rather than its shape.
-- `qa-engineer` always reads both, in full, for the phase it's verifying. It is the only agent that does, and that is deliberate — not a step to optimize away.
+- `qa-engineer` always reads both — `schema.prisma` and the `## Data Model` section, not the whole `design.md` — in full, for the phase it's verifying. It is the only agent that does, and that is deliberate — not a step to optimize away.
 
 If `schema.prisma` and `design.md` disagree, **`design.md` wins and the code is wrong** — route it to `system-analyst` if the design turns out to be the thing that's wrong, never by editing `design.md` to match whatever got built.
 

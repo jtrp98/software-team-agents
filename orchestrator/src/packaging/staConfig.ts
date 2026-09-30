@@ -159,6 +159,29 @@ export const StaConfigSchema = z.object({
       max_context_estimated_tokens: z.number().int().positive().optional(),
       /** Omission preserves the historical observation-only behaviour. */
       mode: z.enum(["warn", "reject"]).optional(),
+      /**
+       * Catastrophe ceiling on the *effective* initial context (packet plus
+       * always-on instructions), in estimated tokens. Enforced in both modes —
+       * a stage this large cannot do useful work. Default 100000; 0 disables.
+       */
+      hard_max_estimated_tokens: z.number().int().nonnegative().optional(),
+      /** Large File Context Policy (`context/largeFile.ts`): a file above this many chars is never read or rendered whole. */
+      large_file_chars: z.number().int().positive().optional(),
+      /** Largest single bounded read from a large file, in chars. */
+      max_read_window_chars: z.number().int().positive().optional(),
+      /** Distinct share (0-1] of one large file a session may read before further reads are refused. */
+      max_file_read_share: z.number().positive().max(1).optional(),
+    })
+    .optional(),
+  /**
+   * Runaway-loop ceiling on model turns per orchestrated stage, forwarded as
+   * the runtime's own turn limit where it has one (Claude Code `--max-turns`).
+   * Omitted keys keep `runtime/turnLimits.ts`'s per-role defaults; 0 disables.
+   */
+  max_turns: z
+    .object({
+      default: z.number().int().nonnegative().optional(),
+      roles: z.record(z.string().min(1), z.number().int().nonnegative()).optional(),
     })
     .optional(),
 });

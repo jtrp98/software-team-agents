@@ -1,3 +1,4 @@
+import { largeFilePolicyEnv, resolveLargeFilePolicyFromProject, summarizeReadLedger, type ReadLedgerSummary } from "../context/largeFile.js";
 import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -324,6 +325,10 @@ interface ClaudeCliJsonResult {
   /** The session this turn ran in — the native session reference the lifecycle records as evidence. */
   session_id?: string;
   result?: string;
+  /** `"error_max_turns"` when the run stopped at `--max-turns`. */
+  subtype?: string;
+  /** Model turns the run took, as the CLI counts them. */
+  num_turns?: number;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   /** Present on ordinary `--json-schema` runs; Claude Code 2.1.268 omits it when `--agent` is also used. */
@@ -611,6 +616,10 @@ export class ClaudeCodeAdapter implements ExecutorPort {
     // Override-only: with no explicit request this pushes nothing (see above).
     if (overrideModel) args.push("--model", overrideModel);
     if (overrideEffort) args.push("--effort", overrideEffort);
+    // Runaway-loop ceiling (runtime/turnLimits.ts). `--max-turns` is a hidden
+    // but parsed print-mode option (verified on Claude Code 2.1.283: a
+    // non-numeric value is rejected by its own option parser).
+    if (req.maxTurns !== undefined && Number.isSafeInteger(req.maxTurns) && req.maxTurns > 0) args.push("--max-turns", String(req.maxTurns));
     // Contract denies as hard permission rules, not just hook backstops.
     // Empty guards ⇒ no flag, keeping the no-guard request shape unchanged.
     //
@@ -661,7 +670,12 @@ export class ClaudeCodeAdapter implements ExecutorPort {
       cleanupRun();
       return { status: "ERROR", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [...modelDiagnostics, `${CLAUDE_ISOLATION_UNAVAILABLE}: cannot start the egress allowlist proxy — ${String(error)}`] };
     }
-    const runEnv = { ...process.env, ...req.env };
+    // Large File Context Policy: the guard hook reads its thresholds from these
+    // and appends one metadata line per file read to the per-run ledger, which
+    // is read back below before the run directory is removed.
+    const readLedgerPath = path.join(runDirs.temp, "sta-read-ledger.jsonl");
+    const largeFileEnv = { ...largeFilePolicyEnv(resolveLargeFilePolicyFromProject(req.bindingRoot ?? req.cwd)), STA_READ_LEDGER: readLedgerPath };
+    const runEnv = { ...process.env, ...largeFileEnv, ...req.env };
     const egressEnv = {
       HTTPS_PROXY: egress.url,
       HTTP_PROXY: egress.url,
@@ -674,6 +688,7 @@ export class ClaudeCodeAdapter implements ExecutorPort {
 
     let proc: SpawnSyncReturns<string>;
     let resolvedThrough: string | null = null;
+    let reads: ReadLedgerSummary | undefined;
     try {
       ({ proc, resolvedThrough } = this.spawnResolved("codex", [...isolation.sandboxArgs, inner.file, ...inner.prefixArgs, ...args], {
         cwd: req.cwd,
@@ -684,6 +699,11 @@ export class ClaudeCodeAdapter implements ExecutorPort {
         // STA_ROLE is the one way a PreToolUse hook can know which agent is writing.
         env: { ...runEnv, ...isolation.env, ...egressEnv, ...roleEnv(req.role) },
       }));
+      try {
+        reads = summarizeReadLedger(fs.readFileSync(readLedgerPath, "utf8"));
+      } catch {
+        reads = undefined; // no guard ran, or it read nothing: absent, not zero
+      }
     } catch (e) {
       // A spawn that throws outright — not one that returns with `.error` set —
       // means the runtime itself could not be reached, never a task failure.
@@ -779,7 +799,14 @@ export class ClaudeCodeAdapter implements ExecutorPort {
       }
     }
 
-    const cliFailed = proc.status !== 0 || cli.is_error === true || structuredFailed;
+    const maxTurnsReached = cli.subtype === "error_max_turns";
+    if (maxTurnsReached) {
+      diagnostics.push(
+        `stopped at the stage's turn limit (--max-turns ${req.maxTurns ?? "?"}, ${cli.num_turns ?? "?"} turns taken) — a runaway guard, not a task verdict; ` +
+          "inspect why the stage looped (repeated reads/retries), or raise max_turns for this role in .sta/config.yaml if the work genuinely needs more",
+      );
+    }
+    const cliFailed = proc.status !== 0 || cli.is_error === true || structuredFailed || maxTurnsReached;
     return {
       status: cliFailed ? "ERROR" : "OK",
       exitCode: proc.status ?? null,
@@ -796,6 +823,9 @@ export class ClaudeCodeAdapter implements ExecutorPort {
       // stray envelope field on a free-form run cannot masquerade as one.
       structured,
       raw: cli,
+      ...(typeof cli.num_turns === "number" ? { turns: cli.num_turns } : {}),
+      ...(maxTurnsReached ? { maxTurnsReached } : {}),
+      ...(reads ? { reads } : {}),
     };
   }
 }

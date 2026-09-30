@@ -706,6 +706,39 @@ describe("metrics — normalising any runtime's usage into the run log (T26/T28)
     expect(result.outcome).toMatchObject({ result: "FAIL", context_budget_warning: true, context_budget_chars: 1 });
   });
 
+  it("enforces the hard context ceiling in warn mode too, before executeAgent, naming contributors", async () => {
+    const root = tmpProject();
+    fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: 1\ncontext_budget:\n  hard_max_estimated_tokens: 1\n", "utf8");
+    const runtime = new MockRuntimeAdapter();
+    const result = await executorFor(runtime, { projectRoot: root })({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-hard", context: [] });
+    expect(runtime.requests).toHaveLength(0);
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/hard_ceiling budget rejected task T-hard/);
+    expect(result.outcome.failure_reason).toMatch(/contributors: /);
+    expect(result.outcome.context_telemetry).toMatchObject({ hard_ceiling_estimated_tokens: 1, turns: null });
+  });
+
+  it("adds the always-on prefix to the budgeted context and hands the role's turn limit to the adapter", async () => {
+    const root = tmpProject();
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "c".repeat(1_000));
+    fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude", "agents", "business-analyst.md"), "---\nname: business-analyst\n---\n" + "b".repeat(500));
+    fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: 1\nmax_turns:\n  roles:\n    business-analyst: 7\n", "utf8");
+    const runtime = new MockRuntimeAdapter();
+    const result = await executorFor(runtime, { projectRoot: root })({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-effective", context: [] });
+    const prompt = runtime.requests[0].prompt;
+    expect(runtime.requests[0].maxTurns).toBe(7);
+    expect(result.outcome.context_chars).toBe(prompt.length);
+    expect(result.outcome.context_telemetry).toMatchObject({
+      packet_chars: prompt.length,
+      always_on_chars: 1_500,
+      effective_initial_chars: prompt.length + 1_500,
+      max_turns: 7,
+    });
+  });
+
   it("keeps missing and invalid budget config in the warn-compatible execution path", async () => {
     const missing = new MockRuntimeAdapter();
     await executorFor(missing)({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-NO-CONFIG", context: [] });

@@ -1,3 +1,4 @@
+import type { ReadLedgerSummary } from "../context/largeFile.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import type { SpawnSyncReturns } from "node:child_process";
 
@@ -200,6 +201,13 @@ export interface RuntimeAgentRequest {
   /** Extra environment for the run. An adapter may add to it; it must not drop what it is given. */
   readonly env?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
+  /**
+   * Runaway-loop ceiling on model turns (`runtime/turnLimits.ts`). Forwarded as
+   * the runtime's own turn limit where it has one (Claude Code `--max-turns`);
+   * an adapter without one ignores it and the stage timeout stays the backstop.
+   * Undefined = no limit.
+   */
+  readonly maxTurns?: number;
 }
 
 export type RuntimeRunStatus =
@@ -306,6 +314,16 @@ export interface RuntimeAgentResult {
    * without a re-run.
    */
   readonly raw?: unknown;
+  /** Model turns the runtime reports for this run, as its own envelope counts them. Undefined when not reported. */
+  readonly turns?: number;
+  /** True when the run ended because it hit `RuntimeAgentRequest.maxTurns`. */
+  readonly maxTurnsReached?: boolean;
+  /**
+   * What the Large File Context Policy guard saw this run
+   * (`.claude/hooks/block-large-read.js`'s ledger). Undefined when the runtime
+   * ran no such guard or wrote no ledger — never a fabricated zero.
+   */
+  readonly reads?: ReadLedgerSummary;
 }
 
 /** Whether this runtime can be used on this machine right now. */

@@ -40,7 +40,7 @@ describe("zcode guard payload (V12)", () => {
     expect(parsed.mcp).toEqual({ servers: { fs: {} } });
     expect(parsed.hooks.enabled).toBe(true);
     expect(parsed.hooks.events.UserPromptSubmit).toEqual([{ hooks: [] }]);
-    expect(parsed.hooks.events.PreToolUse).toHaveLength(4);
+    expect(parsed.hooks.events.PreToolUse).toHaveLength(5);
     expect(parsed.hooks.events.Stop).toHaveLength(1);
   });
 

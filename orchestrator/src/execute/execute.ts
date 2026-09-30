@@ -1,3 +1,4 @@
+import { resolveMaxTurnsFromProject } from "../runtime/turnLimits.js";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { RuntimeAgentRequest, RuntimeAgentResult, RuntimeGuardReport, RuntimeUsage } from "../runtime/runtimeAdapter.js";
@@ -322,6 +323,8 @@ export function createSta(options: StaOptions): Sta {
       guards: guardsFor(run.permissions),
       env: runEnv(run, store),
       ...(run.limits.timeoutMs ? { timeoutMs: run.limits.timeoutMs } : {}),
+      // Same runaway-turn ceiling as an orchestrated stage (runtime/turnLimits.ts).
+      ...withMaxTurns(resolveMaxTurnsFromProject(run.workspace, run.role)),
     };
 
     let result: RuntimeAgentResult;
@@ -604,4 +607,6 @@ export function openWorkflowStageRun(input: {
       store.save(run);
     },
   };
+}function withMaxTurns(maxTurns: number | undefined): { maxTurns?: number } {
+  return maxTurns === undefined ? {} : { maxTurns };
 }
