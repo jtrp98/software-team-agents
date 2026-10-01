@@ -1,5 +1,30 @@
 # Release Notes
 
+## software-team-agents 8.1.1 — /work assertiveness (2026-10-01)
+
+> **Version 8.1.1 and release date 2026-10-01 confirmed by the release owner.** The Patch bucket is
+> the mechanical result of the version rule at the bottom of this file: prompt wording only — no
+> orchestrator code, guard, contract or default changes; nothing that passed before is refused.
+> `templates/manifest.json` is re-stamped by `npm run build`; `@software-team-agents/orchestrator`
+> stays at `0.3.0`.
+
+**Bucket: Patch (`8.1.0 → 8.1.1`, confirmed).** One change: the `/work` operating loop now treats a
+human "start" as the instruction it always meant to be.
+
+- **"Start task X" begins in the same turn.** The session resolves the task id, stage, role and
+  Target workspace itself (`plan.md` + `sta status` + the workspace's Target mapping), never hands
+  the human a command to paste, and never asks which route to take: Route A (`sta grant issue`)
+  only when the launch granted writes and the runtime has verified pre-tool enforcement, otherwise
+  Route B (`sta execute`) directly — the child carries its own identity and boundary, so it works
+  from any session. Stops remain the human gates alone (approvals/sign-offs, dates, business rules,
+  or every route refused — each refusal relayed verbatim).
+- **"Start/continue phase N" runs the phase.** The session takes the phase's pending tasks in
+  `plan.md` dependency order, one at a time, with a short result report between tasks and no
+  re-asking for permission between them.
+
+**What you may need to do:** nothing — sync delivers the amended command; the catalog count is
+unchanged (36).
+
 ## software-team-agents 8.1.0 — interactive workflow enablement (2026-10-01)
 
 > **Version 8.1.0 and release date 2026-10-01 confirmed by the release owner.** The Minor bucket is
