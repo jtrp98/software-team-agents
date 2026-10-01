@@ -331,6 +331,18 @@ describe("write-policy launch wiring (T-ROLE-12/13)", () => {
     }
   });
 
+  it("a launch's --writable-target selection becomes the boundary env; an empty one keeps the explicit []", () => {
+    // The grant rides the launch's own resolved selection — never a shell value.
+    const granted = launchEnv("dev", { STA_WRITABLE_WORK_ROOTS: '["D:\\shell-value"]' }, "C:\\kb", undefined, undefined, [], "work", ["C:\\tgt\\api"]);
+    expect(granted.STA_WRITABLE_WORK_ROOTS).toBe(JSON.stringify([path.resolve("C:\\tgt\\api")]));
+
+    // An explicitly empty selection keeps "[]": the shell value still loses.
+    const empty = launchEnv("dev", { STA_WRITABLE_WORK_ROOTS: '["D:\\somewhere-else"]' }, "C:\\kb", undefined, undefined, [], "work", []);
+    expect(empty.STA_WRITABLE_WORK_ROOTS).toBe("[]");
+    const absent = launchEnv("dev", {}, "C:\\kb");
+    expect(absent.STA_WRITABLE_WORK_ROOTS).toBe("[]");
+  });
+
   it("T-WG7 — a DEV launch carries STA_KNOWLEDGE_ROOT; a BA launch without one does not", () => {
     const dev = launchEnv("dev", {}, "C:\\kb", undefined, undefined, [], "work");
     expect(dev.STA_KNOWLEDGE_ROOT).toBe("C:\\kb");

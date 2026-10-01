@@ -5,16 +5,22 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { GUARD_TARGET_WORK_ROOTS_ENV, serializeGuardTargetWorkRoots } from "../agents/pathPermissions.js";
-import { launchEnv, resolveSessionTargetWorkRoots } from "./roleWorkspace.js";
+import { launchEnv, mergeTargetWorkRootAccess, resolveSessionTargetWorkRoots, resolveWritableTargetWorkRoots } from "./roleWorkspace.js";
 
 /**
  * V10 TASK-023 — what an interactive session may do to a bound Target.
  *
- * The decision this file pins: read, never write. A person types in these
- * sessions, so nothing sets STA_ROLE and the guard's whole per-role layer is
- * unreachable; a writable Target root there would be defended by the universal
- * floor alone. So the Targets ride on the identification channel only, and the
- * refusal has to name the Target rather than the path.
+ * The decision this file pins: read by default, never write without an
+ * explicit grant. A person types in these sessions, so nothing sets STA_ROLE
+ * and the guard's whole per-role layer is unreachable; an ungranted Target
+ * rides on the identification channel only, and the refusal names the Target
+ * rather than the path.
+ *
+ * The one write path is the launch's own `--writable-target` selection
+ * (resolveWritableTargetWorkRoots): the person names mapped Targets at
+ * launch, the launcher ships them as the boundary env plus `access: "write"`
+ * identification, and the per-role layer still decides — no STA identity, no
+ * Target write, exactly as before.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -133,5 +139,92 @@ describe("V10 TASK-023 — an interactive session reads its Targets and writes n
     expect(hookVerdict(knowledge, path.join(api, "src", "route.ts"), { ...env, STA_ROLE: "backend-engineer" }).status).toBe(2);
     expect(hookVerdict(knowledge, path.join(knowledge, "_docs", "module", "m", "requirement.md"), env).status).toBe(2);
     expect(hookVerdict(knowledge, path.join(knowledge, "notes", "session.md"), env).status).toBe(0);
+  });
+});
+
+describe("interactive write grants — the launch's --writable-target half", () => {
+  it("resolves requested Targets by id or path from the same mapping, dedupes, and refuses everything else", () => {
+    const api = appRepo("api4");
+    const web = appRepo("web4");
+    const knowledge = knowledgeWith({ api, web });
+
+    const byId = resolveWritableTargetWorkRoots({ knowledgeRoot: knowledge, workspaceRoot: knowledge, requests: ["api"] });
+    expect(byId).toEqual([{ targetId: "api", path: fs.realpathSync.native(api), access: "write" }]);
+
+    // Path form resolves to the same Target; a repeated request is one grant.
+    const mixed = resolveWritableTargetWorkRoots({ knowledgeRoot: knowledge, workspaceRoot: knowledge, requests: [api, "web", api] });
+    expect(mixed.map((entry) => entry.targetId)).toEqual(["api", "web"]);
+
+    // Unknown names refuse with the mapped list — never a silent no-op grant.
+    expect(() => resolveWritableTargetWorkRoots({ knowledgeRoot: knowledge, workspaceRoot: knowledge, requests: ["nope"] })).toThrow(/"nope" names no mapped Target.*api, web/);
+    // The Knowledge root itself is never in the mapping, so it refuses as
+    // unknown; the own-workspace refusal is for the legacy shape where the
+    // session was opened inside a mapped Target checkout.
+    expect(() => resolveWritableTargetWorkRoots({ knowledgeRoot: knowledge, workspaceRoot: knowledge, requests: [knowledge] })).toThrow(/names no mapped Target/);
+    expect(() => resolveWritableTargetWorkRoots({ knowledgeRoot: knowledge, workspaceRoot: api, requests: ["api"] })).toThrow(/own workspace/);
+    expect(() => resolveWritableTargetWorkRoots({ knowledgeRoot: tmpRoot("bare"), workspaceRoot: tmpRoot("bare2"), requests: ["api"] })).toThrow(/targets\.local\.yaml/);
+  });
+
+  it("flips granted entries to write in the identification channel and keeps the rest read", () => {
+    const mapped = [
+      { targetId: "api", path: "C:\\a", access: "read" as const },
+      { targetId: "web", path: "C:\\w", access: "read" as const },
+    ];
+    expect(mergeTargetWorkRootAccess(mapped, [{ targetId: "api", path: "C:\\a", access: "write" as const }])).toEqual([
+      { targetId: "web", path: "C:\\w", access: "read" },
+      { targetId: "api", path: "C:\\a", access: "write" },
+    ]);
+    expect(mergeTargetWorkRootAccess(mapped, [])).toEqual(mapped);
+  });
+
+  it("the granted boundary opens the write half only; the per-role layer still decides", () => {
+    const api = appRepo("api5");
+    const web = appRepo("web5");
+    const knowledge = knowledgeWith({ api, web });
+    // The one contract file the hook reads from the session workspace — a real
+    // Knowledge workspace carries them through sync.
+    fs.mkdirSync(path.join(knowledge, "contracts"));
+    fs.writeFileSync(path.join(knowledge, "contracts", "backend-engineer.yaml"), 'write: ["src/**"]\n', "utf8");
+
+    const granted = resolveWritableTargetWorkRoots({ knowledgeRoot: knowledge, workspaceRoot: knowledge, requests: ["api"] });
+    const launched = launchEnv(
+      "ba",
+      {},
+      undefined,
+      undefined,
+      undefined,
+      mergeTargetWorkRootAccess(resolveSessionTargetWorkRoots({ knowledgeRoot: knowledge, workspaceRoot: knowledge }), granted),
+      undefined,
+      granted.map((entry) => entry.path),
+    );
+    // The boundary env is the path array; identification carries api as write, web stays read.
+    expect(launched.STA_WRITABLE_WORK_ROOTS).toBe(JSON.stringify([fs.realpathSync.native(api)]));
+    const env = {
+      [GUARD_TARGET_WORK_ROOTS_ENV]: launched[GUARD_TARGET_WORK_ROOTS_ENV],
+      STA_WRITABLE_WORK_ROOTS: launched.STA_WRITABLE_WORK_ROOTS,
+    };
+    expect(JSON.parse(env[GUARD_TARGET_WORK_ROOTS_ENV]!)).toEqual([
+      { targetId: "web", path: fs.realpathSync.native(web), access: "read" },
+      { targetId: "api", path: fs.realpathSync.native(api), access: "write" },
+    ]);
+
+    // Boundary open, no STA identity: the per-role layer refuses with its own
+    // message — the flag alone grants no Target write.
+    const noIdentity = hookVerdict(knowledge, path.join(api, "src", "route.ts"), env);
+    expect(noIdentity.status).toBe(2);
+    expect(noIdentity.stderr).toContain("resolvable role contract");
+
+    // With identity (orchestrated STA_ROLE, or an `sta grant issue` token):
+    // the contract's write rules decide, and a path outside them is refused.
+    expect(hookVerdict(knowledge, path.join(api, "src", "route.ts"), { ...env, STA_ROLE: "backend-engineer" }).status).toBe(0);
+    const outsideContract = hookVerdict(knowledge, path.join(api, "docs", "note.md"), { ...env, STA_ROLE: "backend-engineer" });
+    expect(outsideContract.status).toBe(2);
+    expect(outsideContract.stderr).toContain("No role/stack write rule grants this Target path.");
+
+    // The read-only sibling keeps its by-name refusal — the grant is per Target.
+    const sibling = hookVerdict(knowledge, path.join(web, "src", "other.ts"), { ...env, STA_ROLE: "backend-engineer" });
+    expect(sibling.status).toBe(2);
+    expect(sibling.stderr).toContain('Target "web"');
+    expect(sibling.stderr).toContain("read-only");
   });
 });

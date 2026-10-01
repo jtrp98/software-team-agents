@@ -51,7 +51,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const root = process.env.STA_WORKSPACE_ROOT || (process.cwd().replace(/\\/g, "/").endsWith("/.agents") ? path.resolve(process.cwd(), "..") : process.cwd());
+const root = process.env.STA_WORKSPACE_ROOT || path.resolve(__dirname, '..', '..');
 
 /** Tools that carry a destination path. `run_command` is out of scope — see the header. */
 const PATH_TOOLS = new Set([

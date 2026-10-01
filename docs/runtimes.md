@@ -33,13 +33,84 @@ Guard coverage per runtime คือ verdict เดียวกับที่ `
 | **Claude Code** | ✅ **Supported** — V13 TASK-031: headless run รัน `claude` ทั้ง process ภายใต้ Windows elevated sandbox ของ Codex (`codex sandbox`) ด้วย profile ต่อ run: อ่านกว้าง, approval channel เป็น OS deny ทั้งอ่าน/เขียน, เขียนได้เฉพาะ path ที่ packet อนุญาต (VCS/runtime binding อ่านอย่างเดียว), `CLAUDE_CONFIG_DIR`/`TEMP`/`CODEX_HOME` ต่อ run ลบหลังจบ, ปิด network ที่ OS และออกได้ทาง loopback CONNECT proxy ไป api.anthropic.com:443 เท่านั้น; UAT บน Claude Code 2.1.283 + codex-cli 0.158.0 ปฏิเสธ glob/ตัวแปร/encoded/junction ต่อไฟล์จำลองและ egress นอก allowlist โดย workspace ใช้ได้; certified for unattended Target writes **เฉพาะ Windows**, ต้องมี Codex ติดตั้งและ login ที่คนเตรียมใน environment (`claude setup-token`) | **headless enforced** — OS sandbox profile ต่อ run + network lock; hooks ยังเป็นชั้นเสริม ไม่ใช่หลักฐาน isolation; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
 | **Codex** | ✅ **Supported** — interactive และ headless adapter verify บน Codex 0.154.0/0.155.1 แล้ว; headless enforcement = per-run native permission profile (เขียนเฉพาะ path ที่ packet อนุญาต ปิด network บล็อก Git ด้วย execpolicy + OS deny) และ TASK-027 เพิ่ม OS read/write deny ของ approval channel; UAT กับโปรไฟล์ที่ adapter สร้างบน Codex 0.155.0-alpha.16.4 ปฏิเสธ read/write แบบ glob, ตัวแปร และ encoded command ต่อไฟล์จำลอง โดยยังอ่าน/เขียน workspace ได้; certified for unattended Target writes; **interactive session ยัง unguarded** — direct-mode launch ปฏิเสธการรัน (ไม่มี acknowledgement bypass แล้ว — V13 TASK-012) และจำกัดเฉพาะ analysis/proposal ผ่าน STA dispatch | **headless enforced / interactive unguarded** — adapter ใช้ native permission profile + isolated execpolicy โดยไม่พึ่ง project hook; `.codex/hooks.json` ยังเป็น compatibility payload สำหรับ interactive เท่านั้น (default trust ข้าม hooks, hook พัง fail-open — ไม่ถูก claim เป็น enforcement ฝั่ง headless); exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
 | **OpenCode** | 🧪 **Experimental** — plugin/adapter เคย verify แล้ว; V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel | **partial** — plugin บังคับ guard บางส่วน; ไม่ใช้เป็นหลักฐาน approval isolation |
-| **Antigravity** | ✅ **Supported** — bridge hook เคย verify แล้ว แต่ V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel; unattended Target writes ไม่ certified | **bridge hook enforced** สำหรับ guard เดิม; ไม่ใช้เป็นหลักฐาน approval isolation |
+| **Antigravity** | ✅ **Supported** — ติดตั้ง PreToolUse hook ระดับเครื่องด้วย `software-team-agents install-antigravity-hook` (ชี้ `~/.gemini/config/hooks.json` ไป `.agents/hooks/sta-guard.js` ของ workspace แบบ absolute path); ใน interactive session (`software-team-agents open --runtime antigravity`) บังคับ universal floor, บล็อกเขียนนอก workspace และ contract path permissions แบบ fail-closed deny; production role dispatch (`sta run`) ยังคงระงับก่อน spawn ภายใต้ V13 TASK-027 a1 จนกว่าจะมี OS approval channel isolation; unattended Target writes ไม่ certified | **partial (machine hook)** — PreToolUse deny บังคับ path permissions ใน-band; ไม่ใช้เป็นหลักฐาน approval isolation |
 | **ZCode Desktop** | 🧪 **Experimental** — desktop role-play และ headless adapter เคย verify แล้ว; V13 TASK-027 a1 หยุด production role dispatch ก่อน spawn เพราะยังไม่มี OS write boundary สำหรับ approval channel; unattended Target writes ยัง refuse | **partial** — project hooks และ post-run check ไม่ใช้เป็นหลักฐาน approval isolation |
 
 Same verdict, three places: ตารางนี้, `sta runtimes` (อ่าน `RUNTIME_SUPPORT` ตรง) และ
 `software-team-agents --help`'s `--runtime` line — ทั้งสาม quote `guardSettings.ts`'s
 `codexCoverage()`/`opencodeCoverageWithPlugin()` จึง claim coverage ไม่ได้หลุดจากสิ่งที่ preflight
 enforce จริง (`orchestrator/src/runtime/runtimeSupport.test.ts` pin ไว้)
+
+## Codex interactive — pending work และเส้นทางเขียนจริง
+
+Interactive ใช้อ่านสถานะ ลิสต์งานค้าง วิเคราะห์ และเสนอขั้นต่อไปได้ แต่ **direct write จาก
+interactive ไม่ certified**: tool calls ใน Desktop/CLI อาจไม่มี framework guard คั่น และ
+`.codex/hooks.json` เป็น compatibility payload เท่านั้น การ trust hooks หรือออก
+`sta grant issue` ไม่เปลี่ยน Codex interactive ให้เป็น path ที่ enforced
+
+งานเขียนจาก Codex controller ส่งผ่าน executor ที่บังคับ per-run native permission profile จริง:
+
+```powershell
+sta execute --runtime codex --task "<bounded task>" --workspace "<resolved Target root>" --write --role <role>
+```
+
+สิทธิ์มาจาก packet และ role contract ต่อ run; human gates/refusal ยังมีผลตามเดิม
+ใช้ `sta run --runtime codex --task-id <id> --module <module>` เมื่อเป็นงาน pipeline
+ดู [Execution model](execution.md) สำหรับผลลัพธ์/approval ของ executor
+`software-team-agents open --runtime codex` ที่ preflight ปฏิเสธยังต้องรายงานตามจริง;
+การเปิด CLI แบบ read-only เพื่ออ่านสถานะไม่ได้ยืนยันว่า STA interactive launch ผ่าน preflight
+
+### Work ของ Codex — `$work` เป็นเส้นทางใช้งาน, legacy prompt ติดตั้งโดยคนสั่ง
+
+เส้นทางที่ผู้ใช้ยอมรับสำหรับ Codex คือ **`$work`** หรือเลือก skill `work` ผ่าน `/skills`
+จาก `.agents/skills/work/SKILL.md` ที่ sync จัดการอยู่แล้ว เป็น prompt shortcut เท่านั้น
+ไม่มีการเพิ่ม alias `/work` หรือจำลอง enforcement
+
+Source เดียวคือ `.claude/commands/work.md`; `COMMAND_RENDERINGS` สร้าง
+`.codex/prompts/work.md` โดย inline guardrails ไม่มี Claude `@import`, และคง
+`description`/`argument-hint` ของ Codex ไว้ `npm run build` บรรจุ rendering ใน
+`templates/manifest.json`; sync สร้างและติดตามสำเนาใน workspace ที่เลือก runtime codex
+**sync ไม่เขียน Codex home และไม่ติดตั้ง global ให้อัตโนมัติ**
+
+[OpenAI custom prompts](https://learn.chatgpt.com/docs/custom-prompts) ระบุให้ติดตั้ง
+ใน `CODEX_HOME/prompts` (default `~/.codex/prompts`) และเรียก **`/prompts:work`**
+ไม่ใช่ alias `/work`; custom prompts deprecated แล้ว และเอกสารครอบคลุม CLI/IDE
+อย่าอนุมานการรองรับใน Codex Desktop จากการผ่านของ CLI
+
+ผลทดลองบนเครื่องนี้กับ **codex-cli 0.159.2**: วาง `.codex/prompts/work.md` ใน repo
+แล้วเปิด TUI ใหม่ ไม่พบ work custom prompt; ติดตั้งใน `C:\Users\jabja\.codex\prompts\work.md`
+ด้วย hash ตรงกันแล้วเปิดใหม่ ก็ยังไม่พบในเมนู ดังนั้น **ไม่ได้ยืนยัน global-only discovery
+บนรุ่นนี้** เอกสาร legacy ไม่ใช่หลักฐานว่า client ที่ติดตั้งรองรับ ส่วน `skills/list` พบ
+repo skill `work` จริงทั้ง framework และ `C:\src\schoolbright-knowledge`
+
+คำสั่งติดตั้ง PowerShell สำหรับ client ที่ยังรองรับ legacy custom prompts
+ที่คนสั่งเองจาก framework หรือ workspace ที่ sync แล้ว
+(แสดง source/destination, ไม่ทับไฟล์เดิม):
+
+```powershell
+$staPromptSource = (Resolve-Path -LiteralPath '.codex/prompts/work.md').Path
+$staPromptHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$staPromptDir = Join-Path $staPromptHome 'prompts'
+$staPromptDestination = Join-Path $staPromptDir 'work.md'
+Write-Output "Install $staPromptSource -> $staPromptDestination"
+if (Test-Path -LiteralPath $staPromptDestination) { throw 'work.md exists; review it before replacing it manually' }
+New-Item -ItemType Directory -Path $staPromptDir -Force | Out-Null
+Copy-Item -LiteralPath $staPromptSource -Destination $staPromptDestination
+```
+
+การตรวจเส้นทางใช้งานที่ยอมรับ: เปิด session ใหม่ด้วย
+`codex -C C:\src\schoolbright-knowledge -s read-only` แล้วเรียก
+`$work มีงานค้างอะไรบ้างใน module timetableai` ต้องอ่าน `_docs/status.md` จริง
+หากอ่านไม่สำเร็จ ให้รายงานว่าไม่ผ่าน; คำตอบที่ตรงจากความจำไม่ใช่หลักฐานการอ่าน
+
+เฉพาะการตรวจ legacy custom prompt หลังติดตั้ง เปิด session ใหม่: `codex -C C:\src\schoolbright-knowledge -s read-only -a never`
+ตรวจเมนู `/prompts:work` ก่อนส่ง `/prompts:work timetableai` แล้วถาม
+"มีงานค้างอะไรบ้างใน module timetableai" ต้องอ่าน `_docs/status.md` จริง
+การตรวจนี้ไม่ใช้ `sync`/`init`/`upgrade` และไม่เขียนใน Knowledge repository
+
+`.agents/skills/work/SKILL.md` เป็นอีก rendering ของ source เดียวกัน ใช้ explicit
+`$work` ผ่าน skills ได้ใน client ที่รองรับ; การพบ skill ไม่ใช่หลักฐานว่ามี slash alias `/work`
+ดู baseline และผลตรวจจริงใน [Codex work verification](codex-work-verification.md)
 
 ## Unattended runs
 

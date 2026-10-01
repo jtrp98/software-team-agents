@@ -79,7 +79,7 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     unattendedTargetWrites: false,
     claim:
       `interactive sessions and the headless adapter are verified on real agy installs with the machine-global bridge hook (~/.gemini/config/hooks.json). ` +
-      `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}. ` +
+      `Guard coverage (once synced and installed): ${antigravityCoverageWithHooks().detail}. ` +
       `Headless guarded writes enforce PreToolUse path permissions and the universal floor in-band via the bridge hook. ` +
       `The V13 TASK-027 a1 approval isolation boundary is absent: production role dispatch is refused before spawn, including analysis/proposal; unattended Target writes are not certified. Provider-neutral exit checks cover completed runs. V10 does not change this status`,
   },

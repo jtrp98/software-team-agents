@@ -71,7 +71,7 @@ have an archive companion; nobody opens one at normal startup.
 **Three-repo mode.** Every `_docs/module/<name>/**` and `knowledge/**` path is a *Knowledge-repository*
 location, written only from the Knowledge workspace (`software-team-agents open`). A module may reference
 multiple Targets (`design.md` `## Targets`); a task may span multiple Targets (`targets: [{target_id, role}]`).
-Orchestrated stages write the Targets their task binds (`STA_WRITABLE_WORK_ROOTS`); `STA_TARGET_WORK_ROOTS`
+Orchestrated stages write the Targets their task binds (`STA_WRITABLE_WORK_ROOTS` — `open --writable-target` grants per launch); `STA_TARGET_WORK_ROOTS`
 carries every bound Target as `[{targetId, path, access}]` — identification for guard refusals, never itself
 a write grant. Engineer/QA stages write app code plus `qa.md`/`security.md`/`deploy.md` in their bound
 Targets, and `qa-engineer` evaluates every bound Target and updates `plan.md` Status cells directly —
@@ -80,7 +80,7 @@ no relay stage, and always the single review of record. Knowledge roots remain r
 ## Runtime entry points
 
 `sta run --task-id <id> --module <name> …` orchestrated pipeline (`sta status`/`approve`/`retry`) ·
-`software-team-agents open` the interactive session, from the Knowledge workspace ·
+`software-team-agents open` the interactive session · `/work` is its loop ·
 `sta policy [<area>] [<section>]` one policy section ·
 `sta tokens` context composition per run · `sta --check-prompt-budget` this file's budget.
 

@@ -17,6 +17,7 @@ import {
   renderAgentsPointer,
   renderAgentPolicyCompatibility,
   renderCodexSkill,
+  renderCodexPrompt,
   renderOpenCodeBinding,
   renderOpenCodeCommand,
   withGitBashRules,
@@ -247,6 +248,8 @@ describe("checkBindings", () => {
     const pointer = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
     expect(pointer).toContain("<!-- sta:bootstrap -->");
     expect(pointer).toContain("[CLAUDE.md](CLAUDE.md)");
+    expect(pointer).toContain(".agents/skills/work/SKILL.md");
+    expect(pointer).toContain("Codex: invoke $work");
     fs.writeFileSync(path.join(root, "AGENTS.md"), pointer.replace("# bootstrap", "# drifted bootstrap"), "utf8");
     expect(checkBindings(root).problems.join("\n")).toMatch(/AGENTS\.md does not match/);
   });
@@ -399,11 +402,23 @@ describe("renderCodexSkill", () => {
   });
 });
 
+describe("renderCodexPrompt", () => {
+  it("keeps native argument hints and inlines guardrails without Claude imports", () => {
+    const rendered = renderCodexPrompt("summarize", COMMAND_MD, extractGuardrailRules(GUARDRAILS_MD));
+    expect(rendered).toContain('argument-hint: "[file or topic]"');
+    expect(rendered).toContain("$ARGUMENTS");
+    expect(rendered).toContain("1. This command");
+    expect(rendered).not.toContain("@_shared/");
+    expect(rendered).not.toContain("name: summarize");
+  });
+});
+
 describe("COMMAND_RENDERINGS", () => {
   it("covers both mirror runtimes with their documented layouts", () => {
-    expect(COMMAND_RENDERINGS.map((s) => s.dir)).toEqual([".opencode/commands", ".agents/skills"]);
+    expect(COMMAND_RENDERINGS.map((s) => s.dir)).toEqual([".codex/prompts", ".opencode/commands", ".agents/skills"]);
     expect(COMMAND_RENDERINGS[0]!.outputs("summarize")).toEqual(["summarize.md"]);
-    expect(COMMAND_RENDERINGS[1]!.outputs("summarize")).toEqual(["summarize/SKILL.md", "summarize/agents/openai.yaml"]);
+    expect(COMMAND_RENDERINGS[1]!.outputs("summarize")).toEqual(["summarize.md"]);
+    expect(COMMAND_RENDERINGS[2]!.outputs("summarize")).toEqual(["summarize/SKILL.md", "summarize/agents/openai.yaml"]);
   });
 
   it("renders every declared output for a sample command", () => {
@@ -412,7 +427,7 @@ describe("COMMAND_RENDERINGS", () => {
       const rendered = spec.render("checklist", COMMAND_MD, rules);
       expect([...rendered.keys()].sort()).toEqual([...spec.outputs("checklist")].sort());
       for (const content of rendered.values()) {
-        expect(content).not.toContain("argument-hint");
+        if (spec.dir !== ".codex/prompts") expect(content).not.toContain("argument-hint");
         expect(content).not.toContain("@_shared/");
       }
     }
@@ -580,6 +595,7 @@ describe("T-V5-018 — derived rendering ignore paths", () => {
     expect(paths).toEqual([
       ".agents/skills/",
       ".codex/agents/",
+      ".codex/prompts/",
       ".opencode/agent/",
       ".opencode/commands/",
     ]);

@@ -29,6 +29,7 @@ The test: would this decision matter to a module that doesn't exist yet? If yes,
 | ADR-023 | [Freeze V4 framework capabilities until the stabilization exit condition is met](ADR-023-v4-framework-feature-freeze.md) | accepted |
 | ADR-024 | [_docs is the authoritative knowledge system; knowledge/ stops mirroring it](ADR-024-docs-vs-knowledge.md) | accepted |
 | ADR-025 | [End the V4 freeze for a fourth runtime and operator-level routing order; quota exhaustion falls back on UNAVAILABLE only](ADR-025-end-v4-freeze-and-routing-order.md) | accepted |
+| ADR-028 | [Interactive Target writes open through an explicit, per-launch, recorded grant (`open --writable-target`)](ADR-028-interactive-target-write-grants.md) | accepted |
 
 ## Format
 

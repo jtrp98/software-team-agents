@@ -16,6 +16,7 @@ function fixtureRepo(): string {
     ".claude/scripts/generate-status.js": "// script\n",
     ".claude/shared/multi-module-schema-scoping.md": "# procedure\n",
     ".claude/settings.json": "{}\n",
+    ".codex/prompts/work.md": "---\ndescription: work\n---\nInline guardrails.\n",
     ".claude/tests/run.js": "// self-test, never templated\n",
     "contracts/business-analyst.yaml": "write: []\n",
     "workflows/feature.yml": "roles: []\n",
@@ -55,6 +56,7 @@ describe("listTemplateFiles", () => {
     expect(files).toContain(".claude/scripts/generate-status.js");
     expect(files).toContain(".claude/shared/multi-module-schema-scoping.md");
     expect(files).toContain(".claude/settings.json");
+    expect(files).toContain(".codex/prompts/work.md");
     expect(files).toContain("contracts/business-analyst.yaml");
     expect(files).toContain("workflows/feature.yml");
     expect(files).toContain("policies/coding.md");

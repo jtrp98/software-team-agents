@@ -15,10 +15,13 @@ import { sameMajor } from "./version.js";
 import {
   KnowledgeBindingError,
   launchEnv,
+  mergeTargetWorkRootAccess,
   resolveKnowledgeBinding,
   resolveTargetBinding,
   resolveSessionTargetWorkRoots,
+  resolveWritableTargetWorkRoots,
   TargetBindingError,
+  WritableTargetRequestError,
   WORKSPACE_ROLE_LABEL,
   detectWorkspaceKind,
   type KnowledgeBinding,
@@ -74,6 +77,14 @@ export interface RoleRunOptions {
   installationConfigPath?: string;
   /** Named Knowledge root (DR §4 `--root`) the session binds and launches with. */
   rootName?: string;
+  /**
+   * `open --writable-target <id|path>` (repeatable): Target roots the person
+   * explicitly opens for writing at launch. Preflight resolves each against
+   * the workspace's own Target mapping — anything else refuses before a
+   * runtime starts — and the launch env carries them as the writable boundary
+   * plus `access: "write"` identification. The per-role layer is untouched.
+   */
+  writableTargets?: readonly string[];
   /** Test seams. */
   probe?: (cmd: string) => { available: boolean; detail?: string };
   launch?: (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
@@ -111,8 +122,10 @@ export interface WorkspaceContext {
   knowledge?: KnowledgeBinding;
   /** Resolved when the workspace config names a `target_id` that resolves; informational, never blocks a session. */
   target?: TargetBinding;
-  /** Every Target this machine maps, read-only, for the session's guard channel (V10 TASK-023). Empty when none map. */
+  /** Every Target this machine maps, for the session's guard channel (V10 TASK-023). Entries the launch granted carry `access: "write"`. Empty when none map. */
   targetWorkRoots: GuardTargetWorkRoot[];
+  /** The Targets this launch explicitly opened for writing (`--writable-target`), resolved and validated. Empty when none were requested. */
+  writableTargets: GuardTargetWorkRoot[];
   runtime: RuntimeName;
   /** The guard verdict this launch was allowed under, for the launch record. */
   guards: GuardCoverage;
@@ -409,20 +422,56 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
 
   // The mapping lives in the Knowledge root: the workspace's own, or the bound
   // one when this session's cwd is not yet the Knowledge workspace.
-  const targetWorkRoots = resolveSessionTargetWorkRoots({
+  const resolvedTargetWorkRoots = resolveSessionTargetWorkRoots({
     knowledgeRoot: knowledgeHome,
     workspaceRoot: roots.targetRoot,
     frameworkRoot: roots.frameworkRoot,
   });
-  if (targetWorkRoots.length > 0) {
+
+  // The write half is opt-in per launch and resolved from the same mapping:
+  // a grant names only a Target this workspace already binds. It feeds the
+  // boundary env; the per-role layer on top still demands STA identity, so a
+  // granted session without `STA_ROLE`/`sta grant issue` still refuses
+  // Target writes — fail-closed, exactly like the hook's own message says.
+  let writableTargets: GuardTargetWorkRoot[] = [];
+  if (options.writableTargets && options.writableTargets.length > 0) {
+    try {
+      writableTargets = resolveWritableTargetWorkRoots({
+        knowledgeRoot: knowledgeHome,
+        workspaceRoot: roots.targetRoot,
+        frameworkRoot: roots.frameworkRoot,
+        requests: options.writableTargets,
+      });
+    } catch (e) {
+      if (!(e instanceof WritableTargetRequestError)) throw e;
+      fail("Writable targets", `${e.message} — fix --writable-target and re-run`);
+    }
     checks.push({
-      name: "Targets (read-only)",
+      name: "Writable targets",
       ok: true,
-      detail: `${targetWorkRoots.map((entry) => entry.targetId).join(", ")} — readable from this session; writing one is refused, run the stage instead`,
+      detail:
+        `${writableTargets.map((entry) => `${entry.targetId} → ${entry.path}`).join(", ")} — writable for this session, granted at launch and recorded; ` +
+        "per-role rules still apply (STA_ROLE or `sta grant issue`)",
     });
   }
 
-  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge, target, targetWorkRoots, runtime: launchRuntime, guards: coverage };
+  // Identification env: every mapped Target, granted ones flipped to
+  // `access: "write"` so the guard's by-name read-only refusal steps aside
+  // and the writable-root branch (with its per-role layer) decides instead.
+  const targetWorkRoots = mergeTargetWorkRootAccess(resolvedTargetWorkRoots, writableTargets);
+  if (resolvedTargetWorkRoots.length > 0) {
+    const writableIds = new Set(writableTargets.map((entry) => entry.targetId));
+    const readOnlyIds = resolvedTargetWorkRoots.map((entry) => entry.targetId).filter((id) => !writableIds.has(id));
+    checks.push({
+      name: "Targets (read-only)",
+      ok: true,
+      detail: readOnlyIds.length > 0
+        ? `${readOnlyIds.join(", ")} — readable from this session; writing one is refused, run the stage instead`
+        : `${[...writableIds].join(", ")} — writable (granted at launch); no Target stays read-only in this session`,
+    });
+  }
+
+  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge, target, targetWorkRoots, writableTargets, runtime: launchRuntime, guards: coverage };
 }
 
 /** Kept as the test seam for role-independence: the role passed here is the workspace's recorded identity, never a lane input. */
@@ -466,6 +515,12 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
   }
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
   console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
+  if (ctx.writableTargets.length > 0) {
+    console.log(
+      `[software-team-agents] writable Targets: ${ctx.writableTargets.map((entry) => entry.targetId).join(", ")} — ` +
+        "Target writes still need STA identity (`sta grant issue <task-id> --stage <stage>` or an orchestrated run)",
+    );
+  }
   const launch = options.launch ?? defaultLaunch;
   const startedAt = Date.now();
   // Measure before the runtime starts: an interactive session may edit its own
@@ -478,12 +533,29 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
       runtimeCommand(ctx.runtime),
       [],
       ctx.workspaceRoot,
-      launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot, contextCommand, ctx.targetWorkRoots, ctx.knowledge?.rootName),
+      launchEnv(
+        role,
+        process.env,
+        ctx.knowledge?.knowledgeRoot,
+        ctx.target?.targetRoot,
+        contextCommand,
+        ctx.targetWorkRoots,
+        ctx.knowledge?.rootName,
+        ctx.writableTargets.map((entry) => entry.path),
+      ),
     );
   } finally {
     const record = options.recordSession ?? recordInteractiveSession;
     try {
-      record({ workspaceRoot: ctx.workspaceRoot, role, runtime: ctx.runtime, startedAt, endedAt: Date.now(), measurement });
+      record({
+        workspaceRoot: ctx.workspaceRoot,
+        role,
+        runtime: ctx.runtime,
+        startedAt,
+        endedAt: Date.now(),
+        measurement,
+        writableTargets: ctx.writableTargets,
+      });
     } catch (error) {
       // A custom recorder is no more authoritative than the production one.
       console.error(`[software-team-agents] could not record interactive session telemetry: ${error instanceof Error ? error.message : String(error)}`);

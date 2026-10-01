@@ -882,7 +882,7 @@ describe("software-team-agents — target-first end to end", () => {
       // Authored payload carrying the generated guard-rule block, exactly as the real plugin does.
       { relPath: ".opencode/plugin/sta-guards.js", content: `// authored plugin\n${renderGuardRuleBlock()}` },
       { relPath: "CLAUDE.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\n" },
-      { relPath: "AGENTS.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\nFull operating rules: see [CLAUDE.md](CLAUDE.md).\n" },
+      { relPath: "AGENTS.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\nFull operating rules: see [CLAUDE.md](CLAUDE.md).\nInteractive work loop: see [.agents/skills/work/SKILL.md](.agents/skills/work/SKILL.md) (or run the /work command).\n" },
     ]);
     expect((await capture(() => runTargetCli(["init", "--runtime", "codex", "--runtime", "opencode"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
@@ -1592,6 +1592,12 @@ describe("role workspace architecture (T-ROLE)", () => {
     // an unrecognized argument now, and nothing keys off a recorded role.
     expect(() => parseTargetArgs(["init", "--role", "dev"])).toThrow(/unrecognized argument: --role/);
     expect(fs.existsSync(path.join(target, ".agent-team"))).toBe(false);
+
+    // `--writable-target` is an open-only flag: parsed and repeatable, refused
+    // on any other command.
+    expect(parseTargetArgs(["open", "--writable-target", "api", "--writable-target", "web"]).writableTargets).toEqual(["api", "web"]);
+    expect(() => parseTargetArgs(["open", "--writable-target"])).toThrow(/requires a Target id or path/);
+    expect(() => parseTargetArgs(["sync", "--writable-target", "api"])).toThrow(/applies to open/);
 
     // An ambiguous repository refuses to guess; a hand-set config role remains
     // the one disambiguator now that the flag is gone.

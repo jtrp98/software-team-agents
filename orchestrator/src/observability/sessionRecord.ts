@@ -118,6 +118,8 @@ export function recordInteractiveSession(params: {
   endedAt: number;
   /** Captured immediately before launch so edits made during the session cannot rewrite history. */
   measurement?: WorkspaceStaticMeasurement;
+  /** Targets the launch granted for writing (`open --writable-target`), recorded for audit. */
+  writableTargets?: readonly { targetId: string; path: string; access: "read" | "write" }[];
   store?: TaskStore;
 }): void {
   try {
@@ -142,6 +144,10 @@ export function recordInteractiveSession(params: {
         session_kind: "interactive",
         static_chars: measurement.always_loaded_chars + measurement.reachable_static_chars,
         instruction_surface_bytes: measurement.instruction_surface_bytes,
+        writable_targets:
+          params.writableTargets && params.writableTargets.length > 0
+            ? JSON.stringify(params.writableTargets.map((entry) => ({ targetId: entry.targetId, path: entry.path, access: entry.access })))
+            : undefined,
       },
     });
     const store = params.store ?? new SqliteTaskStore(defaultStateDbPath(params.workspaceRoot));

@@ -247,3 +247,80 @@ describe("V10 TASK-027 — preflight dependencies are per session, not per role"
     expect(ctx.checks.find((check) => check.name === "Target writable")).toBeUndefined();
   });
 });
+
+describe("interactive write grants — open --writable-target preflight", () => {
+  function bindApiTarget(knowledge: string, target: string): void {
+    write(
+      knowledge,
+      "targets.yaml",
+      "schema_version: 1\ntargets:\n  - target_id: api\n    name: Orders API\n    remote_url: https://github.com/acme/api.git\n    status: active\n    type: backend\n",
+    );
+    write(
+      path.join(knowledge, ".workflow"),
+      "targets.local.yaml",
+      `schema_version: 1\ntargets:\n  api:\n    path: ${JSON.stringify(target)}\n`,
+    );
+  }
+
+  it("a requested mapped Target is granted write and flips its identification entry; the grant is recorded on the context", async () => {
+    const { knowledge, templatesDir } = await initializedKnowledge();
+    const target = makeTarget();
+    bindApiTarget(knowledge, target);
+
+    const ctx = sessionPreflight(knowledge, "ba", { templatesDir, writableTargets: ["api"] });
+    const granted = [{ targetId: "api", path: fs.realpathSync.native(target), access: "write" as const }];
+    expect(ctx.writableTargets).toEqual(granted);
+    // The identification env now carries the grant: the guard's by-name
+    // read-only refusal steps aside for exactly this Target.
+    expect(ctx.targetWorkRoots).toEqual(granted);
+    const check = ctx.checks.find((entry) => entry.name === "Writable targets");
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toContain("granted at launch");
+    expect(check?.detail).toContain("sta grant issue");
+  });
+
+  it("an unknown --writable-target refuses the launch and names the mapped Targets", async () => {
+    const { knowledge, templatesDir } = await initializedKnowledge();
+    bindApiTarget(knowledge, makeTarget());
+
+    let error: unknown;
+    try {
+      sessionPreflight(knowledge, "ba", { templatesDir, writableTargets: ["nope"] });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(PreflightError);
+    const failed = (error as PreflightError).failed;
+    expect(failed.name).toBe("Writable targets");
+    expect(failed.detail).toContain('"nope" names no mapped Target');
+    expect(failed.detail).toContain("api");
+  });
+
+  it("a --writable-target with no resolvable mapping refuses with the fix", async () => {
+    // The own-workspace refusal lives at the resolver (covered in
+    // interactiveTargetScope.test.ts); preflight's visible shape is the
+    // no-mapping refusal — a grant needs a bound Target to name.
+    const { knowledge, templatesDir } = await initializedKnowledge();
+
+    let error: unknown;
+    try {
+      sessionPreflight(knowledge, "ba", { templatesDir, writableTargets: ["api"] });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(PreflightError);
+    expect((error as PreflightError).failed.name).toBe("Writable targets");
+    expect((error as PreflightError).failed.detail).toContain("targets.local.yaml");
+  });
+
+  it("without --writable-target the session keeps the read-only shape and records nothing", async () => {
+    const { knowledge, templatesDir } = await initializedKnowledge();
+    const target = makeTarget();
+    bindApiTarget(knowledge, target);
+
+    const ctx = sessionPreflight(knowledge, "ba", { templatesDir });
+    expect(ctx.writableTargets).toEqual([]);
+    expect(ctx.targetWorkRoots).toEqual([{ targetId: "api", path: fs.realpathSync.native(target), access: "read" }]);
+    expect(ctx.checks.find((entry) => entry.name === "Writable targets")).toBeUndefined();
+  });
+});

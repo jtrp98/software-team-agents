@@ -3,7 +3,8 @@
  * Regenerates every derived rendering in THIS repo from its single source:
  *
  *   .claude/agents/<role>.md   → .codex/agents/<role>.toml · .opencode/agent/<role>.md
- *   .claude/commands/<name>.md → .opencode/commands/<name>.md · .agents/skills/<name>/SKILL.md
+ *   .claude/commands/<name>.md → .codex/prompts/<name>.md (explicit global install)
+ *                              · .opencode/commands/<name>.md · .agents/skills/<name>/SKILL.md
  *                                (+ <name>/agents/openai.yaml)
  *   taskClassifier.ts +        → workflows/<id>.yml   (T-V3TOK-110, ADR-007)
  *   workflowCatalog.ts

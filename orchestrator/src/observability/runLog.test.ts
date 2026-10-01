@@ -40,6 +40,7 @@ describe("RunLog", () => {
       fallback_reason: null,
       fallback_count: null,
       session_kind: null,
+      writable_targets: null,
       instruction_surface_bytes: null,
       static_chars: null,
       handoff_chars: null,

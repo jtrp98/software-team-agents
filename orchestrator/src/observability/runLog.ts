@@ -69,6 +69,8 @@ export interface RunRecord {
   fallback_count: number | null;
   /** Whether this row came from an orchestrated stage or an interactive role session. */
   session_kind: "orchestrated" | "interactive" | null;
+  /** Interactive launches: JSON `[{targetId, path, access}]` of the Targets `--writable-target` granted, or null when none were. Optional like its sibling launch-time fields. */
+  writable_targets?: string | null;
   /** Prompt composition fields are null when that path did not measure the component, never a fabricated zero. */
   static_chars: number | null;
   /** Exact always-on instruction bytes measured before an interactive runtime launched. */
@@ -138,6 +140,8 @@ export interface RunOutcome {
   fallback_reason?: string;
   fallback_count?: number;
   session_kind?: "orchestrated" | "interactive";
+  /** JSON `[{targetId, path, access}]` of Targets an interactive launch granted for writing. */
+  writable_targets?: string;
   static_chars?: number;
   instruction_surface_bytes?: number;
   handoff_chars?: number;
@@ -248,6 +252,7 @@ export class RunLog {
       fallback_reason: params.outcome.fallback_reason ?? null,
       fallback_count: params.outcome.fallback_count ?? null,
       session_kind: params.outcome.session_kind ?? null,
+      writable_targets: params.outcome.writable_targets ?? null,
       static_chars: params.outcome.static_chars ?? null,
       instruction_surface_bytes: params.outcome.instruction_surface_bytes ?? null,
       handoff_chars: params.outcome.handoff_chars ?? null,

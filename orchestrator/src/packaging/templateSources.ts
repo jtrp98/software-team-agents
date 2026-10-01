@@ -57,6 +57,9 @@ export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   // Claude-style schema (registration observed in `~/.codex/config.toml`).
   { relPath: ".codex/hooks", kind: "dir" },
   { relPath: ".codex/hooks.json", kind: "file" },
+  // Staged custom prompts: sync carries them to the workspace; the person
+  // explicitly installs into CODEX_HOME/prompts (no global writes at sync).
+  { relPath: ".codex/prompts", kind: "dir" },
   { relPath: "contracts", kind: "dir" },
   { relPath: "workflows", kind: "dir" },
   { relPath: "policies", kind: "dir" },
