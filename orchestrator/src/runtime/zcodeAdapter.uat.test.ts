@@ -80,6 +80,7 @@ describe.skipIf(!UAT)("ZCode real-binary UAT — no model call", () => {
     console.log(`[zcode-uat] guarded-untrusted status=${result.status} diag=${result.diagnostics.join(" | ").slice(0, 300)}`);
     expect(result.status).toBe("ERROR");
     expect(result.guards.unenforced).toContain(RuntimeCapability.PRE_TOOL_GUARD);
+    expect(result.diagnostics.join(" ")).toMatch(/zcode hooks trust grant --workspace .+ --all-current --bundle-digest [0-9a-f]{64}/);
     expect(result.diagnostics.join(" ")).toMatch(/zcode hooks trust review/);
     const evidence = await adapter.collectEvidence(prepared);
     expect(evidence.result?.status).toBe("ERROR");

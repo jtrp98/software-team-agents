@@ -59,7 +59,9 @@ import { roleEnv, roleLabel } from "./runtimeAdapter.js";
  *     `trusted_persistent`; otherwise the engine emits `hook_run_blocked` and
  *     SKIPS them ("Workspace Hooks skipped"). `zcode hooks trust status --json`
  *     answers that before any spawn. Granting trust is a person's security
- *     decision (`zcode hooks trust review`), never this adapter's.
+ *     decision — `zcode hooks trust review` only lists what is pending;
+ *     `zcode hooks trust grant` is what changes trust state — never this
+ *     adapter's.
  *   - `--mode`: `plan` inspects only, `build` pauses for approval before
  *     changes, `edit` auto-applies edits, `yolo` is full access.
  *   - `-p` takes the prompt from argv only — no stdin channel was found.
@@ -375,10 +377,12 @@ export class ZcodeAdapter implements ExecutorPort {
       }
       const untrusted = untrustedManagedHooks(trust);
       if (untrusted.length > 0) {
+        const digest = trust.bundleDigest ?? "<bundle-digest printed by trust review>";
         return refuse(
           [
             `refusing to run: ZCode skips untrusted project hooks headless, and ${untrusted.length} STA guard hook(s) are not ${TRUSTED} ` +
-              `(${untrusted.join("; ")}) — a person reviews and grants trust with \`zcode hooks trust review --workspace ${JSON.stringify(req.cwd)}\``,
+              `(${untrusted.join("; ")}) — a person grants trust with \`zcode hooks trust grant --workspace ${JSON.stringify(req.cwd)} --all-current --bundle-digest ${digest}\` ` +
+              `after inspecting \`zcode hooks trust review --workspace ${JSON.stringify(req.cwd)}\` (review only lists the pending hooks; grant is what changes trust state)`,
           ],
           { enforced: [], unenforced: [RuntimeCapability.PRE_TOOL_GUARD] },
         );
