@@ -1,5 +1,41 @@
 # Release Notes
 
+## software-team-agents 8.2.0 — `sta execute` writes Targets from the Knowledge workspace (2026-10-01)
+
+> **Version 8.2.0 and release date 2026-10-01 confirmed by the release owner.** The Minor bucket is
+> the mechanical result of the version rule at the bottom of this file: nothing that passed before is
+> refused, no default flips — the new surface is opt-in (`--writable-target`), and its new refusals
+> (`target_not_mapped`, `invalid_permissions`, `permission_escalation`) guard only that flag's own
+> path. `templates/manifest.json` is re-stamped by `npm run build`; `@software-team-agents/orchestrator`
+> stays at `0.3.0`.
+
+**Bucket: Minor (`8.1.1 → 8.2.0`, confirmed).** One track: a Knowledge-side `sta execute` run can
+write a mapped Target — the dispatch shape the interactive `/work` loop uses.
+
+- **`sta execute --writable-target <id|path>` (repeatable).** The run's `--workspace` stays the
+  Knowledge root — that is where the runtime reads role bindings (`.claude/agents/<role>.md`) and
+  guard wiring — while writes go to the named Target: same resolver as `open --writable-target`
+  (`.workflow/targets.local.yaml`; an unmapped id is refused `target_not_mapped` before anything
+  spawns). Naming a Target implies `--write` and requires `--role` (else `invalid_permissions`), so
+  every Target path is checked against the role contract and stack rules; the workspace itself stays
+  read-only unless `--write-path` is passed (`STA_KNOWLEDGE_ROOT`); Claude Code receives
+  `--add-dir=<target>` and absolute Target paths in the prompt; child runs inherit the parent's
+  writable Targets and are refused `permission_escalation` for ones the parent lacks. Documented
+  (Thai) in `docs/execution.md` § "เขียน Target จาก Knowledge workspace", including the accepted
+  no-OS-sandbox boundary of the direct run (2026-10-01).
+- **The ZCode untrusted-hook refusal now points at the real command.** It sent the human to the
+  read-only `zcode hooks trust review` — following it loops forever, because review never changes
+  trust state. The refusal now embeds
+  `zcode hooks trust grant --workspace <cwd> --all-current --bundle-digest <digest>` with the digest
+  taken from the live trust record (adapter doc comment, runtimeSupport claim and guardSettings
+  coverage text corrected with it; adapter tests require the grant command and its 64-hex digest in
+  the diagnostic).
+- **Bootstrap rendering wording.** Hard-boundary descriptions rendered by `knowledgeRender.ts`
+  clarified; no behavior change.
+
+**What you may need to do:** nothing — sync delivers the amended docs and commands; the catalog
+count is unchanged (36).
+
 ## software-team-agents 8.1.1 — /work assertiveness (2026-10-01)
 
 > **Version 8.1.1 and release date 2026-10-01 confirmed by the release owner.** The Patch bucket is
