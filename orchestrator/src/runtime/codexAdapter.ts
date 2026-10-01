@@ -307,6 +307,28 @@ function prepareCodexRunHome(
       }
     }
 
+    // Windows elevated sandbox setup markers: if the user's codex installation
+    // has already completed sandbox setup, carry the markers into the run home
+    // so `codex exec` does not report sandbox setup missing or fail commands.
+    const sandboxMigration = path.join(sourceHome, ".sandbox_migration");
+    if (fs.existsSync(sandboxMigration)) {
+      try {
+        fs.copyFileSync(sandboxMigration, path.join(runHome, ".sandbox_migration"));
+      } catch {
+        // best-effort
+      }
+    }
+    const sandboxSetupMarker = path.join(sourceHome, ".sandbox", "setup_marker.json");
+    if (fs.existsSync(sandboxSetupMarker)) {
+      try {
+        const targetSandboxDir = path.join(runHome, ".sandbox");
+        fs.mkdirSync(targetSandboxDir, { recursive: true });
+        fs.copyFileSync(sandboxSetupMarker, path.join(targetSandboxDir, "setup_marker.json"));
+      } catch {
+        // best-effort
+      }
+    }
+
     return {
       path: runHome,
       cleanup: () => {
@@ -677,6 +699,7 @@ export class CodexAdapter implements ExecutorPort {
         encoding: "utf8",
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
+        input: "",
         // Same channel as `claudeCodeAdapter.ts` — set unconditionally since it
         // costs nothing if the runtime never asks a guard to read it.
         env: {

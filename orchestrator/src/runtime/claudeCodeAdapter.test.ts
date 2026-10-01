@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { ClaudeCodeAdapter, disallowRulesFromGuards, resolveNpmCliScript, type SpawnSync } from "./claudeCodeAdapter.js";
+import { addDirArgsFor, ClaudeCodeAdapter, disallowRulesFromGuards, resolveNpmCliScript, type SpawnSync } from "./claudeCodeAdapter.js";
 import { NO_GUARDS, type RuntimeGuards } from "./runtimeAdapter.js";
 
 function tmpProject(): string {
@@ -814,5 +814,64 @@ describe("disallowRulesFromGuards (OFF10 M4 mapping)", () => {
 
   it("returns nothing for an empty guard set — no flag noise on unguarded runs", () => {
     expect(disallowRulesFromGuards({ writeAllow: [], writeDeny: [], forbidCommands: [], exitChecks: [] })).toEqual([]);
+  });
+});
+
+describe("addDirArgsFor — write roots outside cwd become Claude Code working directories", () => {
+  const cwd = path.resolve("/kb");
+  const target = path.resolve("/target");
+  const reader = path.resolve("/reader");
+
+  it("adds each writable root other than cwd, equals form", () => {
+    expect(
+      addDirArgsFor({
+        cwd,
+        autonomy: "edit",
+        workRoots: [
+          { targetId: "kb", path: cwd, access: "write" },
+          { targetId: "be", path: target, access: "write" },
+          { targetId: "ro", path: reader, access: "read" },
+        ],
+      }),
+    ).toEqual([`--add-dir=${target}`]);
+  });
+
+  it("adds nothing for a read-only run or a run with no extra roots", () => {
+    expect(addDirArgsFor({ cwd, autonomy: "read-only", workRoots: [{ targetId: "be", path: target, access: "write" }] })).toEqual([]);
+    expect(addDirArgsFor({ cwd, autonomy: "edit" })).toEqual([]);
+  });
+});
+
+describe("ClaudeCodeAdapter — a direct run (osIsolation: false) spawns claude itself", () => {
+  it("runs `claude` with no codex wrapper, no per-run home, and no console window", async () => {
+    const calls: { cmd: string; args: string[]; options: Parameters<SpawnSync>[2] }[] = [];
+    const spawnSync: SpawnSync = (cmd, args, options) => {
+      calls.push({ cmd, args, options });
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync, platform: "linux" });
+
+    const result = await adapter.executeAgent(baseRequest({ osIsolation: false, prompt: "hi", env: { STA_ROLE: "x" } }));
+
+    expect(result.status).toBe("OK");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].cmd).toBe("claude");
+    expect(calls[0].args).not.toContain("sandbox");
+    expect(calls[0].args).toContain("--agent");
+    expect(calls[0].options.windowsHide).toBe(true);
+    expect(calls[0].options.input).toBe("hi");
+    expect(calls[0].options.env!.CLAUDE_CONFIG_DIR).toBe(process.env.CLAUDE_CONFIG_DIR);
+    expect(calls[0].options.env!.HTTPS_PROXY).toBe(process.env.HTTPS_PROXY);
+    expect(calls[0].options.env!.STA_ROLE).toBe("backend-engineer");
+  });
+
+  it("reports a missing claude binary, not a missing codex wrapper", async () => {
+    const enoent = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" }) as NodeJS.ErrnoException;
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync: () => cliResult(null, "", enoent), platform: "linux" });
+
+    const result = await adapter.executeAgent(baseRequest({ osIsolation: false }));
+
+    expect(result.status).toBe("UNAVAILABLE");
+    expect(result.diagnostics.join(" ")).toContain("`claude` binary not found");
   });
 });

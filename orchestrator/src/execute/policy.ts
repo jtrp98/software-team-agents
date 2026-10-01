@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { FRAMEWORK_PAYLOAD_ARTIFACTS, UNIVERSAL_DENY } from "../agents/pathPermissions.js";
 import { FORBIDDEN_COMMANDS } from "../runtime/runtimeGuards.js";
-import type { RuntimeAutonomy, RuntimeGuards } from "../runtime/runtimeAdapter.js";
+import type { RuntimeAutonomy, RuntimeGuards, RuntimeWorkRoot } from "../runtime/runtimeAdapter.js";
 import type { ResolvedLimits, ResolvedPermissions } from "./runStore.js";
 
 /**
@@ -80,10 +80,64 @@ export function resolveWorkspace(requested: string | undefined, parentWorkspace:
   return workspace;
 }
 
+/**
+ * The Target roots a run may write besides its workspace, already resolved to
+ * mapped Targets (`execute.ts`). A root run takes what it was granted; a child
+ * defaults to its parent's roots and may only narrow them — a root its parent
+ * was never given is an escalation, exactly like a write path. Writing a
+ * Target requires a writing run, and a role: the guard applies that role's
+ * contract and stack rules to every Target path, and refuses a Target write
+ * that has none.
+ */
+export function resolveWorkRoots(
+  requested: readonly RuntimeWorkRoot[] | undefined,
+  parent: { workRoots?: readonly RuntimeWorkRoot[] } | null,
+  workspace: string,
+  write: boolean,
+  role: string | undefined,
+): RuntimeWorkRoot[] {
+  const inherited = parent?.workRoots ?? [];
+  let roots: readonly RuntimeWorkRoot[];
+  if (requested === undefined) {
+    roots = write ? inherited : [];
+  } else if (parent) {
+    const outside = requested.filter((root) => !inherited.some((own) => path.resolve(own.path) === path.resolve(root.path)));
+    if (outside.length > 0) {
+      throw new PolicyRefusal(
+        "permission_escalation",
+        `writable Target ${outside.map((root) => root.targetId).join(", ")} exceeds the parent run's grant (${inherited.map((root) => root.targetId).join(", ") || "none"})`,
+      );
+    }
+    roots = requested;
+  } else {
+    roots = requested;
+  }
+  if (roots.length === 0) return [];
+  if (!write) throw new PolicyRefusal("invalid_permissions", "a writable Target needs a writing run");
+  if (!role) {
+    throw new PolicyRefusal(
+      "invalid_permissions",
+      "a writable Target needs a role: the guard applies that role's contract and stack rules to every Target path, and refuses a Target write without one",
+    );
+  }
+  for (const root of roots) {
+    if (!path.isAbsolute(root.path)) throw new PolicyRefusal("invalid_permissions", `writable Target ${root.targetId} must be an absolute path`);
+    if (isInside(path.resolve(root.path), workspace) || isInside(workspace, path.resolve(root.path))) {
+      throw new PolicyRefusal(
+        "invalid_permissions",
+        `writable Target ${root.targetId} (${root.path}) overlaps the run's workspace ${workspace} — a Target is a separate repository`,
+      );
+    }
+  }
+  return roots.map((root) => ({ targetId: root.targetId, path: path.resolve(root.path), access: "write" as const }));
+}
+
 export function resolvePermissions(
   requested: Permissions = {},
   parent: { permissions: ResolvedPermissions; workspace: string } | null,
   workspace: string,
+  /** The run writes Target roots: its workspace then defaults to read-only rather than `**`. */
+  writesTargets = false,
 ): ResolvedPermissions {
   const p = parent?.permissions ?? null;
   const write = requested.write ?? p?.write ?? false;
@@ -96,7 +150,7 @@ export function resolvePermissions(
   if (write) {
     const parentUnrestricted = !p || p.writePaths.includes(ANYWHERE);
     if (parentUnrestricted) {
-      writePaths = requested.writePaths ?? [ANYWHERE];
+      writePaths = requested.writePaths ?? (writesTargets ? [] : [ANYWHERE]);
     } else {
       // A path-restricted parent's grant is only ever re-used, never re-derived:
       // same workspace, and only globs the parent itself was given.
@@ -114,7 +168,7 @@ export function resolvePermissions(
         throw new PolicyRefusal("invalid_permissions", `write path ${JSON.stringify(glob)} must be relative to the workspace and stay inside it`);
       }
     }
-    if (writePaths.length === 0) throw new PolicyRefusal("invalid_permissions", "a writing run needs at least one write path");
+    if (writePaths.length === 0 && !writesTargets) throw new PolicyRefusal("invalid_permissions", "a writing run needs at least one write path");
   }
 
   const ceiling = p ? rank(p.autonomy) : rank("full");

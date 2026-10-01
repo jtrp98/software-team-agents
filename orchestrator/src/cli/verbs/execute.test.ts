@@ -76,6 +76,21 @@ describe("sta execute", () => {
     expect(claude.requests[0].env![RUN_ID_ENV]).toBe(child.json.run.runId);
   });
 
+  it("--writable-target reaches the run: a Target the workspace does not map is refused before anything runs", async () => {
+    const root = tmp("sta-cli-exec-");
+    const claude = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ text: "never" }) });
+
+    const { code, json } = await sta(
+      ["execute", "--runtime", "claude-code", "--task", "BE-005", "--role", "backend-engineer", "--writable-target", "backend"],
+      new RuntimeRegistry([claude]),
+      root,
+    );
+
+    expect(code).toBe(1);
+    expect(json).toMatchObject({ status: "failed", error: { code: "target_not_mapped" } });
+    expect(claude.requests).toHaveLength(0);
+  });
+
   it("a declared side effect exits 3 and waits; approve + resume completes it", async () => {
     const root = tmp("sta-cli-exec-");
     const codex = new MockRuntimeAdapter({ id: "codex", respond: () => okResult({ text: "migrated" }) });

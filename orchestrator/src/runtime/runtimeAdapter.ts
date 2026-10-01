@@ -208,6 +208,13 @@ export interface RuntimeAgentRequest {
    * Undefined = no limit.
    */
   readonly maxTurns?: number;
+  /**
+   * False = run the runtime directly, the way a person runs it, without the
+   * adapter's own OS isolation wrapper; the workspace's guard hooks still
+   * apply. Absent or true = the adapter's isolation, where it has one. A direct
+   * `sta execute` run sets false; orchestrated stages never do.
+   */
+  readonly osIsolation?: boolean;
 }
 
 export type RuntimeRunStatus =
@@ -374,6 +381,8 @@ export type SpawnSync = (
     env?: NodeJS.ProcessEnv;
     /** Text sent to the child process's stdin instead of inflating argv. */
     input?: string;
+    /** Windows: open no console window for the child. */
+    windowsHide?: boolean;
   },
 ) => SpawnSyncReturns<string>;
 

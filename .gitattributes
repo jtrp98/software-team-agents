@@ -1,0 +1,4 @@
+# The repo stores text as LF (core.autocrlf normalized on commit); tests hash and
+# parse fixtures byte-sensitively, so checkout must materialize LF everywhere,
+# independent of each machine's core.autocrlf setting.
+* text=auto eol=lf

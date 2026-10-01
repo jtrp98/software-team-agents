@@ -7,6 +7,7 @@ import { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import type { RuntimeAgentRequest, RuntimeAgentResult } from "../runtime/runtimeAdapter.js";
 import { createSta, RUN_ID_ENV, RUN_STORE_ENV, type ExecuteRequest, type ExecuteResult, type Sta } from "./execute.js";
+import { WritableTargetRequestError } from "../targetcli/roleWorkspace.js";
 
 /**
  * The composition contract: controller → sta.execute() → executor → result →
@@ -73,6 +74,8 @@ describe("sta.execute — controller → STA → executor", () => {
     expect(req.definitionPath).toBeUndefined();
     expect(req.cwd).toBe(h.workspace);
     expect(req.prompt).toContain("rename the helper");
+    // A direct run is the caller prompting the runtime itself: no OS wrapper.
+    expect(req.osIsolation).toBe(false);
     expect(req.env).toMatchObject({ [RUN_ID_ENV]: result.run.runId, [RUN_STORE_ENV]: h.sta.store.dir, STA_ROLE: "" });
     expect(h.sta.run(result.run.runId)).toMatchObject({ status: "completed", attempts: 1, output: "implemented" });
   });
@@ -492,5 +495,99 @@ describe("sta.execute — results across the tree", () => {
     const [a, b] = ids;
     const sibling = await h.sta.resume(a, { parentRunId: b });
     expect(expectStatus(sibling, "failed").error.code).toBe("not_run_owner");
+  });
+});
+
+describe("sta.execute — writable Targets: a role from the Knowledge workspace writes a Target", () => {
+  /** A Knowledge workspace with one mapped Target beside it; the mapping is the resolver seam. */
+  function targetHarness() {
+    const workspace = tmp("sta-exec-kb-");
+    const target = tmp("sta-exec-target-");
+    const other = tmp("sta-exec-other-");
+    const mapped = [{ targetId: "backend", path: target, access: "write" as const }];
+    const behaviour: { respond: Respond } = { respond: () => okResult({ text: "done" }) };
+    const adapters: Record<string, MockRuntimeAdapter> = {};
+    for (const id of RUNTIMES) adapters[id] = new MockRuntimeAdapter({ id, respond: (req, call) => behaviour.respond(req, call) });
+    const sta = createSta({
+      registry: new RuntimeRegistry(Object.values(adapters)),
+      runStore: path.join(tmp("sta-exec-store-"), "runs"),
+      env: {},
+      cwd: workspace,
+      resolveWritableTargets: ({ requests }) =>
+        requests.map((name) => {
+          const found = mapped.find((m) => m.targetId === name || m.path === name);
+          if (!found) throw new WritableTargetRequestError(`"${name}" names no mapped Target`);
+          return found;
+        }),
+    });
+    return { sta, workspace, target, other, adapters, on: (respond: Respond) => (behaviour.respond = respond) };
+  }
+
+  it("runs in the workspace, writes only the Target, and hands the guard the Target and the Knowledge root", async () => {
+    const h = targetHarness();
+
+    const result = expectStatus(
+      await h.sta.execute({ runtime: "claude-code", task: "BE-005", role: "backend-engineer", writableTargets: ["backend"] }),
+      "completed",
+    );
+
+    const req = h.adapters["claude-code"].requests[0];
+    expect(req.cwd).toBe(h.workspace);
+    expect(req.role).toBe("backend-engineer");
+    expect(req.workRoots).toEqual([{ targetId: "backend", path: h.target, access: "write" }]);
+    expect(req.knowledgeRoot).toBe(h.workspace);
+    expect(req.autonomy).toBe("edit");
+    // The workspace is read-only: no workspace glob, and it is not a write root.
+    expect(req.guards.writeAllow).toEqual([]);
+    expect(req.guards.exitChecks).toContain("no-hardcoded-secret");
+    expect(req.env!.STA_WRITABLE_WORK_ROOTS).toBe(JSON.stringify([h.target]));
+    expect(JSON.parse(req.env!.STA_TARGET_WORK_ROOTS)).toEqual([{ targetId: "backend", path: h.target, access: "write" }]);
+    expect(req.env!.STA_KNOWLEDGE_ROOT).toBe(h.workspace);
+    expect(req.env!.STA_ROLE).toBe("backend-engineer");
+    expect(req.prompt).toContain(`backend: ${h.target}`);
+    expect(h.sta.run(result.run.runId)!.workRoots).toEqual([{ targetId: "backend", path: h.target, access: "write" }]);
+  });
+
+  it("is refused without a role, for an unmapped Target, for an explicit read-only run, or for a Target that is the workspace", async () => {
+    const h = targetHarness();
+    const code = async (r: Partial<ExecuteRequest>) => {
+      const out = await h.sta.execute({ runtime: "claude-code", task: "t", ...r });
+      return out.status === "failed" ? out.error.code : out.status;
+    };
+
+    expect(await code({ writableTargets: ["backend"] })).toBe("invalid_permissions");
+    expect(await code({ role: "backend-engineer", writableTargets: ["nope"] })).toBe("target_not_mapped");
+    expect(await code({ role: "backend-engineer", writableTargets: ["backend"], permissions: { write: false } })).toBe("invalid_permissions");
+    const inside = createSta({
+      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "claude-code" })]),
+      runStore: path.join(tmp("sta-exec-store-"), "runs"),
+      env: {},
+      cwd: h.workspace,
+      resolveWritableTargets: () => [{ targetId: "self", path: h.workspace, access: "write" }],
+    });
+    const self = await inside.execute({ runtime: "claude-code", task: "t", role: "backend-engineer", writableTargets: ["self"] });
+    expect(expectStatus(self, "failed").error.code).toBe("invalid_permissions");
+    expect(h.adapters["claude-code"].requests).toHaveLength(0);
+  });
+
+  it("a child inherits its parent's Targets, may not name one the parent lacks, and a read-only child gets none", async () => {
+    const h = targetHarness();
+    const seen: unknown[] = [];
+    h.on(async (req) => {
+      if (!req.prompt.startsWith("parent")) return okResult();
+      const parentRunId = runIdOf(req);
+      const inherit = await h.sta.execute({ runtime: "codex", task: "c1", parentRunId, role: "backend-engineer", permissions: { write: true } });
+      seen.push(inherit.status === "completed" ? h.sta.run(inherit.run.runId)!.workRoots : inherit.status);
+      const escalate = await h.sta.execute({ runtime: "codex", task: "c2", parentRunId, role: "backend-engineer", writableTargets: [h.other] });
+      seen.push(escalate.status === "failed" ? escalate.error.code : escalate.status);
+      const reader = await h.sta.execute({ runtime: "codex", task: "c3", parentRunId, permissions: { write: false } });
+      seen.push(reader.status === "completed" ? h.sta.run(reader.run.runId)!.workRoots ?? "none" : reader.status);
+      return okResult();
+    });
+
+    await h.sta.execute({ runtime: "claude-code", task: "parent", role: "backend-engineer", writableTargets: ["backend"] });
+
+    expect(seen).toEqual([[{ targetId: "backend", path: h.target, access: "write" }], "permission_escalation", "none"]);
+    expect(h.adapters.codex.requests[0].env!.STA_WRITABLE_WORK_ROOTS).toBe(JSON.stringify([h.target]));
   });
 });

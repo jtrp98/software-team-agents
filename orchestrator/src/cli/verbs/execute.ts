@@ -8,6 +8,12 @@ import type { RuntimeAutonomy } from "../../runtime/runtimeAdapter.js";
  * `sta execute` — the direct execution primitive on the command line.
  *
  *   sta execute --runtime <id> --task <text> [...]      start a run, print its JSON result
+ *
+ * `--workspace` is where the run executes — the role's definition and guard
+ * wiring are read from there. To change code in a Target from a Knowledge
+ * workspace, keep the workspace there and add `--role <role> --writable-target
+ * <id|path>` (repeatable): the Target becomes a write root the guard checks
+ * against that role, and the workspace stays read-only.
  *   sta execute resume <run-id> [--context <text>]     continue a run after approval / partial
  *   sta execute approve <run-id> --request <id> (--yes|--no) --by <name> [--note <text>]
  *   sta execute show <run-id>                          the run tree it belongs to
@@ -22,7 +28,7 @@ import type { RuntimeAutonomy } from "../../runtime/runtimeAdapter.js";
 const VALUE_FLAGS = new Set([
   "--runtime", "--task", "--workspace", "--role", "--context", "--parent-run", "--write-path", "--autonomy", "--action",
   "--max-depth", "--max-children", "--max-runs", "--timeout-ms", "--model", "--effort", "--run-store", "--project-root",
-  "--request", "--by", "--note",
+  "--request", "--by", "--note", "--writable-target",
 ]);
 const BOOLEAN_FLAGS = new Set(["--write", "--no-delegate", "--yes", "--no"]);
 
@@ -107,6 +113,7 @@ export async function runExecuteVerb(rest: string[], defaultProjectRoot: string,
     task,
     ...(workspace ? { workspace: path.resolve(workspace) } : {}),
     ...(one(p, "--role") ? { role: one(p, "--role") } : {}),
+    ...(p.values.get("--writable-target") ? { writableTargets: p.values.get("--writable-target") } : {}),
     ...(one(p, "--context") ? { context: one(p, "--context") } : {}),
     ...(one(p, "--parent-run") ? { parentRunId: one(p, "--parent-run") } : {}),
     permissions: {

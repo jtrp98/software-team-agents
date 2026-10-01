@@ -106,7 +106,7 @@ export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
     "- Hard boundary: no state-changing git.",
     "- Hard boundary: write only inside resolved writable workspace roots.",
     "- Hard boundary: write only paths allowed by the active role contract.",
-    "- Hard boundary: confirm workspace ↔ binding before writing anything — the bound root is read-only context here; Target writes go through orchestrated stages.",
+    "- Hard boundary: confirm workspace ↔ binding before writing anything — the bound root is read-only context here; Target writes go through STA-governed runs (`sta grant issue` · `sta execute` · `sta run`). A human start/continue follows `/work` §2 even when `/work` was not typed: begin this turn in its route order; never hand over a command to paste or ask for a relaunch — stop only on a human gate or when every route refused.",
     "- Hard boundary: amend existing module docs section-by-section; never regenerate them.",
     "- Hard boundary: approvals/sign-offs are human acts; agents never forge them.",
     "- Hard boundary: dates and unclear business rules come from a person; never improvise them.",

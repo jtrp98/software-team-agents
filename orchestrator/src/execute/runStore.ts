@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { renameSyncRetrying } from "../concurrency/atomicRename.js";
-import type { RuntimeAutonomy, RuntimeUsage } from "../runtime/runtimeAdapter.js";
+import type { RuntimeAutonomy, RuntimeUsage, RuntimeWorkRoot } from "../runtime/runtimeAdapter.js";
 
 /**
  * The run tree: one JSON file per run, grouped by the root run it descends from.
@@ -79,6 +79,13 @@ export interface RunRecord {
   readonly task: string;
   readonly context?: string;
   readonly workspace: string;
+  /**
+   * Target repositories the run may write besides its workspace (`--writable-target`),
+   * each a mapped Target resolved at run start. The run still executes in its
+   * workspace — where the role's definition and guard wiring live — and the
+   * guard applies the role's rules to these roots. Absent on a workspace-only run.
+   */
+  readonly workRoots?: readonly RuntimeWorkRoot[];
   readonly permissions: ResolvedPermissions;
   readonly limits: ResolvedLimits;
   readonly actions: readonly string[];

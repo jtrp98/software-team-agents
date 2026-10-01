@@ -165,6 +165,21 @@ export function disallowRulesFromGuards(guards: RuntimeGuards): string[] {
 }
 
 /**
+ * `--add-dir=<root>` for every writable work root other than cwd — the same
+ * set the OS isolation profile grants (`claudeIsolationInvocationFor`), so the
+ * CLI's own edit permission and the sandbox agree on where the run may write.
+ * Empty for a read-only run and for a run whose only root is its cwd, keeping
+ * that request shape unchanged.
+ */
+export function addDirArgsFor(req: Pick<RuntimeAgentRequest, "cwd" | "autonomy" | "workRoots">): string[] {
+  if (req.autonomy === "read-only") return [];
+  const cwd = path.resolve(req.cwd);
+  const roots = new Set((req.workRoots ?? []).filter((root) => root.access === "write").map((root) => path.resolve(root.path)));
+  roots.delete(cwd);
+  return [...roots].map((root) => `--add-dir=${root}`);
+}
+
+/**
  * V13 TASK-031 — the OS approval-isolation boundary for Claude Code.
  *
  * Claude Code's own `sandbox.*` settings are not a boundary here: on Windows
@@ -630,11 +645,20 @@ export class ClaudeCodeAdapter implements ExecutorPort {
     // while `claude -p` accepts its default text input from stdin.
     const disallowRules = disallowRulesFromGuards(req.guards);
     if (disallowRules.length > 0) args.push(`--disallowedTools=${disallowRules.join(",")}`);
+    // Write roots outside cwd (a Target written from a Knowledge workspace):
+    // Claude Code's own edit permission covers only its working directories,
+    // so each one is added as one. Same equals form, same reason as above.
+    args.push(...addDirArgsFor(req));
     // Only when a schema was requested — default runs stay free-form.
     if (this.outputSchema) args.push("--json-schema", JSON.stringify(this.outputSchema));
 
-    // TASK-031: the whole claude process runs inside the per-run OS isolation
-    // wrapper; there is no unwrapped spawn path.
+    // A direct run (`sta execute`) asks for no OS wrapper: claude runs the way
+    // a person runs it — their own login and network, in the run's cwd — and the
+    // workspace's own .claude/settings.json hooks still guard every tool call.
+    if (req.osIsolation === false) return this.executeDirect(req, args, modelDiagnostics);
+
+    // TASK-031: every other claude process runs inside the per-run OS isolation
+    // wrapper.
     let runDirs: ClaudeIsolationRunDirs;
     let isolation: ClaudeIsolationInvocation;
     try {
@@ -713,16 +737,81 @@ export class ClaudeCodeAdapter implements ExecutorPort {
       cleanupRun();
     }
 
+    return this.resultFrom(req, proc, resolvedThrough, reads, modelDiagnostics, true);
+  }
+
+  /**
+   * One unwrapped spawn of `claude` itself, for a run that asked for no OS
+   * isolation. `windowsHide` keeps a console window from opening for it.
+   */
+  private async executeDirect(req: RuntimeAgentRequest, args: string[], modelDiagnostics: string[]): Promise<RuntimeAgentResult> {
+    let ledgerDir: string | null = null;
+    try {
+      ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-claude-direct-"));
+    } catch {
+      ledgerDir = null; // the read ledger is evidence, never a reason not to run
+    }
+    const readLedgerPath = ledgerDir ? path.join(ledgerDir, "sta-read-ledger.jsonl") : undefined;
+    const largeFileEnv = {
+      ...largeFilePolicyEnv(resolveLargeFilePolicyFromProject(req.bindingRoot ?? req.cwd)),
+      ...(readLedgerPath ? { STA_READ_LEDGER: readLedgerPath } : {}),
+    };
+    let proc: SpawnSyncReturns<string>;
+    let resolvedThrough: string | null = null;
+    let reads: ReadLedgerSummary | undefined;
+    try {
+      ({ proc, resolvedThrough } = this.spawnResolved("claude", args, {
+        cwd: req.cwd,
+        encoding: "utf8",
+        timeout: req.timeoutMs ?? this.defaultTimeoutMs,
+        maxBuffer: 64 * 1024 * 1024,
+        input: req.prompt,
+        windowsHide: true,
+        env: { ...process.env, ...largeFileEnv, ...req.env, ...roleEnv(req.role) },
+      }));
+      if (readLedgerPath) {
+        try {
+          reads = summarizeReadLedger(fs.readFileSync(readLedgerPath, "utf8"));
+        } catch {
+          reads = undefined;
+        }
+      }
+    } catch (e) {
+      return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [...modelDiagnostics, `failed to spawn \`claude\`: ${String(e)}`] };
+    } finally {
+      if (ledgerDir) {
+        try {
+          fs.rmSync(ledgerDir, { recursive: true, force: true });
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    }
+    return this.resultFrom(req, proc, resolvedThrough, reads, modelDiagnostics, false);
+  }
+
+  private async resultFrom(
+    req: RuntimeAgentRequest,
+    proc: SpawnSyncReturns<string>,
+    resolvedThrough: string | null,
+    reads: ReadLedgerSummary | undefined,
+    modelDiagnostics: string[],
+    wrapped: boolean,
+  ): Promise<RuntimeAgentResult> {
     const guards = await guardReportFor(this.workspace, this.binding.guardConfigPath!, req.guards);
 
     if (proc.error) {
       const code = (proc.error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        // ENOENT here is the wrapper: the isolated claude runs inside `codex sandbox`.
-        const diagnostics = [...modelDiagnostics, `\`codex\` (the OS isolation wrapper for claude) not found: ${proc.error.message}`];
+        // ENOENT on a wrapped run is the wrapper: the isolated claude runs inside `codex sandbox`.
+        const binary = wrapped ? "codex" : "claude";
+        const diagnostics = [
+          ...modelDiagnostics,
+          wrapped ? `\`codex\` (the OS isolation wrapper for claude) not found: ${proc.error.message}` : `\`claude\` binary not found: ${proc.error.message}`,
+        ];
         if (resolvedThrough === null && this.platform === "win32") {
           diagnostics.push(
-            "on Windows an npm-installed `codex` is a .cmd/.ps1 shim spawnSync cannot execute; no resolvable entry was found — install the native build or expose a real executable on PATH",
+            `on Windows an npm-installed \`${binary}\` is a .cmd/.ps1 shim spawnSync cannot execute; no resolvable entry was found — install the native build or expose a real executable on PATH`,
           );
         }
         return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics };

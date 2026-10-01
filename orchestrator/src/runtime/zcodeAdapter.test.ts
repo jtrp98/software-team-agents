@@ -269,6 +269,7 @@ describe("ZcodeAdapter — executeAgent", () => {
     const { spawn, calls } = fakeSpawn({ trust: trustStatus("pending_trust") });
     const result = await adapterFor(fx, spawn).executeAgent(request(fx, { autonomy: "edit", guards: GUARDS }));
     expect(result.status).toBe("ERROR");
+    expect(result.diagnostics.join(" ")).toMatch(/zcode hooks trust grant --workspace .+ --all-current --bundle-digest b{64}/);
     expect(result.diagnostics.join(" ")).toMatch(/zcode hooks trust review/);
     expect(result.diagnostics.join(" ")).toMatch(/block-path-permissions\.js: pending_trust/);
     expect(calls.args.map((args) => args[0])).toEqual(["hooks"]);
