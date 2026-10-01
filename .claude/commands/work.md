@@ -21,7 +21,7 @@ Answer from real state only (the same rules /status and /next follow):
 2. Route A — work here, governed: `sta grant issue <task-id> --stage <stage>`. When it issues, the per-role layer is on for this attempt: work under the contract's write/deny rules, in the Targets this session may write (granted at launch via `--writable-target`; a write outside them is refused by name). End the attempt with `sta grant consume`. This route requires verified native pre-tool enforcement: Codex interactive is unguarded even after a grant, so any Codex write must use Route B with `--runtime codex` (or the Codex headless pipeline in Route C). Direct interactive writes are not certified.
 3. Route B — delegate one bounded task: `sta execute --runtime <id> --task "<task>" --workspace <target-root> --write --role <role>`. Use it when the grant is refused or the task is not registered.
 4. Route C — the full pipeline: `sta run --task-id <id> --module <module>`.
-5. Any refusal is relayed verbatim with its remedy. Never work around it: no hand-set guard environment variables, no writing past a hook, no editing `.workflow/` state, no re-trying a refused route unchanged.
+5. Any refusal is relayed verbatim with its remedy. Never work around it: no hand-set guard environment variables, no writing past a hook, no editing STA's runtime/governance state directories, no re-trying a refused route unchanged.
 
 ## 3. Closing the attempt
 

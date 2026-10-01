@@ -1,5 +1,47 @@
 # Release Notes
 
+## software-team-agents 8.1.0 — interactive workflow enablement (2026-10-01)
+
+> **Version 8.1.0 and release date 2026-10-01 confirmed by the release owner.** The Minor bucket is
+> the mechanical result of the version rule at the bottom of this file: nothing that passed before is
+> refused, no default flips — every change is opt-in or additive. `templates/manifest.json` is
+> re-stamped by `npm run build`. The private development package `@software-team-agents/orchestrator`
+> remains independently versioned at `0.3.0`.
+
+**Bucket: Minor (`8.0.0 → 8.1.0`, confirmed).** One track: make the interactive session a
+first-class way to run STA work, end to end.
+
+- **`open --writable-target <id|path>` (repeatable)** — the person grants Target write access per
+  launch. Preflight resolves each request against the workspace's own `.workflow/targets.local.yaml`
+  (id or canonical path) and refuses unknown names, the session's own workspace, and any request
+  when no mapping resolves. A granted launch sets `STA_WRITABLE_WORK_ROOTS` to exactly the granted
+  roots (still never shell-inherited) and flips those entries to `access: "write"` in
+  `STA_TARGET_WORK_ROOTS`. The per-role layer is untouched: a Target write still requires
+  `STA_ROLE` or a valid `sta grant issue` token — the flag opens the boundary, never the role.
+  Recorded at launch in `runs.writable_targets` (SQLite schema 23 → 24, additive nullable column;
+  migrates in place; historical rows read null). **ADR-028** records the decision.
+- **`/work` command (catalog 35 → 36, TASKS §1.1 amended)** — the natural-language operating loop
+  for interactive sessions: pending-work questions are answered from real state only
+  (`_docs/status.md` + the plan's phase tables), and "start" picks a governed route in order
+  (`sta grant issue` in-session · `sta execute` · `sta run`), with refusals relayed verbatim and
+  never worked around. Rendered to every host: Claude commands, OpenCode commands, agent skills,
+  and now Codex prompts — `.codex/prompts/*.md` renderings for the whole command set, so Codex
+  desktop sessions see `/work` too (Codex reads prompts globally; the workspace copy rides sync).
+- **Antigravity installer + real detection** — `software-team-agents install-antigravity-hook` /
+  `uninstall-antigravity-hook` (explicit, human-invoked only; backs up the existing file, writes
+  machine-global `~/.gemini/config/hooks.json` wiring PreToolUse to this workspace's
+  `.agents/hooks/sta-guard.js` by absolute path). `antigravityCoverage()` no longer hardcodes
+  `unguarded`: a machine-global hooks file wired to this workspace upgrades the verdict to what the
+  UAT proved (PreToolUse deny, fail-closed); absent wiring keeps the old verdict and detail.
+  Production role dispatch for AGY remains suspended (V13 TASK-027 a1) — unchanged by design.
+- **Self-test catalog** — command/opencode/skill count pins 35 → 36; the session-level command
+  category (`next status verify changed work`) is now tallied in TASKS §1.1.
+
+**What you may need to do:** nothing mandatory — sessions opened without `--writable-target`
+behave byte-for-byte as before, and sync delivers `/work` + `.codex/prompts` without config. On
+machines that want AGY enforcement, run `software-team-agents install-antigravity-hook` from the
+Knowledge workspace (explicit; never auto-run).
+
 ## software-team-agents 8.0.0 — composable execution layer + Large File Context Policy (2026-09-30)
 
 > **Version 8.0.0 and release date 2026-09-30 confirmed by the release owner.** The Major bucket is
