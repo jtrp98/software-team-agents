@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { isUserOverridden, type TargetConfig, type TargetManifest } from "./targetMeta.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
@@ -573,45 +574,116 @@ export function zcodeCoverage(targetRoot: string): GuardCoverage {
   return zcodeCoverageWithSyncedPayload();
 }
 /**
- * Antigravity's guard mechanism is real, and the binding this framework ships
- * is nonetheless inert. Both halves are observed, and the gap between them is
- * the whole verdict.
+ * Antigravity machine-level hook coverage.
  *
- * On a real agy 1.1.27 install the `PreToolUse` deny path works exactly as its
- * contract says: a hook returning `{"decision":"deny"}` blocks the tool step,
- * and a hook that cannot even load blocks it too — fail-closed, confirmed. But
- * that only happens when the hooks file sits in the machine-global
- * customization root (`~/.gemini/config/hooks.json`). The workspace-level
- * `.agents/hooks.json` this framework generates was never once consulted, in
- * seven configurations across two versions.
+ * Real agy UAT on 1.1.27/1.2.x proved the PreToolUse deny path works in-band
+ * with fail-closed semantics (a denied step stops; an unparseable or crashing hook
+ * also stops). But agy reads hooks exclusively from the machine-global
+ * `~/.gemini/config/hooks.json`.
  *
- * So the verdict stays `unguarded`, and the reason is not "unproven" any more:
- * the file a workspace carries enforces nothing, and enforcement currently
- * requires a per-machine install this framework does not perform. `partial`
- * would let a launch preflight pass on a guard that is demonstrably not running.
+ * When that file exists and wires PreToolUse to the workspace's
+ * `.agents/hooks/sta-guard.js`, the verdict is `partial`: the universal floor,
+ * writes outside workspace, and contract path permissions are enforced in-band.
+ * Doc-rewrite, secret-leak, PostToolUse, and per-agent exit checks have no native
+ * AGY mechanism.
  */
 export function antigravityCoverageWithHooks(): GuardCoverage {
+  return {
+    runtime: "antigravity",
+    level: "partial",
+    enforced: [RuntimeCapability.PRE_TOOL_GUARD],
+    unenforced: [
+      RuntimeCapability.POST_TOOL_GUARD,
+      RuntimeCapability.EXIT_GUARD,
+      RuntimeCapability.PER_AGENT_EXIT_GUARD,
+    ],
+    detail:
+      "machine-global ~/.gemini/config/hooks.json wires PreToolUse to .agents/hooks/sta-guard.js (fail-closed deny verified on agy 1.1.27/1.2.x); " +
+      "block-outside-repo, block-path-permissions, and approval channel are enforced in-band; PostToolUse and exit checks have no native AGY mechanism",
+  };
+}
+
+export function antigravityCoverageUnwired(detail?: string): GuardCoverage {
   return {
     runtime: "antigravity",
     level: "unguarded",
     enforced: [],
     unenforced: ALL_GUARD_CAPABILITIES,
     detail:
-      `${AGY_HOOKS_PATH} and ${AGY_GUARD_WRAPPER_PATH} are generated, but agy reads PreToolUse hooks only from the machine-global ~/.gemini/config/hooks.json — the workspace file is never consulted, verified on 1.1.27 — ` +
-      "so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive in a workspace, however complete the binding looks",
+      detail ??
+      "machine-global ~/.gemini/config/hooks.json does not wire PreToolUse to this workspace's .agents/hooks/sta-guard.js — " +
+      "run software-team-agents install-antigravity-hook to wire machine-level hooks",
   };
 }
 
-function antigravityCoverage(targetRoot: string): GuardCoverage {
-  const withHooks = antigravityCoverageWithHooks();
-  const present =
-    fs.existsSync(path.join(targetRoot, ...AGY_HOOKS_PATH.split("/"))) &&
-    fs.existsSync(path.join(targetRoot, ...AGY_GUARD_WRAPPER_PATH.split("/")));
-  if (present) return withHooks;
-  return {
-    ...withHooks,
-    detail: `no ${AGY_HOOKS_PATH} / ${AGY_GUARD_WRAPPER_PATH} in this workspace — run software-team-agents sync; note that syncing them changes nothing until agy reads a workspace hooks file at all`,
-  };
+export function antigravityCoverage(
+  targetRoot: string,
+  options?: { machineHooksPath?: string },
+): GuardCoverage {
+  const wrapperPresent = fs.existsSync(path.join(targetRoot, ...AGY_GUARD_WRAPPER_PATH.split("/")));
+  if (!wrapperPresent) {
+    return antigravityCoverageUnwired(
+      `no ${AGY_GUARD_WRAPPER_PATH} in this workspace — run software-team-agents sync; note that syncing alone does not wire machine-global hooks`,
+    );
+  }
+
+  const hooksFile = options?.machineHooksPath ?? path.join(os.homedir(), ".gemini", "config", "hooks.json");
+  if (!fs.existsSync(hooksFile)) {
+    return antigravityCoverageUnwired(
+      `no machine-global ${hooksFile} found — run software-team-agents install-antigravity-hook to wire PreToolUse to this workspace's ${AGY_GUARD_WRAPPER_PATH}`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
+  } catch (e) {
+    return antigravityCoverageUnwired(
+      `${hooksFile} is not valid JSON (${e instanceof Error ? e.message : String(e)}) — guards fail closed to unguarded; run software-team-agents install-antigravity-hook to restore/reinstall`,
+    );
+  }
+
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return antigravityCoverageUnwired(
+      `${hooksFile} root must be a JSON object — run software-team-agents install-antigravity-hook to rewrite it`,
+    );
+  }
+
+  const expectedGuardScript = path.resolve(targetRoot, ...AGY_GUARD_WRAPPER_PATH.split("/")).toLowerCase().replace(/\\/g, "/");
+  const rootObj = parsed as Record<string, unknown>;
+
+  let wired = false;
+  for (const hookDef of Object.values(rootObj)) {
+    if (!hookDef || typeof hookDef !== "object" || Array.isArray(hookDef)) continue;
+    const def = hookDef as Record<string, unknown>;
+    if (def.enabled === false) continue;
+    const preToolUse = def.PreToolUse;
+    if (!Array.isArray(preToolUse)) continue;
+    for (const entry of preToolUse) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const hooks = (entry as Record<string, unknown>).hooks;
+      if (!Array.isArray(hooks)) continue;
+      for (const h of hooks) {
+        if (!h || typeof h !== "object" || Array.isArray(h)) continue;
+        const cmd = (h as Record<string, unknown>).command;
+        if (typeof cmd === "string") {
+          const normCmd = cmd.toLowerCase().replace(/\\/g, "/");
+          if (normCmd.includes(expectedGuardScript)) {
+            wired = true;
+            break;
+          }
+        }
+      }
+      if (wired) break;
+    }
+    if (wired) break;
+  }
+
+  if (wired) return antigravityCoverageWithHooks();
+
+  return antigravityCoverageUnwired(
+    `machine-global ${hooksFile} exists but does not wire PreToolUse to this workspace's ${AGY_GUARD_WRAPPER_PATH} — run software-team-agents install-antigravity-hook to point machine hooks at this workspace`,
+  );
 }
 
 export function guardCoverage(options: {
@@ -623,10 +695,12 @@ export function guardCoverage(options: {
   config?: TargetConfig;
   /** Reuses an already-computed Claude wiring instead of reading settings twice. */
   wiring?: GuardWiringStatus;
+  /** Optional override for machine-level hooks (Antigravity). */
+  machineHooksPath?: string;
 }): GuardCoverage {
   if (options.runtime === "codex") return codexCoverage(options.targetRoot);
   if (options.runtime === "zcode") return zcodeCoverage(options.targetRoot);
-  if (options.runtime === "antigravity") return antigravityCoverage(options.targetRoot);
+  if (options.runtime === "antigravity") return antigravityCoverage(options.targetRoot, { machineHooksPath: options.machineHooksPath });
   if (options.runtime === "opencode") return opencodeCoverage(options.targetRoot);
   const wiring = options.wiring ?? (options.templatesDir === undefined
     ? undefined

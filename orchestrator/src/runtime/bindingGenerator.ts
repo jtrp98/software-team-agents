@@ -713,11 +713,11 @@ export interface RootBindingRendering {
 
 export type BindingRendering = AgentBindingRendering | RootBindingRendering;
 
-/** The Codex root instruction is a rendering of CLAUDE.md's managed bootstrap block, not another authored rules document. */
+/** The Codex and Antigravity root instruction is a rendering of CLAUDE.md's managed bootstrap block, not another authored rules document. */
 export function renderAgentsPointer(claudeMd: string): string {
   const inspected = inspectBootstrapBlock(claudeMd);
   if (inspected.state !== "valid") throw new Error("CLAUDE.md has no valid sta:bootstrap block");
-  return `${inspected.block}Full operating rules: see [CLAUDE.md](CLAUDE.md).\n`;
+  return `${inspected.block}Full operating rules: see [CLAUDE.md](CLAUDE.md).\nInteractive work loop: see [.agents/skills/work/SKILL.md](.agents/skills/work/SKILL.md) (or run the /work command).\n`;
 }
 
 export const BINDING_RENDERINGS: readonly BindingRendering[] = [

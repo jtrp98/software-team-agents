@@ -11,6 +11,7 @@ import { installedFrameworkVersion } from "./version.js";
 import { runSession, type RuntimeName } from "./devCommand.js";
 import { applyCleanup, CleanupUnmanagedWorkspaceError, planCleanup, renderCleanupPlan, reportCleanupResult } from "./cleanupCommand.js";
 import { extractRootSelectorFlag } from "../threeRepo/rootSelector.js";
+import { installAntigravityHook, uninstallAntigravityHook } from "./antigravityHookInstaller.js";
 
 /**
  * The single-workspace entry point: `software-team-agents init|sync|status|open`,
@@ -40,6 +41,11 @@ export const TARGET_USAGE =
   "  open      preflight, then launch an agent runtime from this Knowledge workspace\n" +
   "  cleanup   move this workspace's Framework payload into a backup and un-manage it (V10):\n" +
   "            manifest-tracked files only, overrides kept, reversible via sta rollback\n" +
+  "  install-antigravity-hook\n" +
+  "            explicitly wire machine-level ~/.gemini/config/hooks.json PreToolUse to\n" +
+  "            this workspace's .agents/hooks/sta-guard.js (backed up first)\n" +
+  "  uninstall-antigravity-hook\n" +
+  "            remove sta-guard entry from ~/.gemini/config/hooks.json, or restore with --restore\n" +
   "\n" +
   "options:\n" +
   "  --target-root <path>   operate on <path> instead of the current directory\n" +
@@ -60,12 +66,13 @@ export const TARGET_USAGE =
   "                         each verdict, and `sta grant issue` for a governed direct-mode attempt\n" +
   "  --dry-run              cleanup: print the plan and touch nothing\n" +
   "  --yes                  cleanup: the human confirmation — move the payload for real\n" +
+  "  --restore              uninstall-antigravity-hook: restore ~/.gemini/config/hooks.json from backup\n" +
   "  --json                 status: machine-readable output\n" +
   "  -h, --help             show this help\n" +
   "  --version              show the installed Framework version\n";
 
 export interface TargetCliArgs {
-  command?: "init" | "sync" | "status" | "open" | "cleanup";
+  command?: "init" | "sync" | "status" | "open" | "cleanup" | "install-antigravity-hook" | "uninstall-antigravity-hook";
   targetRoot?: string;
   stack?: string;
   /** `--root <name>` — the named Knowledge root this command reads from (DR §4). */
@@ -81,6 +88,8 @@ export interface TargetCliArgs {
   dryRun: boolean;
   /** cleanup: the explicit human confirmation that the payload may move. */
   yes: boolean;
+  /** uninstall-antigravity-hook: restore from backup */
+  restore: boolean;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -89,7 +98,7 @@ export interface TargetCliArgs {
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
   const { requestedName, rest } = extractRootSelectorFlag(argv);
-  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], writableTargets: [], dryRun: false, yes: false, json: false, help: false, version: false, rootName: requestedName };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], writableTargets: [], dryRun: false, yes: false, restore: false, json: false, help: false, version: false, rootName: requestedName };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     switch (arg) {
@@ -98,8 +107,18 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
       case "status":
       case "open":
       case "cleanup":
+      case "install-antigravity-hook":
+      case "uninstall-antigravity-hook":
         if (args.command) throw new Error(`only one command may be given (got both ${args.command} and ${arg})`);
         args.command = arg;
+        break;
+      case "install-hook":
+        if (args.command) throw new Error(`only one command may be given (got both ${args.command} and ${arg})`);
+        args.command = "install-antigravity-hook";
+        break;
+      case "uninstall-hook":
+        if (args.command) throw new Error(`only one command may be given (got both ${args.command} and ${arg})`);
+        args.command = "uninstall-antigravity-hook";
         break;
       case "dev":
       case "ba":
@@ -142,6 +161,9 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         break;
       case "--yes":
         args.yes = true;
+        break;
+      case "--restore":
+        args.restore = true;
         break;
       case "--json":
         args.json = true;
@@ -350,6 +372,22 @@ export async function runTargetCli(
         }
         const result = applyCleanup(plan, new Date().toISOString());
         reportCleanupResult(result, loadTargetConfig(targetRootArg));
+        return 0;
+      }
+
+      case "install-antigravity-hook": {
+        const result = installAntigravityHook({
+          targetRoot: targetRootArg,
+        });
+        console.log(result.message);
+        return 0;
+      }
+
+      case "uninstall-antigravity-hook": {
+        const result = uninstallAntigravityHook({
+          restore: args.restore,
+        });
+        console.log(result.message);
         return 0;
       }
 

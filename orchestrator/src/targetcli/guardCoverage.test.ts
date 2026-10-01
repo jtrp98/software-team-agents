@@ -323,18 +323,16 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
   });
 });
 
-describe("T-V6-012 — Antigravity guard coverage tells the truth about an unobserved mechanism", () => {
-  it("reports unguarded even with both guard files present, because agy never reads the workspace file", () => {
+describe("T-V6-012 — Antigravity guard coverage reflects machine-level hook status", () => {
+  it("reports partial when hooks are wired to the workspace, enforcing PreToolUse", () => {
     const coverage = antigravityCoverageWithHooks();
-    expect(coverage.level).toBe("unguarded");
-    expect(coverage.enforced).toEqual([]);
-    expect(guardCoverageIsPositive(coverage)).toBe(false);
-    // The deny path itself is real; the verdict is about which file agy reads.
-    expect(coverage.detail).toMatch(/only from the machine-global ~\/\.gemini\/config\/hooks\.json/);
-    expect(coverage.detail).toMatch(/never consulted/);
+    expect(coverage.level).toBe("partial");
+    expect(coverage.enforced).toEqual([RuntimeCapability.PRE_TOOL_GUARD]);
+    expect(guardCoverageIsPositive(coverage)).toBe(true);
+    expect(coverage.detail).toMatch(/~\/\.gemini\/config\/hooks\.json wires PreToolUse/);
   });
 
-  it("distinguishes a workspace missing the payload from one that has it, without upgrading either", () => {
+  it("reports unguarded when machine hook does not wire the workspace", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-agy-cov-"));
     roots.push(root);
     const missing = guardCoverage({ runtime: "antigravity", targetRoot: root });
@@ -344,9 +342,10 @@ describe("T-V6-012 — Antigravity guard coverage tells the truth about an unobs
     fs.mkdirSync(path.join(root, ".agents", "hooks"), { recursive: true });
     fs.writeFileSync(path.join(root, ".agents", "hooks.json"), "{}", "utf8");
     fs.writeFileSync(path.join(root, ".agents", "hooks", "sta-guard.js"), "// wrapper", "utf8");
-    const present = guardCoverage({ runtime: "antigravity", targetRoot: root });
+    // With wrapper present but unwired machine hooks, still unguarded
+    const present = guardCoverage({ runtime: "antigravity", targetRoot: root, machineHooksPath: path.join(root, "nonexistent-hooks.json") });
     expect(present.level).toBe("unguarded");
-    expect(present).toEqual(antigravityCoverageWithHooks());
+    expect(present.detail).toMatch(/no machine-global/);
   });
 
   it("never claims PER_AGENT_EXIT_GUARD — AGY documents one Stop event with no subagent counterpart", () => {

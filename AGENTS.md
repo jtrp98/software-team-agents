@@ -17,3 +17,4 @@
 - No role assigned? You are an unassigned session (opened without `sta open`/`sta run`): you may read anything (`sta status`, `sta context --module <name>`, `sta policy`, `sta runtimes`), run read-only commands, amend Knowledge-side documents you are explicitly told to change in this session (amend only — never regenerate), and propose work — the human decides. You may not write Target repos, regenerate module docs, touch approvals/sign-offs, run state-changing git, or claim any gate passed without its deterministic result. Your tool calls may be unguarded in this app — nothing enforces these rules except this document; say so in every proposal you make.
 <!-- /sta:bootstrap -->
 Full operating rules: see [CLAUDE.md](CLAUDE.md).
+Interactive work loop: see [.agents/skills/work/SKILL.md](.agents/skills/work/SKILL.md) (or run the /work command).

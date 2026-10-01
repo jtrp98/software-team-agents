@@ -247,6 +247,7 @@ describe("checkBindings", () => {
     const pointer = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
     expect(pointer).toContain("<!-- sta:bootstrap -->");
     expect(pointer).toContain("[CLAUDE.md](CLAUDE.md)");
+    expect(pointer).toContain(".agents/skills/work/SKILL.md");
     fs.writeFileSync(path.join(root, "AGENTS.md"), pointer.replace("# bootstrap", "# drifted bootstrap"), "utf8");
     expect(checkBindings(root).problems.join("\n")).toMatch(/AGENTS\.md does not match/);
   });

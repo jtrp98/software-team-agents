@@ -882,7 +882,7 @@ describe("software-team-agents — target-first end to end", () => {
       // Authored payload carrying the generated guard-rule block, exactly as the real plugin does.
       { relPath: ".opencode/plugin/sta-guards.js", content: `// authored plugin\n${renderGuardRuleBlock()}` },
       { relPath: "CLAUDE.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\n" },
-      { relPath: "AGENTS.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\nFull operating rules: see [CLAUDE.md](CLAUDE.md).\n" },
+      { relPath: "AGENTS.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\nFull operating rules: see [CLAUDE.md](CLAUDE.md).\nInteractive work loop: see [.agents/skills/work/SKILL.md](.agents/skills/work/SKILL.md) (or run the /work command).\n" },
     ]);
     expect((await capture(() => runTargetCli(["init", "--runtime", "codex", "--runtime", "opencode"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
