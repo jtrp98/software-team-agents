@@ -19,13 +19,19 @@ Answer from real state only (the same rules /status and /next follow):
 3. Pending plan tasks come from `plan.md`'s phase tables — read the plan's summary plus the phase's section, never the whole file. Report task ids with their state (implemented ⬜ / ✅).
 4. When the session carries `STA_CONTEXT_CMD`, offer the exact context command for the next stage (e.g. `sta context <role> --module <module> --phase <n>`).
 
-## 2. "Start task X" — pick the route, in this order
+## 2. "Start task X" — begin this turn
 
-1. Resolve the task id and its stage from `plan.md` and `sta status`. A task the store does not know is a fact to report, not something to self-register — registering plan tasks is `project-manager`'s.
-2. Route A — work here, governed: `sta grant issue <task-id> --stage <stage>`. When it issues, the per-role layer is on for this attempt: work under the contract's write/deny rules, in the Targets this session may write (granted at launch via `--writable-target`; a write outside them is refused by name). End the attempt with `sta grant consume`. This route requires verified native pre-tool enforcement: Codex interactive is unguarded even after a grant, so any Codex write must use Route B with `--runtime codex` (or the Codex headless pipeline in Route C). Direct interactive writes are not certified.
-3. Route B — delegate one bounded task: `sta execute --runtime <id> --task "<task>" --workspace <target-root> --write --role <role>`. Use it when the grant is refused or the task is not registered.
-4. Route C — the full pipeline: `sta run --task-id <id> --module <module>`.
-5. Any refusal is relayed verbatim with its remedy. Never work around it: no hand-set guard environment variables, no writing past a hook, no editing STA's runtime/governance state directories, no re-trying a refused route unchanged.
+The human saying start IS the instruction. Resolve everything yourself — task id, stage, role, and the Target workspace from `plan.md`, `sta status`, and the workspace's Target mapping — and begin in the same turn. Never hand the human a command to paste, and never ask which route to take: route choice is yours, in this order:
+
+1. Route A — work here, governed: `sta grant issue <task-id> --stage <stage>`. Requires a launch that granted Target writes (`--writable-target`) AND verified native pre-tool enforcement — Codex interactive is unguarded even with a grant, so a Codex session goes straight to Route B. When either is missing, skip silently to Route B. When it issues, work under the contract's write/deny rules and end the attempt with `sta grant consume`.
+2. Route B — the default: `sta execute --runtime <id> --task "<task>" --workspace <target-root> --write --role <role>`. The child carries its own identity and boundary, so it works from any session — including one opened with no launch grant — and it is the route for a refused grant or an unregistered task.
+3. Route C — the full pipeline: `sta run --task-id <id> --module <module>`.
+
+A task the store does not know is a fact to handle, not to self-register — registering plan tasks is `project-manager`'s; unregistered simply means Route B, this turn.
+
+"Start/continue phase N" is the same instruction at phase scale: take that phase's pending tasks in `plan.md`'s dependency order and run them one at a time — each task follows the route rules above, with a short result report between tasks. Do not re-ask for permission between tasks; the human gates below are the only stops.
+
+Stop and ask the human only for what is genuinely theirs: approvals/sign-offs, dates, business rules — or when every route has refused, each refusal relayed verbatim with its remedy. Never work around a refusal: no hand-set guard environment variables, no writing past a hook, no editing STA's runtime/governance state directories, no re-trying a refused route unchanged.
 
 ## 3. Closing the attempt
 
