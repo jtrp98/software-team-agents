@@ -196,7 +196,7 @@ describe("evidence store on a real file (V13 TASK-002)", () => {
       expect(migrated.evidenceForTask("T-EV")).toHaveLength(1);
       migrated.close();
       const check = new Database(file);
-      expect(check.pragma("user_version", { simple: true })).toBe(23);
+      expect(check.pragma("user_version", { simple: true })).toBe(24);
       check.close();
     } finally {
       try {

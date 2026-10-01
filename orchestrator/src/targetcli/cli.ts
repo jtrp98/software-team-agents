@@ -49,6 +49,11 @@ export const TARGET_USAGE =
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         open: refuse to run when managed assets are outdated\n" +
+  "  --writable-target <id|path>\n" +
+  "                         open: grant this session write access to a mapped Target\n" +
+  "                         (repeatable); validated against .workflow/targets.local.yaml,\n" +
+  "                         recorded at launch — Target writes still need STA identity\n" +
+  "                         (STA_ROLE or `sta grant issue`)\n" +
   "  --runtime <name>       open: claude (default), codex, opencode or antigravity — guard coverage\n" +
   "                         differs per runtime (claude: enforced, opencode: partial when the guard\n" +
   "                         plugin is present); run `sta runtimes` for the coverage detail behind\n" +
@@ -70,6 +75,8 @@ export interface TargetCliArgs {
   autoSync: boolean;
   runtime: RuntimeName;
   runtimeSelections: RuntimeName[];
+  /** `open --writable-target <id|path>` (repeatable): Targets the launch opens for writing. */
+  writableTargets: string[];
   /** cleanup: plan only, no mutation. */
   dryRun: boolean;
   /** cleanup: the explicit human confirmation that the payload may move. */
@@ -82,7 +89,7 @@ export interface TargetCliArgs {
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
   const { requestedName, rest } = extractRootSelectorFlag(argv);
-  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], dryRun: false, yes: false, json: false, help: false, version: false, rootName: requestedName };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], writableTargets: [], dryRun: false, yes: false, json: false, help: false, version: false, rootName: requestedName };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     switch (arg) {
@@ -115,6 +122,12 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
       case "--no-auto-sync":
         args.autoSync = false;
         break;
+      case "--writable-target": {
+        const value = rest[++i];
+        if (!value) throw new Error("--writable-target requires a Target id or path");
+        args.writableTargets.push(value);
+        break;
+      }
       case "--runtime": {
         const value = rest[++i] as RuntimeName | undefined;
         if (value !== "claude" && value !== "codex" && value !== "opencode" && value !== "antigravity") {
@@ -143,6 +156,9 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
       default:
         throw new Error(`unrecognized argument: ${arg}`);
     }
+  }
+  if (args.writableTargets.length > 0 && args.command !== "open") {
+    throw new Error("--writable-target applies to open — it grants a session's writable boundary at launch");
   }
   return args;
 }
@@ -296,6 +312,7 @@ export async function runTargetCli(
           autoSync: args.autoSync,
           installationConfigPath: options.installationConfigPath,
           rootName: args.rootName,
+          writableTargets: args.writableTargets,
         });
       }
 

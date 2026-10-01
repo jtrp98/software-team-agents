@@ -401,6 +401,84 @@ export function resolveSessionTargetWorkRoots(options: {
     .map((entry) => ({ targetId: entry.target_id, path: entry.path, access: "read" as const }));
 }
 
+/** A `--writable-target` request that names nothing the session's mapping resolves. */
+export class WritableTargetRequestError extends Error {}
+
+/**
+ * The write half of the boundary env, requested explicitly by the person at
+ * launch (`open --writable-target <id|path>`, repeatable).
+ *
+ * `resolveSessionTargetWorkRoots` answers "what exists" (all read); this
+ * answers "what did the human open for writing" — and it only ever selects
+ * from Targets the Knowledge root's own mapping already resolves, because a
+ * grant of something the workspace does not bind is exactly the scope creep
+ * the launcher exists to refuse. The boundary env is the only channel it
+ * feeds: the per-role layer on top (contract + stack rules via `STA_ROLE` or
+ * an `sta grant issue` token) is untouched, so without STA identity the
+ * granted root still refuses Target writes — the flag opens the boundary,
+ * never the role.
+ *
+ * A request may name the Target id or its mapped path (canonical
+ * comparison). The session's own workspace is refused: it is already the
+ * one writable root, and listing it would double-grant nothing.
+ */
+export function resolveWritableTargetWorkRoots(options: {
+  knowledgeRoot: string;
+  workspaceRoot: string;
+  frameworkRoot?: string;
+  requests: readonly string[];
+}): GuardTargetWorkRoot[] {
+  let mapping: ResolvedLocalTarget[];
+  try {
+    const registry = loadTargetRegistry(options.knowledgeRoot);
+    mapping = loadLocalTargetMapping(options.knowledgeRoot, registry, options.frameworkRoot ?? defaultProjectRoot());
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new WritableTargetRequestError(
+      `no resolvable Target mapping in ${options.knowledgeRoot} (${detail}) — --writable-target grants only Targets the workspace's .workflow/targets.local.yaml maps`,
+    );
+  }
+  const available = mapping.map((entry) => entry.target_id).join(", ");
+  const own = canonicalOrResolved(options.workspaceRoot);
+  const granted: GuardTargetWorkRoot[] = [];
+  const seen = new Set<string>();
+  for (const request of options.requests) {
+    const entry = mapping.find(
+      (candidate) => candidate.target_id === request || canonicalOrResolved(candidate.path) === canonicalOrResolved(request),
+    );
+    if (!entry) {
+      throw new WritableTargetRequestError(
+        `"${request}" names no mapped Target (id or path) — this workspace maps: ${available || "none"}`,
+      );
+    }
+    if (canonicalOrResolved(entry.path) === own) {
+      throw new WritableTargetRequestError(
+        `"${request}" is this session's own workspace — it is already the one writable root`,
+      );
+    }
+    if (seen.has(entry.target_id)) continue;
+    seen.add(entry.target_id);
+    granted.push({ targetId: entry.target_id, path: entry.path, access: "write" });
+  }
+  return granted;
+}
+
+/**
+ * The guard identification env carries every mapped Target, so the ones the
+ * launch granted must stop reading as `access: "read"` there — a Target still
+ * marked read-only is refused by name before the writable-root branch ever
+ * runs. Same shape the orchestrated path ships: mixed access, one entry per
+ * Target.
+ */
+export function mergeTargetWorkRootAccess(
+  readRoots: readonly GuardTargetWorkRoot[],
+  writableRoots: readonly GuardTargetWorkRoot[],
+): GuardTargetWorkRoot[] {
+  const writableIds = new Set(writableRoots.map((entry) => entry.targetId));
+  const kept = readRoots.filter((entry) => !writableIds.has(entry.targetId));
+  return [...kept, ...writableRoots];
+}
+
 function canonicalOrResolved(candidate: string): string {
   try {
     return fs.realpathSync.native(path.resolve(candidate));
@@ -418,14 +496,21 @@ function canonicalOrResolved(candidate: string): string {
  * no longer a property of which command opened it. The rule is the session
  * root and nothing else: STA_WRITABLE_WORK_ROOTS stays an EXPLICITLY EMPTY
  * list — never inherited from the user's shell — and every other repository on
- * the machine is read-only from here.
+ * the machine is read-only from here. The one exception is also explicit and
+ * never inherited: `writableWorkRoots` — the launch's own `--writable-target`
+ * selection, resolved and validated by preflight — replaces the empty list
+ * with exactly those roots. An absent or empty selection keeps `[]`.
  *
  * Bound Targets ride on STA_TARGET_WORK_ROOTS in the same shape the
- * orchestrated path uses, all `access: "read"`. That channel is identification,
- * not a grant: it is what lets the guard refuse a Target write by name instead
- * of by path (V10 TASK-023/024). Writing a Target belongs to an orchestrated
- * stage, which arrives with a role and a bounded packet scope; an interactive
- * session has neither.
+ * orchestrated path uses. That channel is identification, not a grant: it is
+ * what lets the guard refuse a Target write by name instead of by path (V10
+ * TASK-023/024). The default is all `access: "read"`; the launch's
+ * `--writable-target` selection arrives with those entries already flipped to
+ * `"write"` (mergeTargetWorkRootAccess), which stops the by-name refusal and
+ * hands the decision to the writable-root branch — where the per-role layer
+ * still applies: STA_ROLE or an `sta grant issue` token, contract and stack
+ * rules unchanged. Writing a Target belongs to an orchestrated stage or an
+ * identity-carrying direct-mode session; a session with neither still refuses.
  *
  * STA_KNOWLEDGE_ROOT and STA_TARGET_ROOT name the read-only context a prompt
  * or hook may need, so nothing has to hard-code a machine-specific path. Both
@@ -444,6 +529,7 @@ export function launchEnv(
   contextCommand?: string,
   targetWorkRoots: readonly GuardTargetWorkRoot[] = [],
   knowledgeRootName?: string,
+  writableWorkRoots?: readonly string[],
 ): NodeJS.ProcessEnv {
   // `role` is part of the signature so call sites state which command opened
   // the session; it no longer decides anything about write scope.
@@ -458,7 +544,12 @@ export function launchEnv(
   delete env.STA_KNOWLEDGE_ROOT_NAME;
   return {
     ...env,
-    STA_WRITABLE_WORK_ROOTS: "[]",
+    // The launch's own validated selection, never a shell-inherited value:
+    // empty keeps the explicit "[]".
+    STA_WRITABLE_WORK_ROOTS:
+      writableWorkRoots && writableWorkRoots.length > 0
+        ? JSON.stringify(writableWorkRoots.map((root) => path.resolve(root)))
+        : "[]",
     ...(targetWorkRoots.length > 0 ? { [GUARD_TARGET_WORK_ROOTS_ENV]: serializeGuardTargetWorkRoots(targetWorkRoots) } : {}),
     ...(knowledgeRoot && knowledgeRootName !== undefined ? { STA_KNOWLEDGE_ROOT: knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: knowledgeRootName } : {}),
     ...(knowledgeRoot && knowledgeRootName === undefined ? { STA_KNOWLEDGE_ROOT: knowledgeRoot } : {}),

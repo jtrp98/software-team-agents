@@ -25,7 +25,11 @@ wire ผ่าน `.claude/settings.json`:
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
 writable boundary ของแต่ละ invocation มาจาก environment (`STA_WRITABLE_WORK_ROOTS` /
-`STA_TARGET_WORK_ROOTS`) ไม่ใช่จากการตั้งค่าค้างในไฟล์ — ดู
+`STA_TARGET_WORK_ROOTS`) ไม่ใช่จากการตั้งค่าค้างในไฟล์ — interactive session ได้ `[]` เป็นค่าเริ่มต้น
+(ค่าที่ inherit จาก shell ถูกทับทิ้งเสมอ) ยกเว้นข้อเดียวที่ explicit เท่ากันคือ `open --writable-target <id|path>`
+(ทำซ้ำได้) ซึ่ง launcher resolve กับ Target mapping ของ workspace เอง แล้วใส่เฉพาะ roots ที่ขอเป็น boundary env
+พร้อม flip รายการนั้นใน identification env เป็น `access: "write"` — แต่ per-role layer บนค่า env นี้ยังทำงานเหมือนเดิม
+ทุกไบต์ — ดู
 [`architecture.md`](architecture.md) § Environment variables และ
 [`workspaces.md`](workspaces.md) § Workspace เดียว
 
@@ -55,6 +59,12 @@ task, scoped paths และ expiry เข้ากับ attempt เดีย�
 knowledge deny ของ backend/frontend/devops และ stack globs
 หาก token เสีย/หมดอายุ/ไม่มี token = กลับไป floor-only เท่าเดิมทุกไบต์ ไม่มีทางหลวมกว่า และ read permission
 ยังเป็น instruction-level เหมือนเดิม (hook ไม่ enforce read เหมือนกันทุก runtime)
+
+สองครึ่งที่ต้องมาพร้อมกันสำหรับการเขียน Target จาก interactive session: (1) **boundary** — `open --writable-target
+<id|path>` เปิด writable root ให้ session (resolve จาก mapping, บันทึกลง session record ณ launch); (2) **identity** —
+`sta grant issue <task-id> --stage <stage>` (หรือ orchestrated `STA_ROLE`) ให้ role + contract + stack ที่ hook ใช้ตัดสิน
+path ขาดอย่างใดอย่างหนึ่ง = เขียน Target ไม่ได้ โดย hook จะบอกข้อความตรงจุด (`A bound Target write requires a
+resolvable role contract.` เมื่อขาด identity)
 
 ## Guards ถูกเทสต์
 

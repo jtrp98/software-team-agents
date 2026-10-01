@@ -1593,6 +1593,12 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(() => parseTargetArgs(["init", "--role", "dev"])).toThrow(/unrecognized argument: --role/);
     expect(fs.existsSync(path.join(target, ".agent-team"))).toBe(false);
 
+    // `--writable-target` is an open-only flag: parsed and repeatable, refused
+    // on any other command.
+    expect(parseTargetArgs(["open", "--writable-target", "api", "--writable-target", "web"]).writableTargets).toEqual(["api", "web"]);
+    expect(() => parseTargetArgs(["open", "--writable-target"])).toThrow(/requires a Target id or path/);
+    expect(() => parseTargetArgs(["sync", "--writable-target", "api"])).toThrow(/applies to open/);
+
     // An ambiguous repository refuses to guess; a hand-set config role remains
     // the one disambiguator now that the flag is gone.
     const both = tmpRoot("both");

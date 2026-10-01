@@ -13,14 +13,16 @@ V10 ยุบ lane `ba`/`dev` เหลือคำสั่งเดียว (
 | | V10 workspace |
 |---|---|
 | Session cwd | Knowledge workspace (writable root เดียวของ session) |
-| Target | read-only จาก interactive session (`STA_TARGET_WORK_ROOTS` ครอบทุก Target ที่ mapping ไว้, `access: read` — เขียน Target ต้องผ่าน orchestrated stage ที่มี `STA_ROLE` + packet scope) |
+| Target | read-only เป็นค่าเริ่มต้น (`STA_TARGET_WORK_ROOTS` ครอบทุก Target ที่ mapping ไว้, `access: read`) — เขียน Target ได้สองทาง: orchestrated stage ที่มี `STA_ROLE` + packet scope หรือ session ที่คนเปิดด้วย `open --writable-target <id\|path>` (ทำซ้ำได้, resolve จาก mapping เท่านั้น, บันทึก ณ launch) แล้วมี STA identity (`sta grant issue` หรือ `STA_ROLE`) ครอบ per-role layer |
 | Knowledge | workspace ของ session เอง — artifact ของแต่ละ role ตาม role contract |
 | Sync payload | ชุดเดียว — prompts ครบทุก role + contracts/workflows/stacks/layout YAML + hooks + scripts + policies + `CLAUDE.md` (ไม่มี profile แยกตาม role อีกแล้ว, V10 TASK-020) |
-| Write ที่อื่น | Framework/Target = DENY (Target ที่ bound ถูกปฏิเสธพร้อมชื่อ target) |
+| Write ที่อื่น | Framework/Target = DENY (Target ที่ bound แต่ไม่ได้รับ grant ถูกปฏิเสธพร้อมชื่อ target) |
 
 Write policy บังคับจริงผ่าน interactive launch: session ได้ writable root เดียวคือ workspace ตัวเอง
-(cwd + `STA_WRITABLE_WORK_ROOTS=[]`) — cross-repo writes hit `block-outside-repo` guard (fail-closed)
-สำหรับ orchestrated run executor ใส่เฉพาะ canonical Target write roots ที่ three-repo preflight resolve แล้ว
+(cwd + `STA_WRITABLE_WORK_ROOTS=[]` — ค่าจาก shell ถูกทับทิ้งเสมอ) — cross-repo writes hit `block-outside-repo` guard
+(fail-closed) ข้อยกเว้นเดียวคือ `--writable-target` ที่ launcher เป็นคนใส่เฉพาะ roots ที่คนขอและ mapping resolve ได้
+(recorded ลง session record) สำหรับ orchestrated run executor ใส่เฉพาะ canonical Target write roots ที่ three-repo
+preflight resolve แล้ว ทั้งสองทาง per-role layer ทำงานเหมือนกัน — ขาด identity ก็ยังเขียน Target ไม่ได้
 
 ## คำสั่งจัดการ workspace
 
@@ -29,12 +31,13 @@ Write policy บังคับจริงผ่าน interactive launch: sess
 | `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV — label เท่านั้น ไม่มีผลตัดสินใด ๆ แล้ว, V10 TASK-021); สำหรับ DEV จะ resolve Target stack จากหลักฐานใน repo; จากนั้นบันทึก identity + profile ใน `.agent-team/config.yaml` แล้ว sync assets — idempotent, รันซ้ำได้ |
 | `sync` | อัปเดต Framework-managed files ตาม installed version — ไฟล์ที่โดนแก้เอง**ไม่ถูก overwrite เงียบ ๆ** (report + recovery advice; `--force` = overwrite พร้อม backup) |
 | `status` | workspace, roots (Target/Framework/Knowledge), installed vs synced version, sync state, conflicts, Claude/Codex/OpenCode/Antigravity readiness (`--json` machine-readable — คง field `role` เดิมสำหรับ legacy config) |
-| `open` | preflight → launch runtime (`claude` default, `codex`/`opencode`/`antigravity` เมื่อ `--runtime`) จาก Knowledge workspace — binding เป็น context เท่านั้น ไม่เคย required |
+| `open` | preflight → launch runtime (`claude` default, `codex`/`opencode`/`antigravity` เมื่อ `--runtime`) จาก Knowledge workspace — binding เป็น context เท่านั้น ไม่เคย required; `--writable-target <id\|path>` (ทำซ้ำได้) เปิด writable root ของ Target ที่ mapping ไว้ให้ session นี้ พร้อมบันทึก grant ณ launch |
 | `cleanup` | ย้าย Framework payload ของ workspace นี้เข้า backup แล้วเลิกจัดการ (V10) — เฉพาะ manifest-tracked files, overrides คงอยู่, กู้คืนได้ด้วย `sta rollback`; ใช้ `--dry-run` ดู plan ก่อน แล้ว `--yes` เป็นการยืนยันของคน |
 
 options ร่วม: `--target-root <path>` · `--role <name>` (retired — accepted and ignored) ·
 `--stack <name>` (init/sync: เมื่อ Target stack ambiguous หรือ unresolved) · `--force` ·
 `--confirm-agents-pointer` (sync เท่านั้น) · `--no-auto-sync` (open) ·
+`--writable-target <id|path>` (open — grant ซ้ำได้, resolve จาก `.workflow/targets.local.yaml`, บันทึก ณ launch) ·
 `--runtime <claude|codex|opencode|antigravity>` (open) · `--allow-unguarded-runtime` (open) · `--json` (status)
 
 ### Target stack resolution
