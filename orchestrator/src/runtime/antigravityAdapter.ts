@@ -17,6 +17,7 @@ import type {
   RuntimeAdapter,
   RuntimeAgentRequest,
   RuntimeAgentResult,
+  RuntimeAutonomy,
   RuntimeBinding,
   RuntimeGuardReport,
   RuntimeGuards,
@@ -110,6 +111,31 @@ interface AgyEnvelope {
     total_tokens?: number;
   };
   denied_actions?: Array<{ action?: string; display_name?: string }>;
+}
+
+/**
+ * Maps `RuntimeAutonomy` onto `agy` execution flags.
+ *
+ * In headless print mode (`-p`), Antigravity cannot prompt interactively for tool
+ * permissions. Tools requiring confirmation (including shell commands) are auto-denied
+ * by `jetski` unless `--dangerously-skip-permissions` is passed or an allow-rule exists
+ * in settings.json.
+ *
+ * Pre-tool safety (denying out-of-contract writes, git state changes, approval channel)
+ * is enforced in-band by the machine-level PreToolUse hook (`sta-global-bridge.js`),
+ * exactly like Claude Code's `--permission-mode acceptEdits` / `bypassPermissions`
+ * alongside `block-path-permissions.js`.
+ */
+export function autonomyArgsFor(autonomy: RuntimeAutonomy): string[] {
+  switch (autonomy) {
+    case "read-only":
+    case "propose":
+      return ["--mode", "plan"];
+    case "edit":
+      return ["--mode", "accept-edits", "--dangerously-skip-permissions"];
+    case "full":
+      return ["--dangerously-skip-permissions"];
+  }
 }
 
 export interface AntigravityAdapterOptions {
@@ -243,6 +269,9 @@ export class AntigravityAdapter implements ExecutorPort {
           args.push("--add-dir", wr.path);
         }
       }
+    }
+    if (req.autonomy) {
+      args.push(...autonomyArgsFor(req.autonomy));
     }
     args.push("-p", `${persona}${req.prompt}`, "--output-format", "json");
 

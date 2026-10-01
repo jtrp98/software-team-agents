@@ -6,9 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   AGY_PROVIDER_REFUSAL_FINGERPRINTS,
   AntigravityAdapter,
+  autonomyArgsFor,
   parseAgyEnvelope,
 } from "./antigravityAdapter.js";
-import { NO_GUARDS, type RuntimeAgentRequest, type SpawnSync } from "./runtimeAdapter.js";
+import { NO_GUARDS, type RuntimeAgentRequest, type RuntimeAutonomy, type SpawnSync } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 
 /**
@@ -83,29 +84,41 @@ function request(root: string, over: Partial<RuntimeAgentRequest> = {}): Runtime
   };
 }
 
-describe("AntigravityAdapter — argv safety", () => {
-  it("never emits --dangerously-skip-permissions on a guarded run", async () => {
+describe("AntigravityAdapter — autonomy and permissions", () => {
+  it("maps autonomy onto agy mode and permission flags", async () => {
+    const table: Array<[RuntimeAutonomy, string[]]> = [
+      ["read-only", ["--mode", "plan"]],
+      ["propose", ["--mode", "plan"]],
+      ["edit", ["--mode", "accept-edits", "--dangerously-skip-permissions"]],
+      ["full", ["--dangerously-skip-permissions"]],
+    ];
+    for (const [autonomy, expected] of table) {
+      const root = fixture();
+      const calls: Call[] = [];
+      const adapter = new AntigravityAdapter({ projectRoot: root, spawnSync: recordingSpawn(calls) });
+      await adapter.executeAgent(request(root, { autonomy }));
+      expect(calls).toHaveLength(1);
+      for (const flag of expected) {
+        expect(calls[0]!.args).toContain(flag);
+      }
+      if (autonomy === "read-only" || autonomy === "propose") {
+        expect(calls[0]!.args).not.toContain("--dangerously-skip-permissions");
+      }
+    }
+  });
+
+  it("emits --dangerously-skip-permissions on edit autonomy so headless agy does not auto-deny tools", async () => {
     const root = fixture();
     const calls: Call[] = [];
     const adapter = new AntigravityAdapter({ projectRoot: root, spawnSync: recordingSpawn(calls) });
     await adapter.executeAgent(
       request(root, {
+        autonomy: "edit",
         guards: { writeAllow: ["src/**"], writeDeny: [".git/**"], forbidCommands: ["git"], exitChecks: ["code-green"] },
       }),
     );
     expect(calls).toHaveLength(1);
-    // The flag bypasses AGY's hook layer entirely: a run carrying it looks
-    // normal while enforcing nothing. Asserted, never left to review.
-    expect(calls[0]!.args).not.toContain("--dangerously-skip-permissions");
-    expect(calls[0]!.args.join(" ")).not.toContain("dangerously");
-  });
-
-  it("never emits --dangerously-skip-permissions on an unguarded run either", async () => {
-    const root = fixture();
-    const calls: Call[] = [];
-    const adapter = new AntigravityAdapter({ projectRoot: root, spawnSync: recordingSpawn(calls) });
-    await adapter.executeAgent(request(root));
-    expect(calls[0]!.args.join(" ")).not.toContain("dangerously");
+    expect(calls[0]!.args).toContain("--dangerously-skip-permissions");
   });
 
   it("asks for the JSON envelope and folds the role definition into the prompt", async () => {
