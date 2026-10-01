@@ -203,6 +203,44 @@ stack:
 output จาก block ที่คนแก้เอง — sync ไม่ rewrite block ที่คนแก้เงียบ ๆ และ profile-family change เป็น
 preflight STOP การเปลี่ยน stack เป็น human decision เสมอ
 
+### ขอบเขตที่ engineer เขียนได้ใน Target
+
+`stacks/<profile>/stack.yaml` อยู่ใน workspace ที่ `sta sync` วางให้ ไม่ได้อยู่ใน Target; Target ให้แค่ `profile` และ
+`source_roots` ผ่าน `.agent-team/config.yaml` ส่วน `type` ของ Target มาจาก `targets.yaml` ของ Knowledge root
+และเป็นตัวตัดสินว่าใช้แบบไหน:
+
+| `type` ใน `targets.yaml` | engineer ที่ type รับ | ได้อะไร |
+|---|---|---|
+| `frontend` หรือ `backend` | role เดียวตาม type | **ทั้ง Target** หัก deny ของ profile (build output เช่น `bin/`, `obj/`) และ deny ของ Target แบบ role เดียว (`.agent-team/**`, `.github/**`, `.claude/**`, `.agents/**`, `.codex/**`, `.opencode/**`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`, `.env*`, `Dockerfile`, `docker-compose*`) |
+| `frontend` หรือ `backend` | role ที่ type ไม่รับ | ไม่ได้ layout เลย เหลือแค่ contract (ผูก role ผิด Target) |
+| `fullstack`, ไม่ระบุ หรือไม่อยู่ใน registry | ทั้งสอง role | layout ของ profile แบบระบุ directory เพราะสอง engineer อยู่ repo เดียวกัน; `**` ที่มาจาก source root `.` ถูกตัดทิ้ง |
+
+Target แบบ role เดียวจึงไม่ต้องใส่อะไรเพิ่มไม่ว่าโปรเจกต์จะจัด directory แบบไหน ภาษาใหม่ต้องการแค่ profile ที่มี
+commands และ deny ของ build output ไม่ต้องรู้ layout ของโปรเจกต์
+
+ตรวจผลจริงด้วย `sta doctor` → บรรทัด **Engineer write scope per Target** (อ่านอย่างเดียว ใช้ resolver เดียวกับ
+`sta run` และ `sta execute`)
+
+#### `path_overrides` — สำหรับ Target แบบ `fullstack`
+
+ถ้า layout ของ profile ไม่ครอบ directory ที่ Target แบบ `fullstack` ใช้จริง คนเพิ่ม glob ให้เฉพาะ Target นั้นได้ใน
+`.agent-team/config.yaml` ของ Target (top-level นอก `stack:` จึงไม่ทำให้ block ของ detector กลายเป็นของคนแก้):
+
+```yaml
+path_overrides:
+  frontend-engineer:
+    write: ["src/lib/**", "src/hooks/**"]
+  backend-engineer:
+    deny: ["src/legacy/**"]
+```
+
+- รับเฉพาะ `backend-engineer` และ `frontend-engineer`; role อื่น, `**` ทั้ง Target, path absolute และ `..` ทำให้
+  config invalid
+- ซ้อนบน layout ไม่ได้แทน: deny ของ profile/override, universal floor, Framework payload และ Knowledge artifacts
+  ยังถูกปฏิเสธก่อนเสมอ; Target แบบ role เดียวปฏิเสธ `.agent-team/**` ให้ engineer จึงแก้ block นี้เพื่อขยายสิทธิ์ตัวเองไม่ได้
+- ใช้ทุก route: `sta run` (packet scope + hook), `sta execute --writable-target` และ `sta grant issue`
+- การขยายขอบเขตสิทธิ์ของ role เป็น human decision — agent เสนอได้ แต่ไม่แก้ block นี้เอง
+
 ## Development / Contributing
 
 ```bash

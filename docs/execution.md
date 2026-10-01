@@ -98,6 +98,10 @@ sta execute --runtime claude-code --role backend-engineer --workspace <knowledge
 - ตัว workspace จะอ่านได้อย่างเดียว เว้นแต่ใส่ `--write-path` เพิ่มเอง STA ตั้ง `STA_KNOWLEDGE_ROOT` เป็น workspace engineer จึงเขียน
   `_docs/`, `knowledge/` ฯลฯ ไม่ได้ เหมือน stage ที่ orchestrator คุม
 - Claude Code ได้ `--add-dir=<target>` และ prompt บอก path ของแต่ละ Target แบบ absolute
+- stack rules อ่าน `stacks/<profile>/stack.yaml` จาก workspace (Target ไม่มี `stacks/`) และอ่าน `type` ของ Target จาก
+  `targets.yaml` ของ workspace เดียวกัน Target แบบ `frontend`/`backend` ให้ engineer ของ type นั้นเขียนได้ทั้ง Target
+  (หัก deny) ส่วน `fullstack` ใช้ layout ของ profile บวก `path_overrides` และตัด `**` จาก source root `.` ทิ้ง
+  ([architecture.md](architecture.md#ขอบเขตที่-engineer-เขียนได้ใน-target)) ดูผลจริงด้วย `sta doctor`
 
 ## `sta execute` ไม่ใช้ OS sandbox
 

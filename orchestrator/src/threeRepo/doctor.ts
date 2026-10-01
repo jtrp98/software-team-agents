@@ -15,6 +15,7 @@ import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 import { gatherStatus } from "../targetcli/statusCommand.js";
 import { targetStackWasHumanEdited } from "../targetcli/targetProfile.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
+import { targetStackPathRules, type TargetStackRules } from "../agents/pathPermissions.js";
 import { inspectGuardWiring } from "../targetcli/guardSettings.js";
 import { loadStaConfig } from "../packaging/staConfig.js";
 import { compareTemplateSnapshot } from "../packaging/templateBuilder.js";
@@ -344,6 +345,56 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
             `${checked} typed target(s) cross-checked against their resolved stack profile(s)` +
             (skipped > 0 ? `; ${skipped} skipped (no local checkout or resolved stack)` : ""),
         };
+      }),
+    );
+
+    // Read-only preview of what each engineer may write in each checked-out
+    // Target — the same resolution `sta run` and `sta execute` enforce — so a
+    // directory the layout misses is seen at setup, not on the first refused
+    // write mid-phase.
+    checks.push(
+      check("Engineer write scope per Target", "declare the Target's type in targets.yaml, or add the missing directory under path_overrides in its .agent-team/config.yaml", () => {
+        if (!registry) throw new Error("registry unavailable");
+        let mappings: ReturnType<typeof loadLocalTargetMapping>;
+        try {
+          mappings = loadLocalTargetMapping(knowledgeRootValue!, registry, defaultProjectRoot());
+        } catch (error) {
+          return { status: "WARNING", detail: `cannot resolve write scopes: ${error instanceof Error ? error.message : String(error)}`, fix: "create/fix .workflow/targets.local.yaml in the Knowledge root" };
+        }
+        const localPathById = new Map(mappings.map((mapping) => [mapping.target_id, mapping.path]));
+        const lines: string[] = [];
+        const empty: string[] = [];
+        for (const target of registry.targets.filter((entry) => entry.status === "active")) {
+          const localPath = localPathById.get(target.target_id);
+          if (!localPath) continue;
+          const roles = target.type ? TARGET_TYPE_ROLES[target.type] : TARGET_TYPE_ROLES.fullstack;
+          for (const role of roles) {
+            let rules: TargetStackRules;
+            try {
+              rules = targetStackPathRules({ role, targetRoot: localPath, stacksRoot: defaultProjectRoot(), registryRoot: knowledgeRootValue! });
+            } catch (error) {
+              lines.push(`${target.target_id} ${role}: config invalid (${error instanceof Error ? error.message : String(error)})`);
+              continue;
+            }
+            const write = rules.wholeTarget ? rules.write : rules.write.filter((glob) => glob !== "**");
+            if (write.length === 0) empty.push(`${target.target_id} ${role}`);
+            const noStack = (() => {
+              try {
+                return !loadTargetConfig(localPath)?.stack;
+              } catch {
+                return false;
+              }
+            })();
+            lines.push(
+              rules.wholeTarget
+                ? `${target.target_id} ${role}: whole Target (type ${target.type}) minus ${rules.deny.length} deny glob(s)`
+                : `${target.target_id} ${role}: layout ${write.length > 0 ? write.join(", ") : noStack ? "(none — the Target records no stack in .agent-team/config.yaml; resolve it per prompt-setup.md \"Target stack profile\")" : "(none)"}`,
+            );
+          }
+        }
+        if (lines.length === 0) return { status: "PASS", detail: "no checked-out active Target to resolve yet" };
+        if (empty.length > 0) return { status: "WARNING", detail: `no stack write path for ${empty.join(", ")}; ${lines.join("; ")}` };
+        return { status: "PASS", detail: lines.join("; ") };
       }),
     );
   } else {

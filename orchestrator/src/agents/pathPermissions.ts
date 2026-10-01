@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { STACK_SCOPED_ROLES, resolveStackPathRules } from "../profile/projectProfile.js";
+import { STACK_SCOPED_ROLES, resolveStackPathRules, type StackRolePermissions } from "../profile/projectProfile.js";
 import { loadTargetConfig } from "../targetcli/targetMeta.js";
+import { loadTargetRegistry, TARGET_TYPE_ROLES, type TargetType } from "../threeRepo/targets.js";
 import { AgentStage } from "../types.js";
 import { defaultProjectRoot, loadAgentContract } from "./agentContract.js";
 
@@ -544,6 +545,97 @@ export function contractPathRules(agent: AgentStage | string, projectRoot: strin
 }
 
 /**
+ * What a single-role Target still denies its one engineer once the layout
+ * stops naming directories: the delivery, environment and runtime-binding
+ * files that belong to `devops`, `setup` and `sta sync`, and the Target's own
+ * STA config — so an engineer cannot widen its scope by editing
+ * `path_overrides`. The universal floor, Framework payload and Knowledge
+ * artifacts are refused ahead of this list and are not repeated here.
+ */
+export const SINGLE_ROLE_TARGET_DENY: readonly string[] = [
+  ".agent-team/**",
+  ".github/**",
+  ".claude/**",
+  ".agents/**",
+  ".codex/**",
+  ".opencode/**",
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".gitignore",
+  "**/.env*",
+  "**/Dockerfile",
+  "**/docker-compose*",
+];
+
+/** The stack half for one Target, and whether it grants that Target whole. */
+export interface TargetStackRules extends StackRolePermissions {
+  /**
+   * True when the Target's declared `type` admits exactly this one engineer
+   * role: there is no second engineer to keep out, so the layout's directory
+   * names would only refuse the role its own code. Target-side callers keep
+   * the `**` such a Target carries instead of dropping it.
+   */
+  wholeTarget: boolean;
+}
+
+/** The Target's declared `type` from the Knowledge registry, or undefined when unknowable. */
+function registeredTargetType(registryRoot: string, targetId: string | undefined): TargetType | undefined {
+  if (!targetId) return undefined;
+  try {
+    return loadTargetRegistry(registryRoot).targets.find((entry) => entry.target_id === targetId && entry.status === "active")?.type;
+  } catch {
+    return undefined; // no or unreadable registry: the layout applies, which is the narrower answer
+  }
+}
+
+/**
+ * The stack-shaped half of one role's rules for one Target: its recorded
+ * profile, read from `stacksRoot` (where `stacks/` actually lives — the
+ * synced workspace, never a Target checkout), expanded over the Target's
+ * `source_roots`, plus the Target's own person-authored `path_overrides`.
+ *
+ * With `registryRoot` (the Knowledge root holding `targets.yaml`) a Target
+ * whose `type` is `frontend` or `backend` is single-role: the admitted
+ * engineer gets the whole Target minus the profile's denies and
+ * {@link SINGLE_ROLE_TARGET_DENY}, and an engineer the type does not admit
+ * gets no layout at all. A `fullstack` Target, an untyped one, or no registry
+ * keeps the profile's directory layout — that is where two engineers share
+ * one repository and the directories are the boundary between them.
+ *
+ * Throws only when the Target config itself is invalid; callers that must not
+ * fail a run over it catch and fall back to the contract alone.
+ */
+export function targetStackPathRules(options: { role: string; targetRoot: string; stacksRoot: string; registryRoot?: string }): TargetStackRules {
+  const config = loadTargetConfig(options.targetRoot);
+  const layout = resolveStackPathRules({
+    role: options.role,
+    projectRoot: options.targetRoot,
+    stacksRoot: options.stacksRoot,
+    profile: config?.stack?.profile,
+    sourceRoots: config?.stack?.source_roots,
+  });
+  if (!STACK_SCOPED_ROLES.includes(options.role)) return { ...layout, wholeTarget: false };
+  const merge = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])];
+  const override = config?.path_overrides?.[options.role as "backend-engineer" | "frontend-engineer"] ?? { write: [], deny: [] };
+
+  const type = options.registryRoot ? registeredTargetType(options.registryRoot, config?.target_id) : undefined;
+  const admitted = type && type !== "fullstack" ? TARGET_TYPE_ROLES[type] : undefined;
+  if (admitted && admitted.includes(options.role)) {
+    return {
+      read: ["**"],
+      write: merge(["**"], override.write),
+      deny: merge(merge(layout.deny, SINGLE_ROLE_TARGET_DENY), override.deny),
+      wholeTarget: true,
+    };
+  }
+  if (admitted) {
+    // A misbound engineer: the Target's type says this role has no code here.
+    return { read: layout.read, write: [], deny: merge(layout.deny, override.deny), wholeTarget: false };
+  }
+  return { read: merge(layout.read, override.write), write: merge(layout.write, override.write), deny: merge(layout.deny, override.deny), wholeTarget: false };
+}
+
+/**
  * The rules actually applied to a run: the contract's role boundary plus the
  * layout globs of the stack this workspace recorded.
  *
@@ -557,13 +649,7 @@ export function contractPathRules(agent: AgentStage | string, projectRoot: strin
  */
 export function pathRulesFor(agent: AgentStage | string, projectRoot: string = defaultProjectRoot(), layoutRoot: string = projectRoot): PathRules {
   const contract = contractPathRules(agent, projectRoot);
-  const stack = loadTargetConfig(layoutRoot)?.stack;
-  const layout = resolveStackPathRules({
-    role: String(agent),
-    projectRoot: layoutRoot,
-    profile: stack?.profile,
-    sourceRoots: stack?.source_roots,
-  });
+  const layout = targetStackPathRules({ role: String(agent), targetRoot: layoutRoot, stacksRoot: projectRoot });
   const merge = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])];
   return {
     write: merge(contract.write, layout.write),
@@ -573,17 +659,25 @@ export function pathRulesFor(agent: AgentStage | string, projectRoot: string = d
 }
 
 /** A Target binding grants a root, while the contract and that Target's stack
- * layout grant paths inside it. New paths are denied until scoped explicitly. */
+ * layout grant paths inside it. New paths are denied until scoped explicitly:
+ * a `**` is dropped unless the Target's registered `type` makes it single-role
+ * for this engineer (`registryRoot`, see {@link targetStackPathRules}). */
 export function targetPathRules(
   agent: AgentStage | string,
   projectRoot: string = defaultProjectRoot(),
   targetRoot: string = projectRoot,
+  registryRoot?: string,
 ): PathRules {
-  const contract = pathRulesFor(agent, projectRoot, targetRoot);
+  const contract = contractPathRules(agent, projectRoot);
+  const layout = targetStackPathRules({ role: String(agent), targetRoot, stacksRoot: projectRoot, registryRoot });
+  const merge = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])];
   return {
-    write: contract.write.filter((glob) => glob !== "**"),
-    deny: [...new Set([...WORKSPACE_BA_ARTIFACTS, ...contract.deny])],
-    read: contract.read,
+    write: merge(
+      contract.write.filter((glob) => glob !== "**"),
+      layout.wholeTarget ? layout.write : layout.write.filter((glob) => glob !== "**"),
+    ),
+    deny: [...new Set([...WORKSPACE_BA_ARTIFACTS, ...contract.deny, ...layout.deny])],
+    read: merge(contract.read, layout.read),
   };
 }
 

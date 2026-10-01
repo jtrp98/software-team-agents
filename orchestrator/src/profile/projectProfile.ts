@@ -132,26 +132,43 @@ function expandSourceRoots(globs: readonly string[], sourceRoots: readonly strin
  * Target's recorded profile. Returns empty lists for a role no profile scopes,
  * and never throws for a missing profile: a guard that failed closed here would
  * strip an engineer's write access over a packaging problem.
+ *
+ * `stacks/` is Framework payload: it lives in the workspace `sta sync`
+ * materialised, not in a Target checkout, so `stacksRoot` names where to read
+ * a recorded profile from. `projectRoot` is still tried after it, which keeps a
+ * single-repo workspace (one root that is both) resolving exactly as before.
+ * The legacy fallback is looked up in `projectRoot` only: it exists so an
+ * installation that never recorded a stack keeps the globs it always had, not
+ * to hand Node globs to a Target checkout that recorded no stack at all.
  */
 export function resolveStackPathRules(options: {
   role: string;
   projectRoot: string;
+  stacksRoot?: string;
   profile?: string;
   sourceRoots?: readonly string[];
 }): StackRolePermissions {
   const empty: StackRolePermissions = { read: [], write: [], deny: [] };
   if (!STACK_SCOPED_ROLES.includes(options.role)) return empty;
 
-  const attempts = [options.profile, STACK_PERMISSION_FALLBACK[options.role]].filter(
-    (name): name is string => typeof name === "string" && name !== "",
-  );
-  for (const name of attempts) {
-    let profile: StackProfile;
-    try {
-      profile = loadStackProfile(name, options.projectRoot);
-    } catch {
-      continue;
+  const recordedRoots = [...new Set([options.stacksRoot, options.projectRoot].filter((root): root is string => typeof root === "string" && root !== ""))];
+  const attempts = [
+    { name: options.profile, roots: recordedRoots },
+    { name: STACK_PERMISSION_FALLBACK[options.role], roots: [options.projectRoot] },
+  ].filter((attempt): attempt is { name: string; roots: string[] } => typeof attempt.name === "string" && attempt.name !== "");
+  const loadFirst = (name: string, roots: readonly string[]): StackProfile | null => {
+    for (const root of roots) {
+      try {
+        return loadStackProfile(name, root);
+      } catch {
+        continue;
+      }
     }
+    return null;
+  };
+  for (const { name, roots } of attempts) {
+    const profile = loadFirst(name, roots);
+    if (!profile) continue;
     const declared = profile.permissions[options.role];
     if (!declared) continue;
     return {

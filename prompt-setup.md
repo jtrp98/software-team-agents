@@ -71,6 +71,7 @@ Then, guided by what status reports:
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
 | Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready`, `antigravity.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
 | Knowledge root bound but never initialized | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — machine binding resolves but `<knowledgeRoot>/.agent-team/config.yaml` is absent; status prints `WARNING:` line with fix command |
+| Engineer write scope per Target | `sta doctor` → **Engineer write scope per Target** (read-only; the same resolver `sta run`/`sta execute` enforce). A `frontend`/`backend` Target shows "whole Target"; a `fullstack` or untyped one lists its layout globs. Show this line to the user. If a directory the code really uses is missing: an untyped Target → propose its `type` (Register-a-Target step 4); a `fullstack` Target → show the `path_overrides` block from `docs/architecture.md` for the user to add to that Target's `.agent-team/config.yaml` themselves (this playbook never writes a Target). |
 | Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags `_docs/module/**` files and `## Modules` in `_docs/status.md` inside a Target checkout with Knowledge destination paths |
 
 If `status` fails because the current directory is not a Git repository, that is
@@ -175,7 +176,10 @@ registered (flow 2) and stay plain checkouts.
   payload left from before V10 is removed by `software-team-agents cleanup --yes`,
   a person's decision, not this playbook's).
 1. Read `targets.yaml` in the Knowledge root first — existing targets stay untouched.
-2. Ask for: Target name/id, local path, remote URL, optional type (`frontend` | `backend` | `fullstack`).
+2. Ask for: Target name/id, local path, remote URL, and type (`frontend` | `backend` | `fullstack`).
+   Type is optional in the schema but decides what engineers may write: `frontend`/`backend` gives
+   that one engineer the whole Target; `fullstack` or none falls back to the stack profile's
+   directory layout. Offer the type the code shows as the default.
 3. Validate the new path like case 1 above; additionally check the local checkout's
    git remote matches the given URL (report a mismatch, don't "fix" it silently).
 4. Propose the exact YAML block to append to `targets.yaml` (including optional type)
@@ -267,6 +271,7 @@ Workspace : <workspace path> (<kind>)
 Knowledge : <path or "not required">
 Targets   : <ids> (local paths)
 Stack     : <resolved profile and package manager, or unresolved + confirmed fix>
+WriteScope: <per Target: "whole Target (type …)" or the layout globs, from sta doctor>
 Sync      : <state>, managed files <n>, conflicts <n>
 Runtimes  : claude <READY/…>, codex <…>, opencode <…>, antigravity <…>
 Next      : cd <workspace> && software-team-agents <command>

@@ -1,9 +1,7 @@
 import * as fs from "node:fs";
 import { getAgent } from "../../agents/registry.js";
 import { resolveAuthoritativeContract } from "../../agents/agentContract.js";
-import { pathRulesFor } from "../../agents/pathPermissions.js";
-import { resolveStackPathRules } from "../../profile/projectProfile.js";
-import { loadTargetConfig } from "../../targetcli/targetMeta.js";
+import { pathRulesFor, targetStackPathRules } from "../../agents/pathPermissions.js";
 import {
   AttemptGrantRejectedError,
   AttemptGrantTokenSchema,
@@ -63,8 +61,7 @@ function scopeFor(stage: AgentStage, role: string, projectRoot: string): GrantSc
   // the stack layout this workspace recorded, kept as two halves so the hook
   // can apply the layout only to the grant's own role.
   const rules = pathRulesFor(stage, projectRoot);
-  const stack = loadTargetConfig(projectRoot)?.stack;
-  const layout = resolveStackPathRules({ role, projectRoot, profile: stack?.profile, sourceRoots: stack?.source_roots });
+  const layout = targetStackPathRules({ role, targetRoot: projectRoot, stacksRoot: projectRoot });
   return {
     write: [...rules.write],
     deny: [...rules.deny],

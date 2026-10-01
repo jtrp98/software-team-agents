@@ -5,6 +5,7 @@ import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { inspectMarkerBlock } from "../targetcli/knowledgeRender.js";
+import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { AgentStage } from "../types.js";
 import { signAttemptGrant, type AttemptGrantToken } from "../governance/attemptGrant.js";
 import {
@@ -30,6 +31,7 @@ import {
   renderGuardRuleBlock,
   serializeGuardTargetWorkRoots,
   targetPathRules,
+  targetStackPathRules,
   toRepoRelative,
   unassignedSessionDenyWhy,
 } from "./pathPermissions.js";
@@ -800,6 +802,119 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
     expect(canWritePath(backend, "bin/x.dll").allowed).toBe(false);
     expect(canWritePath(backend, ".git/config").allowed).toBe(false);
     expect(canWritePath(backend, "contracts/backend-engineer.yaml").allowed).toBe(false);
+  });
+
+  /** Three-repo mode: `stacks/` is Framework payload in the workspace; a Target checkout carries only its config. */
+  function makeBareTarget(config: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-stack-target-"));
+    fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".agent-team", "config.yaml"), config, "utf8");
+    return root;
+  }
+
+  it("a Target checkout with no stacks/ resolves its layout from the Framework root, not the legacy fallback", () => {
+    workspace = makeBareTarget(dotnetConfig(["ClassOnlineWeb"]));
+    expect(fs.existsSync(path.join(workspace, "stacks"))).toBe(false);
+
+    const backend = pathRulesFor("backend-engineer", repoRoot, workspace);
+    expect(backend.write).toContain("ClassOnlineWeb/**");
+    expect(backend.deny).toContain("ClassOnlineWeb/bin/**");
+    expect(targetPathRules("backend-engineer", repoRoot, workspace).write).toContain("ClassOnlineWeb/**");
+    expect(targetStackPathRules({ role: "frontend-engineer", targetRoot: workspace, stacksRoot: repoRoot }).write).toContain("ClassOnlineWeb/Views/**");
+  });
+
+  it("path_overrides adds globs to its own role on its own Target, and the role's denies still hold", () => {
+    workspace = makeBareTarget(
+      dotnetConfig(["ClassOnlineWeb"], ["path_overrides:", "  frontend-engineer:", '    write: ["src/lib/**"]', '    deny: ["src/lib/secret/**"]'].join("\n")),
+    );
+
+    const frontend = targetPathRules("frontend-engineer", repoRoot, workspace);
+    expect(canWritePath(frontend, "src/lib/authHeaders.ts").allowed).toBe(true);
+    expect(canWritePath(frontend, "src/lib/secret/key.ts").allowed).toBe(false);
+    expect(canWritePath(frontend, "ClassOnlineWeb/Controllers/HomeController.cs").allowed).toBe(false);
+    // The override belongs to the role it names.
+    expect(canWritePath(targetPathRules("backend-engineer", repoRoot, workspace), "src/lib/authHeaders.ts").allowed).toBe(false);
+  });
+
+  /** A Knowledge root whose `targets.yaml` declares one Target's type. */
+  function makeRegistry(targetId: string, type: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-stack-registry-"));
+    fs.writeFileSync(
+      path.join(root, "targets.yaml"),
+      ["schema_version: 1", "targets:", `  - target_id: ${targetId}`, "    name: Probe", "    remote_url: https://example.com/probe.git", "    status: active", `    type: ${type}`, ""].join("\n"),
+      "utf8",
+    );
+    return root;
+  }
+
+  it("a single-role Target gives its one engineer the whole Target, minus build output and devops/setup/sync files", () => {
+    // dotnetConfig records target_id sb-web-student; `.` is the source root, as on a real API repo.
+    workspace = makeBareTarget(dotnetConfig([".", "ClassOnlineWeb"]));
+    const registry = makeRegistry("sb-web-student", "backend");
+    try {
+      const layout = targetStackPathRules({ role: "backend-engineer", targetRoot: workspace, stacksRoot: repoRoot, registryRoot: registry });
+      expect(layout.wholeTarget).toBe(true);
+
+      const backend = targetPathRules("backend-engineer", repoRoot, workspace, registry);
+      expect(backend.write).toContain("**");
+      for (const rel of ["ClassOnlineWeb.Tests/SecurityTests.cs", "ClassOnlineWeb.sln", "ClassOnlineWeb/Security/MenuPermission.cs", "README.md"]) {
+        expect(canWritePath(backend, rel).allowed, rel).toBe(true);
+      }
+      for (const rel of [
+        "ClassOnlineWeb/bin/x.dll",
+        "obj/project.assets.json",
+        ".github/workflows/ci.yml",
+        ".agent-team/config.yaml",
+        ".env.production",
+        "Dockerfile",
+        "CLAUDE.md",
+        ".claude/settings.json",
+        "_docs/module/m/design.md",
+        "contracts/backend-engineer.yaml",
+        ".git/config",
+      ]) {
+        expect(canWritePath(backend, rel).allowed, rel).toBe(false);
+      }
+
+      // The type admits no frontend engineer: a misbound one gets no layout at all.
+      const frontend = targetPathRules("frontend-engineer", repoRoot, workspace, registry);
+      expect(canWritePath(frontend, "ClassOnlineWeb/Views/Home/Index.cshtml").allowed).toBe(false);
+    } finally {
+      fs.rmSync(registry, { recursive: true, force: true });
+    }
+  });
+
+  it("a fullstack, untyped or unregistered Target keeps the directory layout and drops `.`'s `**`", () => {
+    workspace = makeBareTarget(dotnetConfig([".", "ClassOnlineWeb"]));
+    const fullstack = makeRegistry("sb-web-student", "fullstack");
+    const other = makeRegistry("someone-else", "backend");
+    try {
+      for (const registryRoot of [fullstack, other, undefined]) {
+        const rules = targetPathRules("backend-engineer", repoRoot, workspace, registryRoot);
+        expect(rules.write, String(registryRoot)).not.toContain("**");
+        expect(canWritePath(rules, "ClassOnlineWeb/Controllers/HomeController.cs").allowed).toBe(true);
+        expect(canWritePath(rules, "ClassOnlineWeb.Tests/x.cs").allowed).toBe(false);
+      }
+    } finally {
+      fs.rmSync(fullstack, { recursive: true, force: true });
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("path_overrides refuses a whole-Target `**`, an escaping or absolute glob, and a role no stack scopes", () => {
+    for (const block of [
+      ["path_overrides:", "  frontend-engineer:", '    write: ["**"]'],
+      ["path_overrides:", "  frontend-engineer:", '    write: ["../other/**"]'],
+      ["path_overrides:", "  frontend-engineer:", '    write: ["/etc/**"]'],
+      ["path_overrides:", "  qa-engineer:", '    write: ["src/**"]'],
+    ]) {
+      const root = makeBareTarget(dotnetConfig(["ClassOnlineWeb"], block.join("\n")));
+      try {
+        expect(() => loadTargetConfig(root), block.join(" ")).toThrow(/config\.yaml is invalid/);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
   });
 
   it("every recorded source root is expanded, not just the first", () => {

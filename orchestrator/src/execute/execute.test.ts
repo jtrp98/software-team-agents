@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { MockRuntimeAdapter, okResult } from "../runtime/mockAdapter.js";
 import { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
@@ -589,5 +590,55 @@ describe("sta.execute — writable Targets: a role from the Knowledge workspace 
 
     expect(seen).toEqual([[{ targetId: "backend", path: h.target, access: "write" }], "permission_escalation", "none"]);
     expect(h.adapters.codex.requests[0].env!.STA_WRITABLE_WORK_ROOTS).toBe(JSON.stringify([h.target]));
+  });
+
+  it("resolves the Target's stack layout from the workspace's stacks/, drops a whole-Target `**`, and layers the Target's path_overrides", async () => {
+    const h = targetHarness();
+    // The real shape: `stacks/` is synced into the Knowledge workspace; the Target
+    // checkout carries only its `.agent-team/config.yaml`.
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    fs.cpSync(path.join(repoRoot, "stacks"), path.join(h.workspace, "stacks"), { recursive: true });
+    fs.mkdirSync(path.join(h.target, ".agent-team"), { recursive: true });
+    fs.writeFileSync(
+      path.join(h.target, ".agent-team", "config.yaml"),
+      [
+        "schema_version: 1",
+        "target_id: backend",
+        "registered_at: 2026-10-01T00:00:00.000Z",
+        "stack:",
+        "  profile: dotnet",
+        "  package_manager: nuget",
+        "  commands: { install: dotnet restore, build: dotnet build, test: dotnet test, lint: dotnet format, typecheck: dotnet build }",
+        "  schema_paths: []",
+        "  source_roots: [., Api]",
+        "  detected_at: 2026-10-01T00:00:00.000Z",
+        "  fingerprint: sha256:deadbeef",
+        "path_overrides:",
+        "  backend-engineer:",
+        '    write: ["Api.Tests/**", "Api.sln"]',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    expect(fs.existsSync(path.join(h.target, "stacks"))).toBe(false);
+
+    await h.sta.execute({ runtime: "claude-code", task: "BE-006", role: "backend-engineer", writableTargets: ["backend"] });
+
+    const rules = JSON.parse(h.adapters["claude-code"].requests[0].env!.STA_STACK_PATH_RULES) as { write: string[]; deny: string[] };
+    expect(rules.write).toContain("Api/**");
+    expect(rules.write).toEqual(expect.arrayContaining(["Api.Tests/**", "Api.sln"]));
+    expect(rules.write).not.toContain("**");
+    expect(rules.deny).toContain("Api/bin/**");
+
+    // Declared single-role in the workspace's targets.yaml: the whole Target, with the devops/setup/sync denies.
+    fs.writeFileSync(
+      path.join(h.workspace, "targets.yaml"),
+      ["schema_version: 1", "targets:", "  - target_id: backend", "    name: Backend", "    remote_url: https://example.com/backend.git", "    status: active", "    type: backend", ""].join("\n"),
+      "utf8",
+    );
+    await h.sta.execute({ runtime: "claude-code", task: "BE-006", role: "backend-engineer", writableTargets: ["backend"] });
+    const single = JSON.parse(h.adapters["claude-code"].requests[1].env!.STA_STACK_PATH_RULES) as { write: string[]; deny: string[] };
+    expect(single.write).toContain("**");
+    expect(single.deny).toEqual(expect.arrayContaining(["Api/bin/**", ".github/**", ".agent-team/**", "**/.env*"]));
   });
 });

@@ -1,5 +1,18 @@
 # Repository-Wide Documentation Audit & Synchronization
 
+> **What this is:** a maintainer playbook for **this Framework repository only** — it brings
+> `README.md`, `docs/` and the other human docs back in line with the code after a release.
+> It is not shipped to users and does not touch a Knowledge repository or a Target.
+>
+> **When to use it:** before cutting a release, or when you suspect the docs drifted from the code.
+> For a user's workspace use [`prompt-setup.md`](prompt-setup.md) (set up / repair) or
+> [`prompt-update-knowledge.md`](prompt-update-knowledge.md) (refresh canonical knowledge).
+>
+> **How to use it:** open an assistant in the Framework checkout and say "read
+> prompt-update-docs.md and audit the docs". Review the diff it proposes; it never changes code.
+
+---
+
 You are acting as a **Senior Software Engineer, Technical Writer, Software Architect, Repository Maintainer, and Documentation Auditor**.
 
 Your task is to inspect the **entire repository** and update all documentation so that it accurately reflects the **current implementation, architecture, configuration, commands, workflows, and behavior of the codebase**.

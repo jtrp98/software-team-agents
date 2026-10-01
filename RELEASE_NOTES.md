@@ -1,5 +1,50 @@
 # Release Notes
 
+## software-team-agents 8.3.0 — engineer write scope follows the Target's type (2026-10-01)
+
+> **Version 8.3.0 and release date 2026-10-01 confirmed by the release owner.** The Minor bucket is
+> the mechanical result of the version rule at the bottom of this file: a new optional Target config
+> field (`path_overrides`) and a new `sta doctor` check, plus fixes; the one new refusal applies only
+> to an engineer bound to a Target whose declared `type` does not admit it. `templates/manifest.json`
+> is re-stamped by `npm run build`; `@software-team-agents/orchestrator` stays at `0.3.0`.
+
+**Bucket: Minor (`8.2.0 → 8.3.0`, confirmed).** One track: what an engineer may write inside a
+Target now resolves correctly on every route, and stops depending on the stack profile guessing the
+project's directory layout.
+
+- **Fix — stack layout was never found for a Target.** Every resolver looked for
+  `stacks/<profile>/stack.yaml` inside the Target checkout, which carries no `stacks/` (Framework
+  payload lives in the synced workspace). The layout half came back empty, so `sta execute
+  --writable-target` refused every engineer write the contract did not name (e.g. a `dotnet`
+  Target's `AITimeTableBackend/**`), and `sta run` built its packet allow-list for a write root from
+  the workspace's layout instead of the Target's. Profiles are now read from the workspace (or the
+  Framework binding root on the orchestrated path); the legacy Node/frontend fallback is still
+  looked up only where it always was, so a Target that recorded no stack gains no Node globs.
+- **Single-role Targets get the whole Target.** When `targets.yaml` declares a Target `frontend` or
+  `backend`, the one engineer that type admits may write the whole Target minus the profile's denies
+  (build output) and a fixed devops/setup/sync list (`.agent-team/**`, `.github/**`, `.claude/**`,
+  `.agents/**`, `.codex/**`, `.opencode/**`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`, `.env*`,
+  `Dockerfile`, `docker-compose*`). Directory layouts only matter where two engineers share a repo,
+  so `fullstack` and untyped Targets keep the profile layout — and `sta execute` now drops the `**`
+  a source root of `.` expands to there, as `sta run` already did.
+- **`path_overrides` in a Target's `.agent-team/config.yaml` (new, optional).** Person-authored
+  `write`/`deny` globs for `backend-engineer` / `frontend-engineer` on that Target only, layered over
+  the layout. `**`, absolute paths, `..` and other roles make the config invalid; every floor and
+  deny still applies first. Same resolution on `sta run`, `sta execute`, `sta context` and `sta grant`.
+- **`sta doctor` → "Engineer write scope per Target" (new).** A read-only line per checked-out active
+  Target and engineer: "whole Target (type …)" or the layout globs. It warns when an engineer would
+  resolve no stack write path, naming a Target that records no stack at all.
+- **Playbooks.** `prompt-setup.md` reads the new doctor line in Phase 0, asks for a Target's `type`
+  at registration (it now decides write scope) and reports a `WriteScope` line;
+  `prompt-update-docs.md` gains a who/when/how header; `prompt-repository-cleanup.md` is removed —
+  a generic prompt with no knowledge of this framework's rules, referenced and shipped nowhere.
+  `README.md` § AI-Assisted Setup lists which playbook to use for what.
+
+**What you may need to do:** run `sta doctor` and read "Engineer write scope per Target". A Target
+typed `frontend`/`backend` needs nothing more. A `fullstack` Target whose layout misses a directory
+takes a `path_overrides` block (`docs/architecture.md`). An engineer bound to a Target whose `type`
+does not admit it is now held to its contract alone — correct the binding or the `type`.
+
 ## software-team-agents 8.2.0 — `sta execute` writes Targets from the Knowledge workspace (2026-10-01)
 
 > **Version 8.2.0 and release date 2026-10-01 confirmed by the release owner.** The Minor bucket is

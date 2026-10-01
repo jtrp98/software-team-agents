@@ -86,15 +86,16 @@ BA/SA/PM/test-planner ทำงานจาก Knowledge workspace เสมอ 
 
 ## AI-Assisted Setup
 
-ให้ AI coding assistant ตั้งให้แทน — ชี้ไฟล์ playbook ให้มันอ่าน (runtime-agnostic):
+ให้ AI coding assistant ทำแทน — ชี้ไฟล์ playbook ให้มันอ่าน (runtime-agnostic) เลือกตามสิ่งที่จะทำ:
 
-- [`prompt-setup.md`](prompt-setup.md) — ตั้ง/ซ่อม/ตรวจ workspace บนเครื่องนี้ + capture canonical
-  knowledge ครั้งแรก (inspect ก่อนถาม · safe by default)
-- [`prompt-update-knowledge.md`](prompt-update-knowledge.md) — รีเฟรช canonical knowledge แบบ
-  incremental ให้ตรงโค้ดจริง
+| อยากทำอะไร | เปิด assistant ที่ | สั่งว่า |
+|---|---|---|
+| ตั้งเครื่องใหม่ · เพิ่ม Target · ซ่อม/ตรวจ setup · capture knowledge ครั้งแรก | Knowledge workspace (หรือที่ไหนก็ได้ถ้ายังไม่มี) | "อ่าน [`prompt-setup.md`](prompt-setup.md) แล้วตั้งให้ที" |
+| โค้ดเปลี่ยนไปแล้ว อยากให้ knowledge ตามทัน | Knowledge workspace | "อ่าน [`prompt-update-knowledge.md`](prompt-update-knowledge.md) แล้วรีเฟรช knowledge" |
+| (คนดูแล Framework) docs ของ repo นี้ไม่ตรงโค้ดก่อน release | Framework checkout นี้ | "อ่าน [`prompt-update-docs.md`](prompt-update-docs.md) แล้ว audit docs" |
 
-สั่ง assistant ว่า "อ่าน `prompt-setup.md` แล้วตั้งให้ที" — playbook เหล่านี้เป็น AI playbooks
-ไม่ใช่คู่มือคน (คู่มือคนอยู่ที่ [`docs/getting-started.md`](docs/getting-started.md))
+สองไฟล์แรกแถมไปกับ package; ไฟล์ที่สามใช้เฉพาะใน repo นี้ playbook เหล่านี้เป็น AI playbooks ไม่ใช่คู่มือคน
+(คู่มือคนอยู่ที่ [`docs/getting-started.md`](docs/getting-started.md))
 
 ## Documentation
 

@@ -3,9 +3,7 @@ import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { RuntimeAgentRequest, RuntimeAgentResult, RuntimeGuardReport, RuntimeUsage, RuntimeWorkRoot } from "../runtime/runtimeAdapter.js";
 import { roleEnv } from "../runtime/runtimeAdapter.js";
-import { serializeGuardTargetWorkRoots } from "../agents/pathPermissions.js";
-import { resolveStackPathRules } from "../profile/projectProfile.js";
-import { loadTargetConfig } from "../targetcli/targetMeta.js";
+import { serializeGuardTargetWorkRoots, targetStackPathRules } from "../agents/pathPermissions.js";
 import { resolveWritableTargetWorkRoots, WritableTargetRequestError } from "../targetcli/roleWorkspace.js";
 import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { executorPortFor } from "../runtime/executorPort.js";
@@ -227,7 +225,7 @@ export function runEnv(run: RunRecord, store: RunStore): Record<string, string> 
     // workspace as the Knowledge root so an implementation role is refused the
     // documents there exactly as an orchestrated stage is.
     STA_TARGET_WORK_ROOTS: targets.length > 0 ? serializeGuardTargetWorkRoots(targets) : "",
-    STA_STACK_PATH_RULES: targets.length > 0 && run.role ? stackPathRulesFor(run.role, targets) : "",
+    STA_STACK_PATH_RULES: targets.length > 0 && run.role ? stackPathRulesFor(run.role, targets, run.workspace) : "",
     STA_KNOWLEDGE_ROOT: targets.length > 0 ? run.workspace : "",
     STA_KNOWLEDGE_ROOT_NAME: "",
   };
@@ -240,15 +238,22 @@ export function runEnv(run: RunRecord, store: RunStore): Record<string, string> 
  * each path relative to whichever Target holds it. A Target whose profile does
  * not resolve contributes nothing, so its paths fall to the contract alone and
  * the guard over-restricts rather than letting a path through.
+ *
+ * Profiles are read from `workspace` — the synced Knowledge workspace the run
+ * executes in — because a Target checkout carries no `stacks/`; the Target's
+ * `type` comes from the same workspace's `targets.yaml`. A source root of `.`
+ * expands to `**`; it is dropped here exactly as `targetPathRules` drops it,
+ * since a root binding alone grants no path, and unioned across Targets it
+ * would open every other bound Target whole. A single-role Target's own `**`
+ * is kept: its type, not its binding, granted it.
  */
-function stackPathRulesFor(role: string, targets: readonly RuntimeWorkRoot[]): string {
+function stackPathRulesFor(role: string, targets: readonly RuntimeWorkRoot[], workspace: string): string {
   const write = new Set<string>();
   const deny = new Set<string>();
   for (const target of targets) {
     try {
-      const stack = loadTargetConfig(target.path)?.stack;
-      const rules = resolveStackPathRules({ role, projectRoot: target.path, profile: stack?.profile, sourceRoots: stack?.source_roots });
-      for (const glob of rules.write) write.add(glob);
+      const rules = targetStackPathRules({ role, targetRoot: target.path, stacksRoot: workspace, registryRoot: workspace });
+      for (const glob of rules.write) if (rules.wholeTarget || glob !== "**") write.add(glob);
       for (const glob of rules.deny) deny.add(glob);
     } catch {
       // a broken profile must not stop the run; see above

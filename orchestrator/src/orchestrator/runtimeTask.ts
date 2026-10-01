@@ -284,7 +284,7 @@ function scopeFor(input: RuntimeTaskBuildInput, workRoots: readonly RuntimeTaskW
   return { status: workRoots.length ? "resolved" : "unavailable", reason: workRoots.length ? null : "no stage work root was resolved", work_roots: workRoots.map(root => ({
       stage: root.stage, target_id: root.targetId, root: path.resolve(root.path),
       ...(root.access ? { access: root.access } : {}),
-      allow: (root.access === "write" ? targetPathRules(root.stage, input.projectRoot) : pathRulesFor(root.stage, input.projectRoot, root.path))
+      allow: (root.access === "write" ? targetPathRules(root.stage, input.projectRoot, root.path, input.docsRoot ?? input.projectRoot) : pathRulesFor(root.stage, input.projectRoot, root.path))
         .write.map(glob => ({ contract_glob: glob, effective_glob: path.resolve(root.path, ...glob.split("/")) })),
     })) };
 }

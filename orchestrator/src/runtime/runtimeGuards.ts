@@ -29,6 +29,8 @@ export const FORBIDDEN_COMMANDS: readonly string[] = ["git"];
 export interface GuardScope {
   /** The stage writes a bound Target checkout, so the Target is the scope. */
   targetSide?: boolean;
+  /** The Knowledge root whose `targets.yaml` declares the Target's `type` (single-role Targets, `targetStackPathRules`). */
+  registryRoot?: string;
 }
 
 export type GuardResolver = (role: string, layoutRoot?: string, scope?: GuardScope) => RuntimeGuards;
@@ -60,7 +62,7 @@ export function contractGuards(
 ): RuntimeGuards {
   let rules;
   try {
-    rules = scope?.targetSide ? targetPathRules(role, projectRoot, layoutRoot) : pathRulesFor(role, projectRoot, layoutRoot);
+    rules = scope?.targetSide ? targetPathRules(role, projectRoot, layoutRoot, scope.registryRoot) : pathRulesFor(role, projectRoot, layoutRoot);
   } catch (e) {
     throw new GuardResolutionError(role, e);
   }

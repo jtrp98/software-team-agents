@@ -112,6 +112,26 @@ export function checkTargetManifest(data: unknown): string[] {
 
 // --- config.yaml -----------------------------------------------------------
 
+/**
+ * One Target-relative glob a person adds on top of the stack layout. Narrow on
+ * purpose: no whole-Target `**`, nothing absolute, nothing that climbs out with
+ * `..` — an override names a directory the profile did not foresee, it does not
+ * reopen the Target the layout was there to scope.
+ */
+const TargetPathOverrideGlob = z
+  .string()
+  .min(1)
+  .refine((glob) => !/^(?:\*\*\/?)+$/.test(glob), "a whole-Target `**` is not an override; name the directory")
+  .refine((glob) => !glob.startsWith("/") && !/^[A-Za-z]:/.test(glob) && !glob.includes("\\"), "must be a Target-relative glob with forward slashes")
+  .refine((glob) => !glob.split("/").includes(".."), "must not contain `..`");
+
+const TargetRolePathOverride = z
+  .object({
+    write: z.array(TargetPathOverrideGlob).default([]),
+    deny: z.array(TargetPathOverrideGlob).default([]),
+  })
+  .strict();
+
 export const TargetConfigSchema = z.object({
   schema_version: z.literal(1),
   /** Stable identity for this Target — its directory name at init time. */
@@ -161,6 +181,20 @@ export const TargetConfigSchema = z.object({
   }).passthrough().optional(),
   /** V3 execution policy; additive and absent in every pre-V3 Target config. */
   execution: ExecutionConfigSchema.optional(),
+  /**
+   * Person-authored write/deny globs for this Target only, layered over the
+   * stack profile's layout for the two stack-scoped engineer roles. Outside
+   * `stack:` so editing it never flips the detector-owned block to
+   * person-authoritative; the universal floor, Framework payload and Knowledge
+   * artifact denials still apply ahead of it.
+   */
+  path_overrides: z
+    .object({
+      "backend-engineer": TargetRolePathOverride.optional(),
+      "frontend-engineer": TargetRolePathOverride.optional(),
+    })
+    .strict()
+    .optional(),
   /** Repo-root-relative paths sync must never touch — the user override list. */
   overrides: z.array(z.string().min(1)).default([]),
 });

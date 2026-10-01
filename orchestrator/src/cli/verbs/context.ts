@@ -29,7 +29,7 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
           try { currentRevision = (await new GitCommandLayer({ cwd: executionRoot }).revParseHead()).stdout.trim(); } catch { /* stale reason is rendered below */ }
           try {
             currentConfigHash = packetConfigHash({
-              config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
+              config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot, projectRoot, projectRoot) },
               guards: { allow: packet.scope.allow, deny: packet.scope.deny },
               verification: packet.required_verification,
               roots: packet.scope.roots,

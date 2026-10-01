@@ -8,8 +8,8 @@ import {
   GUARD_STACK_RULES_ENV,
   GUARD_TARGET_WORK_ROOTS_ENV,
   serializeGuardTargetWorkRoots,
+  targetStackPathRules,
 } from "../agents/pathPermissions.js";
-import { resolveStackPathRules } from "../profile/projectProfile.js";
 import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
@@ -226,12 +226,15 @@ export interface RuntimeExecutorOptions {
  * Returns nothing at all for a role no stack profile scopes, so a non-engineer
  * stage's environment is unchanged. `read` is deliberately not sent: reading is
  * not enforced as a block anywhere, and a hook has no use for it.
+ *
+ * `stacksRoot` is where `stacks/` lives (the Framework binding root); the
+ * guard root is a Target checkout, which carries none. `registryRoot` is the
+ * Knowledge root whose `targets.yaml` may make the Target single-role.
  */
-export function resolveGuardStackRules(role: string, guardRoot: string): Record<string, string> {
+export function resolveGuardStackRules(role: string, guardRoot: string, stacksRoot: string, registryRoot?: string): Record<string, string> {
   let rules;
   try {
-    const stack = loadTargetConfig(guardRoot)?.stack;
-    rules = resolveStackPathRules({ role, projectRoot: guardRoot, profile: stack?.profile, sourceRoots: stack?.source_roots });
+    rules = targetStackPathRules({ role, targetRoot: guardRoot, stacksRoot, registryRoot });
   } catch {
     return {}; // a broken profile must not stop a run; the orchestrator's own assertCanWrite still applies
   }
@@ -578,7 +581,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       : (workRoot?.path ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot);
     let guards: RuntimeGuards;
     try {
-      guards = opts.guards(role, executionRoot, { targetSide: stageWritesBoundTarget(runtimeTask, req.stage) });
+      guards = opts.guards(role, executionRoot, { targetSide: stageWritesBoundTarget(runtimeTask, req.stage), registryRoot: threeRepo?.roots.knowledgeRoot });
     } catch (e) {
       // The current role contract is the authority packet scope narrows. A run
       // with no resolved contract must not compile a packet or start an adapter.
@@ -603,7 +606,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
         attempt: packetAttempt,
         baseRevision,
-        config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
+        config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot, threeRepo?.roots.bindingRoot ?? opts.projectRoot, threeRepo?.roots.knowledgeRoot) },
         dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
         retrievalCandidates: codeIntel.retrievalCandidates,
         codeIntelEvidence: codeIntel.evidenceBlock,
@@ -833,7 +836,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // packet into a no-change run.  The guard's stack rules must follow the
     // same execution root.
     const guardRoot = executionRoot;
-    const guardStackRules = resolveGuardStackRules(role, guardRoot);
+    const guardStackRules = resolveGuardStackRules(role, guardRoot, threeRepo?.roots.bindingRoot ?? opts.projectRoot, threeRepo?.roots.knowledgeRoot);
     // T-V8-012: measured once — role and binding root are fixed for the whole
     // retry loop below; only runtime/model/effort change across a fallback hop.
     const rolePrefixChars = measureRolePrefixChars(threeRepo?.roots.bindingRoot ?? opts.projectRoot, req.stage);
