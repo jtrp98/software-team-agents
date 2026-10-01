@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
-import { renderCodexBinding, renderCodexSkill, renderOpenCodeBinding, defaultOpenCodePermissions, extractGuardrailRules } from "../runtime/bindingGenerator.js";
+import { renderCodexBinding, renderCodexSkill, renderCodexPrompt, renderOpenCodeBinding, defaultOpenCodePermissions, extractGuardrailRules } from "../runtime/bindingGenerator.js";
 import {
   blockingConflicts,
   planSync,
@@ -97,8 +97,43 @@ describe("command renderings at sync (T-OCC2..3 / T-CXC2..3)", () => {
     expect(fs.readFileSync(path.join(target, ".agents", "skills", "summarize", "agents", "openai.yaml"), "utf8")).toBe(
       "policy:\n  allow_implicit_invocation: false\n",
     );
+    expect(fs.readFileSync(path.join(target, ".codex", "prompts", "summarize.md"), "utf8")).toBe(renderCodexPrompt("summarize", source, rules));
     const manifest = readTargetManifest(target);
-    expect(manifest.files.map((f) => f.path)).toEqual(expect.arrayContaining([".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md"]));
+    expect(manifest.files.map((f) => f.path)).toEqual(expect.arrayContaining([".codex/prompts/summarize.md", ".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md"]));
+    const repeated = runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+    expect(repeated.performed.filter((p) => p.action === "remove-stale")).toEqual([]);
+    expect(fs.existsSync(path.join(target, ".codex", "prompts", "summarize.md"))).toBe(true);
+  });
+
+  it("tracks a packaged prompt once and regenerates it from the live source", () => {
+    const target = gitTarget();
+    const templatesDir = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES,
+      { relPath: ".codex/prompts/summarize.md", content: "stale staged bytes\n" },
+    ]);
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+    const entries = readTargetManifest(target).files.filter((f) => f.path === ".codex/prompts/summarize.md");
+    expect(entries).toHaveLength(1);
+    const expected = renderCodexPrompt("summarize", COMMAND_MD("summarize"), extractGuardrailRules(GUARDRAILS.content));
+    expect(fs.readFileSync(path.join(target, ".codex/prompts/summarize.md"), "utf8")).toBe(expected);
+    expect(entries[0]!.sha256).toBe(sha256Of(expected));
+    const repeated = runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+    expect(repeated.performed.filter((p) => p.action === "remove-stale")).toEqual([]);
+  });
+
+  it("does not install a packaged Codex prompt until the workspace opts into Codex", () => {
+    const target = gitTarget();
+    const templatesDir = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES,
+      { relPath: ".codex/prompts/summarize.md", content: "staged prompt\n" },
+    ]);
+    const config = { ...defaultTargetConfig("fixture", "2026-01-01T00:00:00Z"), runtimes: ["claude"] as const };
+    writeTargetConfig(target, { ...config, runtimes: [...config.runtimes] });
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+    expect(fs.existsSync(path.join(target, ".codex/prompts/summarize.md"))).toBe(false);
+    expect(readTargetManifest(target).files.some((f) => f.path.startsWith(".codex/prompts/"))).toBe(false);
+    writeTargetConfig(target, { ...config, runtimes: ["claude", "codex"] });
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+    expect(fs.existsSync(path.join(target, ".codex/prompts/summarize.md"))).toBe(true);
+    expect(readTargetManifest(target).files.filter((f) => f.path === ".codex/prompts/summarize.md")).toHaveLength(1);
   });
 
   it("removing a command from the payload removes its pristine mirrors and conflicts on edited ones", () => {
@@ -109,7 +144,7 @@ describe("command renderings at sync (T-OCC2..3 / T-CXC2..3)", () => {
     const withoutCommand = makeTemplatesDir("1.1.0", [...V1_FILES, GUARDRAILS]);
     const result = runTargetSync({ targetRoot: target, templatesDir: withoutCommand, now: "2026-01-02T00:00:00Z" });
     expect(result.performed.filter((p) => p.action === "remove-stale").map((p) => p.path)).toEqual(
-      expect.arrayContaining([".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md", ".agents/skills/summarize/agents/openai.yaml"]),
+      expect.arrayContaining([".codex/prompts/summarize.md", ".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md", ".agents/skills/summarize/agents/openai.yaml"]),
     );
     expect(fs.existsSync(path.join(target, ".opencode", "commands", "summarize.md"))).toBe(false);
   });

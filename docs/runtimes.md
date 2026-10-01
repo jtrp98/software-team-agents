@@ -41,6 +41,77 @@ Same verdict, three places: ตารางนี้, `sta runtimes` (อ่า�
 `codexCoverage()`/`opencodeCoverageWithPlugin()` จึง claim coverage ไม่ได้หลุดจากสิ่งที่ preflight
 enforce จริง (`orchestrator/src/runtime/runtimeSupport.test.ts` pin ไว้)
 
+## Codex interactive — pending work และเส้นทางเขียนจริง
+
+Interactive ใช้อ่านสถานะ ลิสต์งานค้าง วิเคราะห์ และเสนอขั้นต่อไปได้ แต่ **direct write จาก
+interactive ไม่ certified**: tool calls ใน Desktop/CLI อาจไม่มี framework guard คั่น และ
+`.codex/hooks.json` เป็น compatibility payload เท่านั้น การ trust hooks หรือออก
+`sta grant issue` ไม่เปลี่ยน Codex interactive ให้เป็น path ที่ enforced
+
+งานเขียนจาก Codex controller ส่งผ่าน executor ที่บังคับ per-run native permission profile จริง:
+
+```powershell
+sta execute --runtime codex --task "<bounded task>" --workspace "<resolved Target root>" --write --role <role>
+```
+
+สิทธิ์มาจาก packet และ role contract ต่อ run; human gates/refusal ยังมีผลตามเดิม
+ใช้ `sta run --runtime codex --task-id <id> --module <module>` เมื่อเป็นงาน pipeline
+ดู [Execution model](execution.md) สำหรับผลลัพธ์/approval ของ executor
+`software-team-agents open --runtime codex` ที่ preflight ปฏิเสธยังต้องรายงานตามจริง;
+การเปิด CLI แบบ read-only เพื่ออ่านสถานะไม่ได้ยืนยันว่า STA interactive launch ผ่าน preflight
+
+### Work ของ Codex — `$work` เป็นเส้นทางใช้งาน, legacy prompt ติดตั้งโดยคนสั่ง
+
+เส้นทางที่ผู้ใช้ยอมรับสำหรับ Codex คือ **`$work`** หรือเลือก skill `work` ผ่าน `/skills`
+จาก `.agents/skills/work/SKILL.md` ที่ sync จัดการอยู่แล้ว เป็น prompt shortcut เท่านั้น
+ไม่มีการเพิ่ม alias `/work` หรือจำลอง enforcement
+
+Source เดียวคือ `.claude/commands/work.md`; `COMMAND_RENDERINGS` สร้าง
+`.codex/prompts/work.md` โดย inline guardrails ไม่มี Claude `@import`, และคง
+`description`/`argument-hint` ของ Codex ไว้ `npm run build` บรรจุ rendering ใน
+`templates/manifest.json`; sync สร้างและติดตามสำเนาใน workspace ที่เลือก runtime codex
+**sync ไม่เขียน Codex home และไม่ติดตั้ง global ให้อัตโนมัติ**
+
+[OpenAI custom prompts](https://learn.chatgpt.com/docs/custom-prompts) ระบุให้ติดตั้ง
+ใน `CODEX_HOME/prompts` (default `~/.codex/prompts`) และเรียก **`/prompts:work`**
+ไม่ใช่ alias `/work`; custom prompts deprecated แล้ว และเอกสารครอบคลุม CLI/IDE
+อย่าอนุมานการรองรับใน Codex Desktop จากการผ่านของ CLI
+
+ผลทดลองบนเครื่องนี้กับ **codex-cli 0.159.2**: วาง `.codex/prompts/work.md` ใน repo
+แล้วเปิด TUI ใหม่ ไม่พบ work custom prompt; ติดตั้งใน `C:\Users\jabja\.codex\prompts\work.md`
+ด้วย hash ตรงกันแล้วเปิดใหม่ ก็ยังไม่พบในเมนู ดังนั้น **ไม่ได้ยืนยัน global-only discovery
+บนรุ่นนี้** เอกสาร legacy ไม่ใช่หลักฐานว่า client ที่ติดตั้งรองรับ ส่วน `skills/list` พบ
+repo skill `work` จริงทั้ง framework และ `C:\src\schoolbright-knowledge`
+
+คำสั่งติดตั้ง PowerShell สำหรับ client ที่ยังรองรับ legacy custom prompts
+ที่คนสั่งเองจาก framework หรือ workspace ที่ sync แล้ว
+(แสดง source/destination, ไม่ทับไฟล์เดิม):
+
+```powershell
+$staPromptSource = (Resolve-Path -LiteralPath '.codex/prompts/work.md').Path
+$staPromptHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$staPromptDir = Join-Path $staPromptHome 'prompts'
+$staPromptDestination = Join-Path $staPromptDir 'work.md'
+Write-Output "Install $staPromptSource -> $staPromptDestination"
+if (Test-Path -LiteralPath $staPromptDestination) { throw 'work.md exists; review it before replacing it manually' }
+New-Item -ItemType Directory -Path $staPromptDir -Force | Out-Null
+Copy-Item -LiteralPath $staPromptSource -Destination $staPromptDestination
+```
+
+การตรวจเส้นทางใช้งานที่ยอมรับ: เปิด session ใหม่ด้วย
+`codex -C C:\src\schoolbright-knowledge -s read-only` แล้วเรียก
+`$work มีงานค้างอะไรบ้างใน module timetableai` ต้องอ่าน `_docs/status.md` จริง
+หากอ่านไม่สำเร็จ ให้รายงานว่าไม่ผ่าน; คำตอบที่ตรงจากความจำไม่ใช่หลักฐานการอ่าน
+
+เฉพาะการตรวจ legacy custom prompt หลังติดตั้ง เปิด session ใหม่: `codex -C C:\src\schoolbright-knowledge -s read-only -a never`
+ตรวจเมนู `/prompts:work` ก่อนส่ง `/prompts:work timetableai` แล้วถาม
+"มีงานค้างอะไรบ้างใน module timetableai" ต้องอ่าน `_docs/status.md` จริง
+การตรวจนี้ไม่ใช้ `sync`/`init`/`upgrade` และไม่เขียนใน Knowledge repository
+
+`.agents/skills/work/SKILL.md` เป็นอีก rendering ของ source เดียวกัน ใช้ explicit
+`$work` ผ่าน skills ได้ใน client ที่รองรับ; การพบ skill ไม่ใช่หลักฐานว่ามี slash alias `/work`
+ดู baseline และผลตรวจจริงใน [Codex work verification](codex-work-verification.md)
+
 ## Unattended runs
 
 การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` — default (`propose`) ติด permission prompt

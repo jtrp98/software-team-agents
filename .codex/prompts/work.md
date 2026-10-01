@@ -1,5 +1,6 @@
 ---
 description: "The interactive work loop — answer what is pending from real state, then start it on a governed route."
+argument-hint: "[module]"
 ---
 
 1. This command is a **prompt shortcut only**. It changes nothing about your role, tools, or permissions.

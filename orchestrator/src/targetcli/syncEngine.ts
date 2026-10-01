@@ -566,7 +566,14 @@ function isProvableStaleAgentsDuplicate(targetRoot: string): boolean {
 
 /** The payload this sync manages: the whole template manifest, one profile for every workspace (V10 TASK-020). */
 function effectiveTemplateManifest(options: PlanSyncOptions): TemplateManifest {
-  return readTemplateManifest(options.templatesDir);
+  const manifest = readTemplateManifest(options.templatesDir);
+  // Packaged command renderings are staged assets, regenerated from live
+  // sources below under runtime opt-in. Copying them as primary payload too
+  // would track the same path twice and install unselected runtimes.
+  return {
+    ...manifest,
+    files: manifest.files.filter((file) => !DERIVED_COMMAND_RENDERINGS.some((spec) => file.path.startsWith(`${spec.dir}/`))),
+  };
 }
 
 /** Pure planner: reads both sides, writes nothing. */
@@ -751,7 +758,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     for (const [relPath, tracked] of oldFiles) {
       if (!relPath.startsWith(`${spec.dir}/`)) continue;
       const underDir = relPath.slice(spec.dir.length + 1);
-      const command = underDir.includes("/") ? underDir.split("/")[0]! : path.basename(underDir);
+      const command = underDir.includes("/") ? underDir.split("/")[0]! : path.basename(underDir, ".md");
       if (!command || survivingCommands.has(command)) continue;
       const abs = path.join(options.targetRoot, relPath);
       if (!fs.existsSync(abs)) continue;

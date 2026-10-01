@@ -31,7 +31,8 @@ import {
  *
  * The same one-source rule covers prompt shortcuts: each
  * `.claude/commands/<name>.md` renders into `.opencode/commands/<name>.md`
- * and `.agents/skills/<name>/SKILL.md` (+ a fixed `agents/openai.yaml`) —
+ * and `.agents/skills/<name>/SKILL.md` (+ a fixed `agents/openai.yaml`),
+ * plus `.codex/prompts/<name>.md` for explicit installation into Codex home —
  * see `COMMAND_RENDERINGS` below.
  *
  * `checkBindings()` fails when what is on disk stops matching what this module
@@ -556,6 +557,20 @@ export function renderOpenCodeCommand(name: string, sourceMd: string, guardrails
   return ["---", `description: ${yamlDoubleQuoted(parsed.description)}`, "---", "", withInlinedGuardrails(parsed, guardrailsRules)].join("\n");
 }
 
+/**
+ * Codex custom prompt, staged in the repo for explicit installation into
+ * CODEX_HOME/prompts on clients that still support them; project staging
+ * itself does not register a command. Verify discovery on the installed client.
+ * Keep its native argument metadata and inline Claude-only imports.
+ */
+export function renderCodexPrompt(name: string, sourceMd: string, guardrailsRules: string): string {
+  void name;
+  const parsed = parseCommandMd(sourceMd);
+  const header = ["---", `description: ${yamlDoubleQuoted(parsed.description)}`];
+  if (parsed.argumentHint) header.push(`argument-hint: ${yamlDoubleQuoted(parsed.argumentHint)}`);
+  return [...header, "---", "", withInlinedGuardrails(parsed, guardrailsRules)].join("\n");
+}
+
 /** The fixed per-skill policy file: skills are human-typed shortcuts, never model-initiated. */
 export const CODEX_SKILL_OPENAI_YAML = "policy:\n  allow_implicit_invocation: false\n";
 
@@ -579,6 +594,11 @@ export interface CommandRenderingSpec {
 }
 
 export const COMMAND_RENDERINGS: readonly CommandRenderingSpec[] = [
+  {
+    dir: ".codex/prompts",
+    outputs: (n) => [`${n}.md`],
+    render: (n, md, g) => new Map([[`${n}.md`, renderCodexPrompt(n, md, g)]]),
+  },
   {
     dir: ".opencode/commands",
     outputs: (n) => [`${n}.md`],
@@ -717,7 +737,7 @@ export type BindingRendering = AgentBindingRendering | RootBindingRendering;
 export function renderAgentsPointer(claudeMd: string): string {
   const inspected = inspectBootstrapBlock(claudeMd);
   if (inspected.state !== "valid") throw new Error("CLAUDE.md has no valid sta:bootstrap block");
-  return `${inspected.block}Full operating rules: see [CLAUDE.md](CLAUDE.md).\nInteractive work loop: see [.agents/skills/work/SKILL.md](.agents/skills/work/SKILL.md) (or run the /work command).\n`;
+  return `${inspected.block}Full operating rules: see [CLAUDE.md](CLAUDE.md).\nInteractive work loop: see [.agents/skills/work/SKILL.md](.agents/skills/work/SKILL.md) (Codex: invoke $work; other clients with slash commands: /work).\n`;
 }
 
 export const BINDING_RENDERINGS: readonly BindingRendering[] = [
