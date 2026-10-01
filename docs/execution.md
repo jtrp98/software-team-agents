@@ -80,6 +80,35 @@ Executor ได้รับ `STA_RUN_ID` และ `STA_RUN_STORE` ใน enviro
 - ต้องมี BA/SA/PM/workflow ก่อนหรือไม่
 - ต้องมี role หรือไม่
 
+## เขียน Target จาก Knowledge workspace
+
+`--workspace` คือที่ที่ run ทำงาน และเป็นที่ที่ runtime อ่านนิยาม role (`.claude/agents/<role>.md`) กับ guard wiring
+(`.claude/settings.json`) ด้วย ถ้าตั้ง workspace เป็น Target แล้ว Target ไม่มีของพวกนี้ run จะล้ม ให้ตั้ง workspace เป็น Knowledge
+แล้วระบุ Target ที่จะเขียนแยกต่างหาก:
+
+```bash
+sta execute --runtime claude-code --role backend-engineer --workspace <knowledge-root> \
+  --writable-target <target-id|path> --task "BE-005: ..."
+```
+
+- `--writable-target` ใส่ได้หลายตัว และรับได้เฉพาะ Target ที่ `.workflow/targets.local.yaml` ของ workspace map ไว้
+  (ตัว resolve เดียวกับ `open --writable-target`) ถ้า Target ไม่อยู่ใน map จะได้ `target_not_mapped` ก่อนจะ spawn อะไร
+- การระบุ Target ถือว่าสั่ง `--write` ด้วย และต้องมี `--role` เพราะ guard ใช้ contract และ stack rules ของ role ตรวจทุก path ใน Target
+  ถ้าไม่มี role จะได้ `invalid_permissions`
+- ตัว workspace จะอ่านได้อย่างเดียว เว้นแต่ใส่ `--write-path` เพิ่มเอง STA ตั้ง `STA_KNOWLEDGE_ROOT` เป็น workspace engineer จึงเขียน
+  `_docs/`, `knowledge/` ฯลฯ ไม่ได้ เหมือน stage ที่ orchestrator คุม
+- Claude Code ได้ `--add-dir=<target>` และ prompt บอก path ของแต่ละ Target แบบ absolute
+
+## `sta execute` ไม่ใช้ OS sandbox
+
+run ตรงคือผู้เรียกสั่ง runtime เองเหมือนพิมพ์ prompt เอง Claude Code จึงถูกเรียกตรงด้วย `claude -p` ไม่ห่อด้วย `codex sandbox`
+ใช้ login และ network ของผู้ใช้ และไม่เปิดหน้าต่าง console (`windowsHide`) ส่วน `sta run`/`bounded-run` ยังรันใน OS isolation เหมือนเดิม
+
+สิ่งที่ยังบังคับอยู่มีแค่ hook ใน `.claude/settings.json` ของ workspace คือ path ของ Write/Edit ตาม role และ stack, การบล็อก git
+ที่เปลี่ยน state และ `no-hardcoded-secret` สิ่งที่ไม่มีแล้วคือการกันระดับ OS: คำสั่ง Bash เขียนนอก path ที่อนุญาตได้ และ network เปิดเต็ม
+ผู้ใช้ยอมรับข้อนี้แล้ว (2026-10-01) เพื่อให้ run ตรงทำงานแบบเดียวกับ session ที่คนสั่งเอง
+- run ลูกได้ Target ของ parent โดยอัตโนมัติเมื่อเขียนได้และมี role ระบุ Target ที่ parent ไม่มีจะได้ `permission_escalation`
+
 ## Approval ข้าม tree
 
 1. run C ที่ประกาศ side effect จะคืน `needs_approval` โดยไม่ spawn อะไรเลย

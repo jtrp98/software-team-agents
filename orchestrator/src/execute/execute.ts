@@ -1,8 +1,12 @@
 import { resolveMaxTurnsFromProject } from "../runtime/turnLimits.js";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
-import type { RuntimeAgentRequest, RuntimeAgentResult, RuntimeGuardReport, RuntimeUsage } from "../runtime/runtimeAdapter.js";
+import type { RuntimeAgentRequest, RuntimeAgentResult, RuntimeGuardReport, RuntimeUsage, RuntimeWorkRoot } from "../runtime/runtimeAdapter.js";
 import { roleEnv } from "../runtime/runtimeAdapter.js";
+import { serializeGuardTargetWorkRoots } from "../agents/pathPermissions.js";
+import { resolveStackPathRules } from "../profile/projectProfile.js";
+import { loadTargetConfig } from "../targetcli/targetMeta.js";
+import { resolveWritableTargetWorkRoots, WritableTargetRequestError } from "../targetcli/roleWorkspace.js";
 import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { executorPortFor } from "../runtime/executorPort.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
@@ -11,6 +15,7 @@ import {
   PolicyRefusal,
   resolveLimits,
   resolvePermissions,
+  resolveWorkRoots,
   resolveWorkspace,
   type ExecutionLimits,
   type Permissions,
@@ -53,6 +58,16 @@ export interface ExecuteRequest {
   workspace?: string;
   /** Optional persona from the runtime's binding (`backend-engineer`, ...). An instruction set, not an authority. */
   role?: string;
+  /**
+   * Target repositories the run may write besides its workspace, by Target id
+   * or mapped path (`--writable-target`). A root run may name only Targets its
+   * workspace's `.workflow/targets.local.yaml` maps; a child only Targets its
+   * parent holds. The run still executes in its workspace, so the role's
+   * definition and guard wiring come from there (the Knowledge workspace), and
+   * the workspace itself is read-only unless `writePaths` say otherwise.
+   * Implies `write`, and needs a `role`.
+   */
+  writableTargets?: readonly string[];
   /** Extra context appended to the task. */
   context?: string;
   /** The run this one is delegated from. Default: the caller's `STA_RUN_ID`, if any. */
@@ -144,6 +159,8 @@ export interface StaOptions {
   now?: () => number;
   /** How an executor calls STA back — shown in its prompt. */
   staCommand?: string;
+  /** Resolves a root run's `writableTargets` against its workspace's Target mapping. Test seam; defaults to the one `open --writable-target` uses. */
+  resolveWritableTargets?: (input: { knowledgeRoot: string; workspaceRoot: string; requests: readonly string[] }) => readonly RuntimeWorkRoot[];
 }
 
 export interface Sta {
@@ -197,15 +214,47 @@ function ref(run: RunRecord): RunRef {
  * environment that the run's own permissions did not grant.
  */
 export function runEnv(run: RunRecord, store: RunStore): Record<string, string> {
+  const targets = run.workRoots ?? [];
+  const writable = run.permissions.write
+    ? [...(run.permissions.writePaths.length > 0 ? [run.workspace] : []), ...targets.map((root) => root.path)]
+    : [];
   return {
     ...runIdentityEnv(run, store),
     ...roleEnv(run.role),
-    STA_WRITABLE_WORK_ROOTS: JSON.stringify(run.permissions.write ? [run.workspace] : []),
-    STA_TARGET_WORK_ROOTS: "",
-    STA_STACK_PATH_RULES: "",
-    STA_KNOWLEDGE_ROOT: "",
+    STA_WRITABLE_WORK_ROOTS: JSON.stringify(writable),
+    // A Target-writing run executes in the Knowledge workspace: name its Targets
+    // for the guard, hand it each Target's stack layout for the role, and name the
+    // workspace as the Knowledge root so an implementation role is refused the
+    // documents there exactly as an orchestrated stage is.
+    STA_TARGET_WORK_ROOTS: targets.length > 0 ? serializeGuardTargetWorkRoots(targets) : "",
+    STA_STACK_PATH_RULES: targets.length > 0 && run.role ? stackPathRulesFor(run.role, targets) : "",
+    STA_KNOWLEDGE_ROOT: targets.length > 0 ? run.workspace : "",
     STA_KNOWLEDGE_ROOT_NAME: "",
   };
+}
+
+/**
+ * The stack layout globs for `role` across the run's Targets, as the guard's
+ * `{write, deny}` channel — resolved per Target the way an orchestrated stage
+ * resolves its execution root's, and unioned, since the guard applies them to
+ * each path relative to whichever Target holds it. A Target whose profile does
+ * not resolve contributes nothing, so its paths fall to the contract alone and
+ * the guard over-restricts rather than letting a path through.
+ */
+function stackPathRulesFor(role: string, targets: readonly RuntimeWorkRoot[]): string {
+  const write = new Set<string>();
+  const deny = new Set<string>();
+  for (const target of targets) {
+    try {
+      const stack = loadTargetConfig(target.path)?.stack;
+      const rules = resolveStackPathRules({ role, projectRoot: target.path, profile: stack?.profile, sourceRoots: stack?.source_roots });
+      for (const glob of rules.write) write.add(glob);
+      for (const glob of rules.deny) deny.add(glob);
+    } catch {
+      // a broken profile must not stop the run; see above
+    }
+  }
+  return write.size > 0 || deny.size > 0 ? JSON.stringify({ write: [...write], deny: [...deny] }) : "";
 }
 
 export function createSta(options: StaOptions): Sta {
@@ -214,6 +263,7 @@ export function createSta(options: StaOptions): Sta {
   const now = options.now ?? Date.now;
   const store = options.runStore instanceof RunStore ? options.runStore : new RunStore(options.runStore ?? defaultRunStoreDir(env, cwd));
   const staCommand = options.staCommand ?? "sta";
+  const resolveTargets = options.resolveWritableTargets ?? resolveWritableTargetWorkRoots;
 
   function error(run: Pick<RunRecord, "runId" | "runtime" | "task" | "parentRunId">, code: string, message: string, extra: Partial<RunError> = {}): RunError {
     return { code, message, runId: run.runId, runtime: run.runtime, task: run.task, parentRunId: run.parentRunId, ...extra };
@@ -279,12 +329,25 @@ export function createSta(options: StaOptions): Sta {
     const lines = [run.task];
     if (run.context) lines.push("", "Context:", run.context);
     if (note) lines.push("", note);
-    const write = run.permissions.write ? `yes (${run.permissions.writePaths.join(", ")})` : "no";
+    const targets = run.workRoots ?? [];
+    const write = run.permissions.write
+      ? targets.length > 0 && run.permissions.writePaths.length === 0
+        ? "Targets only — the workspace is read-only"
+        : `yes (${run.permissions.writePaths.join(", ")})`
+      : "no";
     lines.push("", "---", `STA run ${run.runId} on ${run.runtime}, depth ${run.depth} of max ${run.limits.maxDepth}. Workspace: ${run.workspace}. Write: ${write}.`);
+    if (targets.length > 0) {
+      // The run executes in the Knowledge workspace, so its cwd is not the code
+      // it changes: name the repositories it does change, by absolute path.
+      lines.push(
+        "Writable Targets — the code this task changes lives here, not in the workspace; read and edit it by these absolute paths:",
+        ...targets.map((root) => `  - ${root.targetId}: ${root.path}`),
+      );
+    }
     if (run.permissions.delegate && run.depth < run.limits.maxDepth) {
       lines.push(
         `You may delegate a sub-task to any runtime (${options.registry.ids().join(", ")}) with:`,
-        `  ${staCommand} execute --runtime <id> --task "<sub-task>"${run.permissions.write ? " [--write]" : ""}`,
+        `  ${staCommand} execute --runtime <id> --task "<sub-task>"${run.permissions.write ? " [--write]" : ""}${targets.length > 0 ? " [--role <role> --writable-target <id>]" : ""}`,
         `It prints a JSON result. If it reports "needs_approval", stop and report that — the decision is made above you.`,
       );
     }
@@ -316,6 +379,10 @@ export function createSta(options: StaOptions): Sta {
       taskId: `${run.runId}#${run.attempts}`,
       ...(run.role ? { role: run.role, definitionPath: adapter.binding.definitionPath(run.role) } : {}),
       cwd: run.workspace,
+      ...(run.workRoots && run.workRoots.length > 0 ? { workRoots: run.workRoots, knowledgeRoot: run.workspace } : {}),
+      // A direct run is the caller prompting a runtime itself: no OS wrapper,
+      // the caller's own login; the workspace's guard hooks still apply.
+      osIsolation: false,
       prompt: prompt(run, note),
       ...(run.model ? { model: run.model, modelExplicit: true } : {}),
       ...(run.effort ? { effort: run.effort } : {}),
@@ -401,10 +468,35 @@ export function createSta(options: StaOptions): Sta {
 
     let workspace: string;
     let permissions: RunRecord["permissions"];
+    let workRoots: RuntimeWorkRoot[];
     let limits: RunRecord["limits"];
     try {
       workspace = resolveWorkspace(request.workspace, parent?.workspace ?? null, cwd);
-      permissions = resolvePermissions(request.permissions, parent, workspace);
+      let requestedRoots: readonly RuntimeWorkRoot[] | undefined;
+      const names = request.writableTargets ?? [];
+      if (names.length > 0) {
+        if (parent) {
+          // A child names Targets its parent already holds; anything else is
+          // left unmatched for resolveWorkRoots to refuse as an escalation.
+          requestedRoots = names.map(
+            (name) =>
+              parent.workRoots?.find((own) => own.targetId === name || path.resolve(own.path) === path.resolve(name)) ??
+              { targetId: name, path: path.resolve(name), access: "write" as const },
+          );
+        } else {
+          try {
+            requestedRoots = resolveTargets({ knowledgeRoot: workspace, workspaceRoot: workspace, requests: names });
+          } catch (e) {
+            if (e instanceof WritableTargetRequestError) return refused(request, parent, "target_not_mapped", e.message);
+            throw e;
+          }
+        }
+      }
+      const writesTargets = requestedRoots !== undefined ? requestedRoots.length > 0 : (parent?.workRoots?.length ?? 0) > 0;
+      const requestedPermissions =
+        requestedRoots && requestedRoots.length > 0 ? { ...request.permissions, write: request.permissions?.write ?? true } : request.permissions;
+      permissions = resolvePermissions(requestedPermissions, parent, workspace, writesTargets);
+      workRoots = resolveWorkRoots(requestedRoots, parent, workspace, permissions.write, request.role);
       limits = resolveLimits(request.limits, parent?.limits ?? null);
     } catch (e) {
       if (e instanceof PolicyRefusal) return refused(request, parent, e.code, e.message);
@@ -431,6 +523,7 @@ export function createSta(options: StaOptions): Sta {
       task: request.task,
       ...(request.context ? { context: request.context } : {}),
       workspace,
+      ...(workRoots.length > 0 ? { workRoots } : {}),
       permissions,
       limits,
       actions,
