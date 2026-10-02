@@ -1,5 +1,50 @@
 # Release Notes
 
+## software-team-agents 9.0.0 — init refuses a Target checkout (2026-10-02)
+
+> **Version 9.0.0 and release date 2026-10-02 confirmed by the release owner.** The Major bucket is
+> the mechanical result of the version rule at the bottom of this file: a guard that was off now
+> refuses something that passed before — `software-team-agents init` standing in a fresh Target
+> checkout used to materialize the Framework payload into it and now exits 1 having written
+> nothing. `templates/manifest.json` is re-stamped by `npm run build`;
+> `@software-team-agents/orchestrator` stays at `0.3.0`.
+
+**Bucket: Major (`8.3.0 → 9.0.0`, confirmed).** One track: a Target checkout is never initialized
+in place. Targets are registered in the Knowledge root and written through orchestrated stages —
+the rule the `open` preflight already enforced; `init` now enforces the same one at its own door.
+The trigger this closes: an unattended agent (ZCode, Claude Code, any CLI helper) that "helpfully"
+runs init inside a Target repository and pollutes it with `.agent-team/`, `.claude/` and a managed
+`.gitignore` block the owner never asked for.
+
+- **`software-team-agents init` refuses a fresh Target checkout.** App-source markers
+  (`package.json`, `Directory.Build.props`, `.sln`/`.csproj`, `pyproject.toml`, …) with no recorded
+  `.agent-team/config.yaml` → exit 1, nothing written, with guidance naming the Knowledge-workspace
+  route (`targets.yaml` + `.workflow/targets.local.yaml`). Two human-shaped doors stay open:
+  the explicit `--dev-workspace` opt-in flag, or a hand-written config.yaml — the channel agents
+  are never told to use. An already-recorded DEV workspace re-inits idempotently, unchanged.
+- **`--dev-workspace` (new, init only).** A person's explicit opt-in to manage a Target checkout
+  as a locally-managed DEV workspace; the parser rejects it on any other command.
+- **`sta init --mode three-repo` refuses an application checkout** the same way — it scaffolds a
+  Knowledge root, never `knowledge/` + `targets.yaml` inside source code.
+- **`sync` in an uninitialized Target checkout no longer teaches the wrong fix.** It used to say
+  "run `software-team-agents init` inside your project first" — the exact instruction an agent
+  standing in a Target would follow into the wrong repo; it now names the Knowledge-workspace
+  route (and `--dev-workspace` for a deliberate local DEV workspace).
+- **The synced bootstrap block gains the hard boundary.** Every workspace's rendered
+  AGENTS.md/CLAUDE.md block (2580 B / 4096 B) now states: initialize only this Knowledge workspace —
+  never run init/sync inside a Target checkout. Root `CLAUDE.md`'s own byte budget (13,312 B, 35 B
+  free) is untouched; the line lives in `renderBootstrapBlock()`, the one source sync renders from.
+  Help text on both CLIs states the rule and the flag.
+
+### Validation summary (tree @ release, version bumped)
+
+- orchestrator suite: 4354 tests / typecheck ✓ / build ✓ · templates snapshot ✓ · bindings ✓
+- packaged distribution E2E: 28/28 steps on Windows, including the new refusal +
+  `--dev-workspace` opt-in sequence
+- `release:check` note (pre-existing, environment, not this release): `--check-prompt-budget`
+  fails on a CRLF Windows checkout (disk 13,385 B vs 13,312 B budget; the LF blob is 13,277 B),
+  and the benchmark step needs `planning/`, which this checkout does not carry.
+
 ## software-team-agents 8.3.0 — engineer write scope follows the Target's type (2026-10-01)
 
 > **Version 8.3.0 and release date 2026-10-01 confirmed by the release owner.** The Minor bucket is

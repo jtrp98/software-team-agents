@@ -140,7 +140,7 @@ async function initializedTarget(runtimes: string[] = ["claude", "codex", "openc
   const target = makeTarget();
   const knowledge = makeKnowledgeRepo();
   const fw = fakeFramework("1.0.0", guardPayload());
-  const argv = ["init", ...runtimes.flatMap((runtime) => ["--runtime", runtime])];
+  const argv = ["init", "--dev-workspace", ...runtimes.flatMap((runtime) => ["--runtime", runtime])];
   expect(await silently(() => runTargetCli(argv, target, fw, { installationConfigPath: NO_INSTALLATION }))).toBe(0);
   const config = loadTargetConfig(target)!;
   config.knowledge = { path: knowledge };
@@ -221,7 +221,7 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
     const knowledge = makeKnowledgeRepo();
     const fw = fakeFramework("1.0.0", guardPayload());
     const templatesDir = path.join(fw, "templates");
-    expect(await silently(() => runTargetCli(["init", "--runtime", "codex"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).toBe(0);
+    expect(await silently(() => runTargetCli(["init", "--dev-workspace", "--runtime", "codex"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).toBe(0);
 
     expect(() =>
       workspacePreflight("ba", { targetRoot: knowledge, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }), runtime: "codex" }),

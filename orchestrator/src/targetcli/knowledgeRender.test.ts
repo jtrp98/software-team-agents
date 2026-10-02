@@ -92,6 +92,7 @@ describe("T-V3-06 bootstrap rendering", () => {
       - Hard boundary: write only inside resolved writable workspace roots.
       - Hard boundary: write only paths allowed by the active role contract.
       - Hard boundary: confirm workspace ↔ binding before writing anything — the bound root is read-only context here; Target writes go through STA-governed runs (\`sta grant issue\` · \`sta execute\` · \`sta run\`). A human start/continue follows \`/work\` §2 even when \`/work\` was not typed: begin this turn in its route order; never hand over a command to paste or ask for a relaunch — stop only on a human gate or when every route refused.
+      - Hard boundary: initialize only this Knowledge workspace — never run \`software-team-agents init\`/\`sync\` inside a Target checkout; Targets are registered in the Knowledge root and written through orchestrated stages (init refuses a Target checkout unless a person passes \`--dev-workspace\`).
       - Hard boundary: amend existing module docs section-by-section; never regenerate them.
       - Hard boundary: approvals/sign-offs are human acts; agents never forge them.
       - Hard boundary: dates and unclear business rules come from a person; never improvise them.
@@ -112,6 +113,7 @@ describe("T-V3-06 bootstrap rendering", () => {
       - Hard boundary: write only inside resolved writable workspace roots.
       - Hard boundary: write only paths allowed by the active role contract.
       - Hard boundary: confirm workspace ↔ binding before writing anything — the bound root is read-only context here; Target writes go through STA-governed runs (\`sta grant issue\` · \`sta execute\` · \`sta run\`). A human start/continue follows \`/work\` §2 even when \`/work\` was not typed: begin this turn in its route order; never hand over a command to paste or ask for a relaunch — stop only on a human gate or when every route refused.
+      - Hard boundary: initialize only this Knowledge workspace — never run \`software-team-agents init\`/\`sync\` inside a Target checkout; Targets are registered in the Knowledge root and written through orchestrated stages (init refuses a Target checkout unless a person passes \`--dev-workspace\`).
       - Hard boundary: amend existing module docs section-by-section; never regenerate them.
       - Hard boundary: approvals/sign-offs are human acts; agents never forge them.
       - Hard boundary: dates and unclear business rules come from a person; never improvise them.

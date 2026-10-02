@@ -138,7 +138,7 @@ async function capture(fn: () => Promise<number>): Promise<{ code: number; out: 
 async function initializedKnowledge(): Promise<{ knowledge: string; fw: string; templatesDir: string }> {
   const knowledge = makeKnowledgeRepo();
   const fw = fakeFramework("1.0.0", guardPayload());
-  expect(await runTargetCli(["init"], knowledge, fw, { installationConfigPath: NO_INSTALLATION })).toBe(0);
+  expect(await runTargetCli(["init", "--dev-workspace"], knowledge, fw, { installationConfigPath: NO_INSTALLATION })).toBe(0);
   return { knowledge, fw, templatesDir: path.join(fw, "templates") };
 }
 
@@ -234,7 +234,7 @@ describe("V10 TASK-027 — preflight dependencies are per session, not per role"
   it("an unbound target workspace opens too — the role no longer decides what a session must resolve", async () => {
     const target = makeTarget();
     const fw = fakeFramework("1.0.0", guardPayload());
-    const initialized = await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }));
+    const initialized = await capture(() => runTargetCli(["init", "--dev-workspace"], target, fw, { installationConfigPath: NO_INSTALLATION }));
     expect(initialized.code, initialized.err).toBe(0);
     const config = loadTargetConfig(target)!;
     config.knowledge = { path: makeKnowledgeRepo() };

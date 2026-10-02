@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveFrameworkRoot } from "./roots.js";
 import { runTargetInit } from "./initCommand.js";
+import { detectWorkspaceKind } from "./roleWorkspace.js";
 import { gatherStatus, renderStatus } from "./statusCommand.js";
 import { TargetSyncConflictError, runTargetSync } from "./syncEngine.js";
 import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotInitializedError } from "./targetMeta.js";
@@ -35,7 +36,9 @@ export const TARGET_USAGE =
   "usage: software-team-agents <command> [options]\n" +
   "\n" +
   "commands:\n" +
-  "  init      detect this workspace and initialize Framework metadata + managed assets\n" +
+  "  init      initialize this workspace with Framework metadata + managed assets\n" +
+  "            (a Target checkout refuses without --dev-workspace — Targets are\n" +
+  "            driven from the Knowledge workspace)\n" +
   "  sync      bring Framework-managed files up to the installed Framework version\n" +
   "  status    show role, workspace, roots, versions, sync state, readiness\n" +
   "  open      preflight, then launch an agent runtime from this Knowledge workspace\n" +
@@ -52,6 +55,9 @@ export const TARGET_USAGE =
   "  --root <name>          init/sync/status/open: read the named Knowledge root from\n" +
   "                         installation.yaml (default when omitted)\n" +
   "  --stack <name>         init/sync: explicitly resolve ambiguous Target stack evidence\n" +
+  "  --dev-workspace        init: a person's explicit opt-in to initialize this Target\n" +
+  "                         checkout as a locally-managed DEV workspace — the only way\n" +
+  "                         init runs inside a Target checkout\n" +
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         open: refuse to run when managed assets are outdated\n" +
@@ -77,6 +83,8 @@ export interface TargetCliArgs {
   stack?: string;
   /** `--root <name>` — the named Knowledge root this command reads from (DR §4). */
   rootName?: string;
+  /** `init --dev-workspace`: a person's explicit opt-in to initialize a Target checkout as a locally-managed DEV workspace. */
+  devWorkspace: boolean;
   force: boolean;
   confirmAgentsPointer: boolean;
   autoSync: boolean;
@@ -98,7 +106,7 @@ export interface TargetCliArgs {
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
   const { requestedName, rest } = extractRootSelectorFlag(argv);
-  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], writableTargets: [], dryRun: false, yes: false, restore: false, json: false, help: false, version: false, rootName: requestedName };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], writableTargets: [], dryRun: false, yes: false, restore: false, json: false, help: false, version: false, rootName: requestedName, devWorkspace: false };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     switch (arg) {
@@ -131,6 +139,9 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
       case "--stack":
         args.stack = rest[++i];
         if (!args.stack) throw new Error("--stack requires a profile name");
+        break;
+      case "--dev-workspace":
+        args.devWorkspace = true;
         break;
       case "--force":
         args.force = true;
@@ -182,13 +193,24 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
   if (args.writableTargets.length > 0 && args.command !== "open") {
     throw new Error("--writable-target applies to open — it grants a session's writable boundary at launch");
   }
+  if (args.devWorkspace && args.command !== "init") {
+    throw new Error("--dev-workspace applies to init — it is a person's opt-in to manage a Target checkout locally");
+  }
   return args;
 }
 
 function requireInitialized(targetRoot: string): ReturnType<typeof readTargetManifest> {
   if (!isTargetInitialized(targetRoot)) {
+    // A Target checkout must never be told to init itself — the default
+    // message is exactly the instruction an agent standing in a Target would
+    // follow into the wrong repo (init materializes payload into source).
+    if (detectWorkspaceKind(targetRoot) === "target") {
+      throw new TargetNotInitializedError(
+        `${targetRoot} is a Target checkout with no Framework payload — it is registered and driven from the Knowledge workspace (targets.yaml + .workflow/targets.local.yaml), never initialized in place; a person who deliberately wants a locally-managed DEV workspace here runs init with --dev-workspace`,
+      );
+    }
     throw new TargetNotInitializedError(
-      `${targetRoot} has not been initialized — run \`software-team-agents init\` inside your project first`,
+      `${targetRoot} has not been initialized — run \`software-team-agents init\` inside your Knowledge workspace first`,
     );
   }
   return readTargetManifest(targetRoot);
@@ -247,6 +269,7 @@ export async function runTargetCli(
           runtimes: args.runtimeSelections,
           installationConfigPath: options.installationConfigPath,
           rootName: args.rootName,
+          devWorkspaceConfirmed: args.devWorkspace,
         });
         console.log(
           `[software-team-agents] ${result.role === "ba" ? "Knowledge" : "Target"} workspace ` +

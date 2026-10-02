@@ -223,7 +223,7 @@ export const USAGE =
   `  ${GRANT_USAGE.split("\n").join("\n  ")}` +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
-  "  sta init    --mode three-repo [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
+  "  sta init    --mode three-repo [--templates <dir>] [--project-root <path>] [--force]   initialize a Knowledge root — refuses an application (Target) checkout; Targets are registered from the Knowledge workspace\n" +
   "  sta configure knowledge-root <path> [--root <name>] [--default] [--config-path <path>]   bind a Knowledge root. With --root: the named-root surface (V11) — the first named operation migrates installation.yaml to v2 (`knowledge_roots` map + `default_root`); without --root: the V10 single-root form, still valid on a machine that has no v2 file and refused on one\n" +
   "  sta configure default-root --root <name> [--config-path <path>]   switch which named root new work picks when no --root is given\n" +
   "  sta transfer plan --source-root <name> --source-target <id> --destination-root <name> [--destination-target <id>]   read-only transfer plan + the approval-record template\n" +

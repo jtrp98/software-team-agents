@@ -211,13 +211,20 @@ try {
     expectCond("sta configure knowledge-root binds the Knowledge repo", r.status === 0 && fs.existsSync(installationConfig), r.out);
   }
 
-  // --- 6 · init: detected role, idempotent repeat ---------------------------
+  // --- 6 · init: Target checkout refuses by default, --dev-workspace opts in --
   {
-    const first = runBin(targetBin, ["init"], { cwd: targetRepo, env: baseEnv });
-    expectCond("init detects the Target as DEV and materializes managed assets", first.status === 0 && /DEV/i.test(first.out), first.out);
+    const refused = runBin(targetBin, ["init"], { cwd: targetRepo, env: baseEnv });
+    expectCond(
+      "plain init in a Target checkout refuses with Knowledge-workspace guidance",
+      refused.status !== 0 && /looks like a Target checkout/i.test(refused.out) && /--dev-workspace/.test(refused.out),
+      refused.out.slice(0, 400),
+    );
+    expectCond("the refusal materialized no payload", !fs.existsSync(path.join(targetRepo, ".claude", "settings.json")));
+    const first = runBin(targetBin, ["init", "--dev-workspace"], { cwd: targetRepo, env: baseEnv });
+    expectCond("init --dev-workspace initializes the checkout as DEV", first.status === 0 && /DEV/i.test(first.out), first.out);
     expectCond("init shipped guard wiring (.claude/settings.json)", fs.existsSync(path.join(targetRepo, ".claude", "settings.json")));
     const second = runBin(targetBin, ["init"], { cwd: targetRepo, env: baseEnv });
-    expectCond("repeated init succeeds and reports re-initialization", second.status === 0 && /re-initialized/i.test(second.out), second.out);
+    expectCond("repeated init of the recorded workspace succeeds and reports re-initialization", second.status === 0 && /re-initialized/i.test(second.out), second.out);
   }
 
   // --- 7 · status: machine-readable, current --------------------------------

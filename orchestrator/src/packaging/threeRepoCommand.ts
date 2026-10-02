@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 
 const KNOWLEDGE_DIRECTORIES = ["knowledge", "_docs", "decisions"] as const;
 const KNOWLEDGE_FILES: Readonly<Record<string, string>> = {
@@ -26,11 +27,20 @@ export interface ThreeRepoUpgradeResult {
  * Initializes only Knowledge-owned state. Framework bindings remain in the
  * installed framework and Target source/instructions are never materialized.
  * Existing data is left byte-for-byte intact, making this safe to re-run.
+ *
+ * An application (Target) checkout refuses: scaffolding `knowledge/` and
+ * `targets.yaml` into source code is the "initialized sta into the Target"
+ * failure — Targets are registered from the Knowledge workspace instead.
  */
 export function runThreeRepoInit(knowledgeRoot: string): ThreeRepoInitResult {
   const root = path.resolve(knowledgeRoot);
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
     throw new Error(`Knowledge root "${knowledgeRoot}" is not an existing directory`);
+  }
+  if (detectWorkspaceKind(root) === "target") {
+    throw new Error(
+      `"${root}" carries application-source markers — init --mode three-repo scaffolds a Knowledge root, never a Target checkout; register the Target from the Knowledge workspace (targets.yaml) instead`,
+    );
   }
 
   const createdDirectories: string[] = [];

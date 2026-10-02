@@ -71,4 +71,15 @@ describe("three-repo packaging boundary", () => {
     await expect(runCli(["upgrade", "--project-root", knowledge], knowledge)).rejects.toThrow(/--mode/);
     expect(await runCli(["upgrade", "--mode", "three-repo", "--project-root", knowledge], knowledge)).toBe(0);
   });
+
+  it("refuses to scaffold a Knowledge root inside a Target checkout, leaving it untouched", () => {
+    const target = tmpRoot();
+    write(target, "package.json", '{"name":"hotel-intelligent","version":"0.0.1"}\n');
+    expect(() => runThreeRepoInit(target)).toThrow(/application-source markers/);
+    expect(() => runThreeRepoInit(target)).toThrow(/never a Target checkout/);
+    // Refusal is total: no knowledge/ scaffolding, no targets.yaml, no .gitignore touch.
+    expect(fs.existsSync(path.join(target, "knowledge"))).toBe(false);
+    expect(fs.existsSync(path.join(target, "targets.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(target, ".gitignore"))).toBe(false);
+  });
 });

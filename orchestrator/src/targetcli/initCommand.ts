@@ -17,12 +17,18 @@ import { planTargetProfile } from "./targetProfile.js";
  * `software-team-agents init`, run from inside a workspace.
  *
  * Detects what kind of repository it is standing in when no role is recorded
- * yet (Knowledge markers → ba; app-source markers → dev; both/neither →
- * refused with guidance — a hand-set config.yaml role disambiguates), records
- * identity + role in `.agent-team/config.yaml`, and materializes the single
- * managed payload through the safe sync engine. The recorded role decides
- * nothing about write scope or admission (V10 TASK-021/026); the CLI's --role
- * flag is accepted-and-ignored.
+ * yet (Knowledge markers → ba; both/neither → refused with guidance — a
+ * hand-set config.yaml role disambiguates), records identity + role in
+ * `.agent-team/config.yaml`, and materializes the single managed payload
+ * through the safe sync engine. The recorded role decides nothing about write
+ * scope or admission (V10 TASK-021/026); the CLI's --role flag is
+ * accepted-and-ignored.
+ *
+ * A fresh Target checkout (app-source markers, no recorded config) is refused
+ * — the same rule the `open` preflight already enforces: a Target repository
+ * is driven from the Knowledge workspace, never materialized in place. The
+ * only ways past the refusal are a person's explicit `--dev-workspace` opt-in
+ * or a hand-written config.yaml, the channel an agent is never told to use.
  *
  * Idempotent by construction: re-running re-runs sync (which only ever writes
  * what the manifest proves pristine), and config.yaml is written once and then
@@ -45,6 +51,8 @@ export interface TargetInitOptions {
   installationConfigPath?: string;
   /** Named Knowledge root (DR §4 `--root`) for the sync's DEV-workspace binding resolution. */
   rootName?: string;
+  /** `init --dev-workspace`: a person's explicit opt-in to initialize a Target checkout as a locally-managed DEV workspace. Without it a fresh target-kind workspace is refused. */
+  devWorkspaceConfirmed?: boolean;
   /** Injectable prerequisite probe; init reports failures but does not refuse. */
   probe?: (runtime: WorkspaceRuntime) => { available: boolean; detail?: string };
 }
@@ -100,6 +108,9 @@ export interface TargetInitResult {
 
 export class AmbiguousWorkspaceError extends Error {}
 
+/** A fresh Target checkout refuses init — it is driven from the Knowledge workspace, not materialized in place. */
+export class TargetCheckoutInitError extends Error {}
+
 export function runTargetInit(options: TargetInitOptions): TargetInitResult {
   const roots = resolveRoots({ targetRoot: options.targetRoot });
   const templatesDir = options.templatesDir ?? path.join(roots.frameworkRoot, "templates");
@@ -117,6 +128,21 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
   let roleVia: TargetInitResult["roleVia"] = role ? "flag" : "config";
   if (!role) role = existingConfig?.role as WorkspaceRole | undefined;
   const detectedKind = detectWorkspaceKind(roots.targetRoot);
+
+  // The one admission rule markers carry (the `open` preflight enforces the
+  // same one): a Target repository is registered and driven from the
+  // Knowledge workspace — an unattended `init` standing inside one (an agent's
+  // "helpful" setup, e.g.) must refuse, not materialize payload into source.
+  // Past the refusal are exactly two human-shaped doors: the explicit
+  // `--dev-workspace` opt-in, or a config.yaml a person wrote by hand. An
+  // already-recorded DEV workspace re-inits freely — init is idempotent sync.
+  if (detectedKind === "target" && existingConfig === undefined && !options.devWorkspaceConfirmed) {
+    throw new TargetCheckoutInitError(
+      `"${roots.targetRoot}" looks like a Target checkout — it is registered and driven from the Knowledge workspace (targets.yaml + .workflow/targets.local.yaml), never initialized in place; Target writes go through orchestrated stages. ` +
+        "A person who deliberately wants a locally-managed DEV workspace here re-runs init with --dev-workspace.",
+    );
+  }
+
   if (!role) {
     if (detectedKind === "knowledge") {
       role = "ba";
