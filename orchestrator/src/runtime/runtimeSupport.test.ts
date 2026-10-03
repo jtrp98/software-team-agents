@@ -38,10 +38,12 @@ function runtimeDocRow(id: keyof typeof RUNTIME_SUPPORT): string | undefined {
 
 describe("runtimeSupport — the single source of truth for support claims (T-V1-04)", () => {
   it("admits only the declared post-run write paths without raising pre-tool certification", () => {
-    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteAllowed)).toEqual(["claude-code", "codex", "zcode"]);
+    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteAllowed)).toEqual(["claude-code", "codex", "antigravity", "zcode"]);
     expect(isUnattendedTargetWriteCertified("codex")).toBe(false);
+    expect(isUnattendedTargetWriteCertified("antigravity")).toBe(false);
     expect(isUnattendedTargetWriteCertified("zcode")).toBe(false);
     expect(targetWriteGuardCapability("codex")).toBe(RuntimeCapability.POST_RUN_WRITE_GUARD);
+    expect(targetWriteGuardCapability("antigravity")).toBe(RuntimeCapability.POST_RUN_WRITE_GUARD);
     expect(targetWriteGuardCapability("zcode")).toBe(RuntimeCapability.POST_RUN_WRITE_GUARD);
     expect(targetWriteGuardCapability("claude-code")).toBe(RuntimeCapability.PRE_TOOL_GUARD);
     for (const id of ["unknown", "constructor", "toString", "__proto__"]) expect(isUnattendedTargetWriteAllowed(id)).toBe(false);
@@ -101,9 +103,9 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
     expect(isUnattendedTargetWriteCertified("zcode")).toBe(false);
     expect(isUnattendedTargetWriteCertified("unregistered-runtime")).toBe(false);
     expect(RUNTIME_SUPPORT.opencode.claim).toMatch(/Target-write stages stay refused/i);
-    // The two post-run write paths are admitted, never certified — and both say
+    // The three post-run write paths are admitted, never certified — and all three say
     // so (Codex words it as "remain uncertified" next to its inline hooks).
-    for (const id of ["codex", "zcode"] as const) {
+    for (const id of ["codex", "antigravity", "zcode"] as const) {
       expect(RUNTIME_SUPPORT[id].claim).toMatch(/unattended Target writes (are not certified|remain uncertified)/);
       expect(RUNTIME_SUPPORT[id].claim).toContain("post-run write guard");
     }

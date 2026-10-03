@@ -123,14 +123,14 @@ describe("TASK-016 — selection requires certification, capability and availabi
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "antigravity", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] })]),
-      config: { schema_version: 1, routing: { order: ["antigravity", "claude-code"] } },
-      availability: { antigravity: { available: true }, "claude-code": { available: true } },
+      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "opencode", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] })]),
+      config: { schema_version: 1, routing: { order: ["opencode", "claude-code"] } },
+      availability: { opencode: { available: true }, "claude-code": { available: true } },
       hasTargetWrite: true,
       modelPolicy: null,
     });
     expect(result.selected?.runtime.id).toBe("claude-code");
-    expect(result.attempts[0]!.skipReason).toMatch(/runtime "antigravity" is not certified for unattended Target writes/);
+    expect(result.attempts[0]!.skipReason).toMatch(/runtime "opencode" is not certified for unattended Target writes/);
   });
 
   it("refuses an uncertified runtime for a governed write even when named explicitly, but lets it run analysis", () => {
@@ -194,6 +194,42 @@ describe("TASK-016 — selection requires certification, capability and availabi
       config: null,
       flags: { runtime: "zcode" },
       availability: { zcode: { available: true } },
+      hasTargetWrite: true,
+    });
+    expect(refused.selected).toBeUndefined();
+    expect(refused.error).toContain("post-run-write-guard");
+  });
+
+  it("routes Antigravity engineer stages on its post-run write path, and cuts an adapter lacking the capability", () => {
+    const capable = new MockRuntimeAdapter({ id: "antigravity", models: ["gemini-2.5-pro"] });
+    for (const stage of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]) {
+      const route = resolveRuntimeRoute({
+        role: stage,
+        stage,
+        projectRoot: project(),
+        registry: new RuntimeRegistry([capable]),
+        config: null,
+        flags: { runtime: "antigravity" },
+        availability: { antigravity: { available: true } },
+        hasTargetWrite: true,
+      });
+      expect(route.error).toBeUndefined();
+      expect(route.selected?.runtime.id).toBe("antigravity");
+    }
+
+    const incapable = new MockRuntimeAdapter({
+      id: "antigravity",
+      models: ["gemini-2.5-pro"],
+      capabilities: ALL_MOCK_CAPABILITIES.filter((capability) => capability !== RuntimeCapability.POST_RUN_WRITE_GUARD),
+    });
+    const refused = resolveRuntimeRoute({
+      role: "backend-engineer",
+      stage: AgentStage.BACKEND_ENGINEER,
+      projectRoot: project(),
+      registry: new RuntimeRegistry([incapable]),
+      config: null,
+      flags: { runtime: "antigravity" },
+      availability: { antigravity: { available: true } },
       hasTargetWrite: true,
     });
     expect(refused.selected).toBeUndefined();
@@ -271,6 +307,22 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
     if (confirmed) expect(result.postflightGuard?.ok).toBe(true);
     else expect(result.outcome.failure_reason).toMatch(/did not confirm post-run-write-guard/);
   });
+
+  it.each([true, false])("dispatches Antigravity Target writes only when the result confirms the post-run guard: %s", async (confirmed) => {
+    const root = project();
+    const runtime = new MockRuntimeAdapter({ id: "antigravity", models: ["gemini-2.5-pro"], respond: () => okResult({ guards: { enforced: confirmed ? [RuntimeCapability.POST_RUN_WRITE_GUARD] : [], unenforced: [RuntimeCapability.PRE_TOOL_GUARD] } }) });
+    const result = await createRuntimeExecutor({
+      runtime, projectRoot: root, moduleName: () => "sales-crm", guards: () => ({ ...NO_GUARDS, writeAllow: ["src/**"] }),
+      registry: new RuntimeRegistry([runtime]), packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: ["src/**"], moduleName: "sales-crm" }),
+      frozenAttempt: frozen({ requested: { runtime: "antigravity", model: "gemini-2.5-pro", effort: "high" }, observed: { runtime: "antigravity", model: "gemini-2.5-pro", effort: "high" }, guard_evidence: { target_write: true, pre_tool_guard: false, writable_roots: [root] } }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe(confirmed ? "PASS" : "FAIL");
+    expect(runtime.requests).toHaveLength(1);
+    if (confirmed) expect(result.postflightGuard?.ok).toBe(true);
+    else expect(result.outcome.failure_reason).toMatch(/did not confirm post-run-write-guard/);
+  });
+
   it("refuses a frozen governed write on a certified runtime that is no governed executor", async () => {
     const root = project();
     const weak = bareRunner("claude-code");

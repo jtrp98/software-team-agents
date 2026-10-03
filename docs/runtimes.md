@@ -33,7 +33,7 @@ Guard coverage per runtime คือ verdict เดียวกับที่ `
 | **Claude Code** | ✅ **Supported** — headless run รัน `claude` ตรง ๆ แบบที่คนรัน (login ของผู้ใช้เอง ไม่มี Codex-sandbox wrapper — owner decision 2026-10-03); hooks ใน `.claude/settings.json` บังคับ universal floor, ห้าม git และ path permissions ของ contract ก่อนทุก tool call; certified for unattended Target writes ผ่าน pre-tool hooks; wrapper TASK-031 เหลือไว้เฉพาะ caller ที่ขอ `osIsolation: true` เอง | **headless enforced (hooks)** — PreToolUse hooks + write-scope check หลัง run; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
 | **Codex** | ✅ **Supported** — headless ใช้ adapter-owned **PreToolUse hooks** ตรวจ `apply_patch` ตาม contract/packet ก่อนเขียน (allow/deny verify บน CLI 0.160.0); ไม่มี OS sandbox (`--dangerously-bypass-approvals-and-sandbox` — owner decision 2026-10-03); เปิดเฉพาะ hooks ของ adapter ใน isolated home ด้วย `--dangerously-bypass-hook-trust`; engineer ยังบังคับ post-run scope check และยังไม่ certified สำหรับ unattended Target writes | **headless hooks + post-run** — patch paths ตรวจทั้งต้นทาง/ปลายทางและ symlinks; shell อนุญาตเฉพาะคำสั่งอ่านแบบง่าย; exit checks ใช้ `ExitCheckRunner` กลาง; project/interactive hooks ยังไม่ถือว่า enforced จาก config presence เพียงอย่างเดียว |
 | **OpenCode** | 🧪 **Experimental** — plugin/adapter เคย verify แล้ว; unattended Target writes ไม่ certified (Target-write stage refuse); automatic routing ต้อง opt-in `routing.allow_below_supported` | **partial** — plugin บังคับ guard บางส่วน |
-| **Antigravity** | ✅ **Supported** — ติดตั้ง PreToolUse hook ระดับเครื่องด้วย `software-team-agents install-antigravity-hook` (ชี้ `~/.gemini/config/hooks.json` ไป `.agents/hooks/sta-guard.js` ของ workspace แบบ absolute path); ใน interactive session (`software-team-agents open --runtime antigravity`) บังคับ universal floor, บล็อกเขียนนอก workspace และ contract path permissions แบบ fail-closed deny; owner decision 2026-10-03 ยกเลิก a1 OS approval-isolation preflight — production dispatch ของ analysis / review / QA ทำได้; unattended Target writes ไม่ certified | **partial (machine hook)** — PreToolUse deny บังคับ path permissions ใน-band |
+| **Antigravity** | ✅ **Supported** — ติดตั้ง PreToolUse hook ระดับเครื่องด้วย `software-team-agents install-antigravity-hook` (ชี้ `~/.gemini/config/hooks.json` ไป `.agents/hooks/sta-guard.js` ของ workspace แบบ absolute path); ใน interactive session (`software-team-agents open --runtime antigravity`) บังคับ universal floor, บล็อกเขียนนอก workspace และ contract path permissions แบบ fail-closed deny; owner decision 2026-10-03 ยกเลิก a1 OS approval-isolation preflight — production dispatch ของ analysis / review / QA ทำได้; รองรับ backend/frontend engineer ผ่าน **post-run write guard** แบบเดียวกับ Codex และ ZCode (snapshot ก่อน/หลังรันตรวจไฟล์ใน Target และตรวจ Knowledge workspace ว่ายัง read-only — snapshot หายหรือเขียนผิด grant = attempt ถูกปฏิเสธ แต่การตรวจไม่ป้องกันหรือย้อนการเขียน); unattended Target writes ไม่ certified | **partial (machine hook) + post-run** — PreToolUse deny บังคับ path permissions ใน-band; post-run write guard ตรวจ scope หลังรัน |
 | **ZCode Desktop** | 🧪 **Experimental** — desktop role-play และ headless adapter เคย verify แล้ว; รองรับ backend/frontend engineer ผ่าน **post-run write guard** แบบเดียวกับ Codex (snapshot ก่อน/หลังรันตรวจไฟล์ใน Target และตรวจ Knowledge workspace ว่ายัง read-only — snapshot หายหรือเขียนผิด grant = attempt ถูกปฏิเสธ แต่การตรวจไม่ป้องกันหรือย้อนการเขียน); unattended Target writes ไม่ certified; automatic routing ต้อง opt-in `routing.allow_below_supported` | **partial** — project hooks และ post-run check |
 
 Same verdict, three places: ตารางนี้, `sta runtimes` (อ่าน `RUNTIME_SUPPORT` ตรง) และ
@@ -130,7 +130,7 @@ Copy-Item -LiteralPath $staPromptSource -Destination $staPromptDestination
 
 การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` — default (`propose`) ติด permission prompt
 ที่ไม่มีคนกดใน headless run งานเขียน Target ใช้ Claude Code ที่มี pre-tool certification
-หรือ Codex/ZCode ที่มี post-run write guard ตามตาราง; runtime อื่นยังใช้กับ analysis/review/QA ตามสถานะของแต่ละตัว
+หรือ Codex/Antigravity/ZCode ที่มี post-run write guard ตามตาราง; runtime อื่นยังใช้กับ analysis/review/QA ตามสถานะของแต่ละตัว
 (ZCode ยังเป็น experimental — ต้องสั่ง `--runtime zcode` ชัดเจนหรือตั้ง opt-in ก่อนให้ routing เลือกเอง)
 
 ### ตรวจสถานะ login ก่อน run ยาว
@@ -179,7 +179,7 @@ Tier/requested values/winner basis ใน route log — รายละเอี
 [`tier-and-effort-run.md`](tier-and-effort-run.md)
 
 candidate ต้อง registered + available + มี capability ที่ stage ต้องใช้ (Target-write stage ต้องมี
-`PRE_TOOL_GUARD` หรือ `POST_RUN_WRITE_GUARD` สำหรับ Codex/ZCode ที่อนุญาตไว้ชัดเจน;
+`PRE_TOOL_GUARD` หรือ `POST_RUN_WRITE_GUARD` สำหรับ Codex/Antigravity/ZCode ที่อนุญาตไว้ชัดเจน;
 `business-analyst` ต้องมี `INTERACTIVE_PROMPTS`) — ขาด capability ถูกตัดออกเสมอ;
 ถ้าเป็น candidate เดียวจะ **refuse** พร้อมเหตุผล
 

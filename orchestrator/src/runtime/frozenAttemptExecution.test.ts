@@ -189,11 +189,36 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(1);
   });
 
-  // V13 TASK-027 R14C (a1): a previously frozen antigravity Target-write attempt
-  // no longer dispatches once certification is withdrawn (zcode now runs on the
-  // admitted post-run write path instead; claude-code regained certification in
-  // TASK-031).
-  it.each(["antigravity"])("refuses a frozen %s Target-write attempt after a1 withdrew its certification", async (id) => {
+  // Antigravity is on the admitted post-run write path: the refusal that keys on
+  // certification is gone, and what refuses instead is a result that never
+  // confirmed the post-run write guard — the runtime's own word is not enough.
+  it("refuses an antigravity Target-write attempt whose result does not confirm the post-run write guard", async () => {
+    const runtime = new MockRuntimeAdapter({
+      id: "antigravity",
+      models: ["gemini-2.5-pro"],
+      capabilities: [RuntimeCapability.POST_RUN_WRITE_GUARD, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
+      respond: () => okResult({ guards: { enforced: [], unenforced: [RuntimeCapability.POST_RUN_WRITE_GUARD] } }),
+    });
+    const result = await executorFor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
+      frozenAttempt: frozen({
+        requested: { runtime: "antigravity", model: "gemini-2.5-pro", effort: "high" },
+        observed: { runtime: "antigravity", model: "gemini-2.5-pro", effort: "high" },
+        guard_evidence: { target_write: true, pre_tool_guard: false, writable_roots: ["C:/target"] },
+      }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/did not confirm post-run-write-guard enforcement/);
+    expect(runtime.requests).toHaveLength(1);
+  });
+
+  // OpenCode never had Target-write certification and has no admitted post-run
+  // write path; claude-code regained certification in TASK-031.
+  it.each(["opencode"])("refuses a frozen %s Target-write attempt without certification", async (id) => {
     const runtime = new MockRuntimeAdapter({
       id,
       models: ["glm-4.7"],

@@ -2,8 +2,10 @@ import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_pr
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 import { AGY_HOOKS_PATH } from "./bindingGenerator.js";
 import { LocalWorkspace } from "./localWorkspace.js";
+import { verifyPostRunWrites } from "./postRunWriteGuard.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { classifyProviderRefusal } from "./runtimeFailureClass.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
@@ -67,6 +69,7 @@ export const ANTIGRAVITY_BINARY = "agy" as const;
 
 const ANTIGRAVITY_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.MODEL_SELECTION,
+  RuntimeCapability.POST_RUN_WRITE_GUARD,
   RuntimeCapability.STRUCTURED_RESULT,
   // V13 TASK-014 — the lifecycle implemented through `SingleShotLifecycle`:
   // fresh-session resume from the persisted attempt journal, honest cancel
@@ -194,16 +197,35 @@ export class AntigravityAdapter implements ExecutorPort {
       dir: ".claude",
       definitionPath: (role) => `.claude/agents/${role}.md`,
       guardConfigPath: this.guardConfigPath,
+      guardEnforcement: "per-run",
     };
 
     this.lifecycle = new SingleShotLifecycle(this.id, {
-      run: (req) => this.executeAgent(req),
+      run: (req) => this.runWithKnowledgeCheck(req),
       sessionRefFrom: (result) => {
         const envelope = result.raw as AgyEnvelope | null | undefined;
         return typeof envelope?.conversation_id === "string" && envelope.conversation_id.length > 0 ? envelope.conversation_id : undefined;
       },
+      verifyRun: verifyPostRunWrites,
+      postRunWriteGuard: true,
       journalRoot: opts.journalRoot,
     });
+  }
+
+  /** Target runs also snapshot their separate, read-only Knowledge workspace. */
+  private async runWithKnowledgeCheck(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
+    const knowledgeRoot = req.knowledgeRoot ?? req.cwd;
+    if (!req.workRoots?.length || req.workRoots.some((root) => path.resolve(root.path) === path.resolve(knowledgeRoot))) return this.executeAgent(req);
+    try {
+      const before = await captureChangeSetFingerprint(knowledgeRoot);
+      const result = await this.executeAgent(req);
+      const after = await captureChangeSetFingerprint(knowledgeRoot);
+      const changed = [...new Set([...Object.keys(before.files), ...Object.keys(after.files)])].filter((file) => before.files[file] !== after.files[file]);
+      const violations = verifyPostRunWrites({ ...req, cwd: knowledgeRoot, workRoots: undefined, autonomy: "read-only" }, changed);
+      return violations.length > 0 ? { ...result, status: "ERROR", diagnostics: [...result.diagnostics, ...violations] } : result;
+    } catch (error) {
+      return { status: "ERROR", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [`Knowledge workspace snapshot unavailable: ${String(error)}`] };
+    }
   }
 
   // V13 TASK-014 — the lifecycle port, delegating to the shared single-shot

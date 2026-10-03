@@ -7,10 +7,13 @@ describe("Runtime Connect (no Codex sandbox — owner decision 2026-10-03)", () 
   it("reports Codex hooks and mandatory post-run checks without claiming write certification", () => {
     expect(securityRolesFor("claude-code")).toMatchObject({ commander: true, engineer: true, reviewer: true, qa: true });
     expect(securityRolesFor("codex")).toMatchObject({ commander: true, engineer: true, reviewer: true, qa: true });
+    expect(securityRolesFor("antigravity")).toMatchObject({ commander: true, engineer: true, reviewer: true, qa: true });
     expect(securityRolesFor("zcode")).toMatchObject({ commander: true, engineer: true, reviewer: true, qa: true });
-    for (const id of ["antigravity"]) {
+    for (const id of ["opencode"]) {
       expect(securityRolesFor(id), id).toMatchObject({ commander: true, engineer: false, reviewer: true, qa: true });
     }
+    expect(securityRolesFor("antigravity").detail).toMatch(/engineer writes are checked after the run/);
+    expect(securityRolesFor("antigravity").detail).not.toMatch(/certified/);
     expect(securityRolesFor("codex").detail).toMatch(/PreToolUse hooks/);
     expect(securityRolesFor("codex").detail).toMatch(/mandatory post-run/);
     expect(securityRolesFor("codex").detail).toMatch(/remain uncertified/);

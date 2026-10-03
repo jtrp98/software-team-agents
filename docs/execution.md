@@ -65,7 +65,7 @@ Executor ได้รับ `STA_RUN_ID` และ `STA_RUN_STORE` ใน enviro
 - run เกิน `maxDepth`, `maxChildren` หรือ `maxTotalRuns` ระบบนับหลัง create แบบ exclusive
   sibling ที่แข่งกันจึงถูกปฏิเสธ ไม่ใช่หลุดผ่านทั้งคู่
 - run ที่เขียนไฟล์บน runtime ที่ไม่มี `PRE_TOOL_GUARD` หรือ post-run write path ที่อนุญาตไว้ชัดเจน
-  (Codex/ZCode ต้องมี `POST_RUN_WRITE_GUARD` และ executor lifecycle; การตรวจหลังรันไม่ป้องกันหรือย้อนการเขียน)
+  (Codex/Antigravity/ZCode ต้องมี `POST_RUN_WRITE_GUARD` และ executor lifecycle; การตรวจหลังรันไม่ป้องกันหรือย้อนการเขียน)
 - floor ที่ทุก run มีเสมอ:
   - ห้าม git ที่เปลี่ยน state
   - ห้ามเขียน `.git/**`, `.workflow/**`, `knowledge/_roles/**` และ framework payload

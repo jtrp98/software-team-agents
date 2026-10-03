@@ -140,14 +140,13 @@ profile) กฎ a1 ที่บังคับ OS sandbox ถูกยกเล�
 |---|---|---|---|
 | Claude Code | ✅ hooks ใน `.claude/settings.json` | ✅ | Commander · Engineer · Reviewer · QA |
 | Codex | ✅ adapter-owned PreToolUse hooks (ไม่มี sandbox) | ✅ hooks + ตรวจขอบเขตหลัง run; ยังไม่ certified | Commander · Engineer · Reviewer · QA |
-| AGY | partial (machine hook) | ❌ | Commander · Reviewer · QA |
+| AGY | partial (machine hook) | ✅ post-run write guard (เหมือน Codex/ZCode; ไม่ certified) | Commander · Engineer · Reviewer · QA |
 | ZCode | partial (project hooks) | ✅ post-run write guard (เหมือน Codex; ไม่ certified) | Commander · Engineer · Reviewer · QA (experimental — automatic routing ต้อง opt-in `routing.allow_below_supported`) |
 
-Engineer เลือก Codex หรือ Claude Code ตามลำดับใน `roles.engineer.order`: Codex ใช้ hooks ตรวจ patch ก่อนรัน
-พร้อมตรวจ scope หลังรัน ส่วน Claude Code ใช้ project hooks ถ้าทั้งคู่ใช้ไม่ได้ งานจะ `PAUSED_RUNTIME_EXHAUSTED`
-ZCode เข้าได้เมื่อถูกตั้งให้อยู่ใน `roles.engineer.order` — เขียน Target ผ่าน post-run write guard
-(snapshot ก่อน/หลังรัน + ตรวจ Knowledge ว่า read-only; ไม่ป้องกัน/ย้อนการเขียน) ส่วน AGY ยังถูกข้าม
-สำหรับ Engineer พร้อมเหตุผล `SECURITY: ... is not certified for unattended Target writes`
+Engineer เลือก runtime ตามลำดับใน `roles.engineer.order` (ค่าเริ่มต้น: Codex → Claude Code → Antigravity → ZCode):
+Codex ใช้ hooks ตรวจ patch ก่อนรันพร้อมตรวจ scope หลังรัน, Claude Code ใช้ project hooks, ส่วน Antigravity และ ZCode
+เขียน Target ผ่าน post-run write guard (snapshot ก่อน/หลังรัน + ตรวจ Knowledge ว่า read-only; ไม่ป้องกัน/ย้อนการเขียน)
+ถ้าทุกตัวใน order ใช้ไม่ได้ งานจะ `PAUSED_RUNTIME_EXHAUSTED`
 
 ## 7. Intent API
 

@@ -81,11 +81,12 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   antigravity: {
     level: "supported",
     unattendedTargetWrites: false,
+    postRunTargetWrites: true,
     claim:
       `interactive sessions and the headless adapter are verified on real agy installs with the machine-global bridge hook (~/.gemini/config/hooks.json). ` +
       `Guard coverage (once synced and installed): ${antigravityCoverageWithHooks().detail}. ` +
       `Headless guarded writes enforce PreToolUse path permissions and the universal floor in-band via the bridge hook. ` +
-      `Owner decision 2026-10-03 retired the TASK-027 a1 OS approval-isolation preflight, so production role dispatch of analysis, review and QA stages is allowed; unattended Target writes are not certified. Provider-neutral exit checks cover completed runs. V10 does not change this status`,
+      `Owner decision 2026-10-03 retired the TASK-027 a1 OS approval-isolation preflight, so production role dispatch of analysis, review and QA stages is allowed; unattended Target writes are not certified. Antigravity may serve engineer stages through its post-run write guard, the same admitted weaker path Codex and ZCode use: a missing before/after snapshot or an out-of-scope write rejects the attempt, but this check cannot prevent or undo writes. Provider-neutral exit checks cover completed runs. V10 does not change this status`,
   },
   zcode: {
     level: "experimental",

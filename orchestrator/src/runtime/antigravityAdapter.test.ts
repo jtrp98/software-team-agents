@@ -275,6 +275,7 @@ describe("AntigravityAdapter — capability honesty", () => {
         RuntimeCapability.ATTEMPT_RESUME,
         RuntimeCapability.ATTEMPT_CANCEL,
         RuntimeCapability.EVIDENCE_COLLECTION,
+        RuntimeCapability.POST_RUN_WRITE_GUARD,
       ].sort(),
     );
     for (const unclaimed of [

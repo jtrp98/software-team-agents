@@ -287,16 +287,17 @@ describe("STA Core work runs", () => {
   it("all commander runtimes unavailable → PAUSED_RUNTIME_EXHAUSTED (not failed), then resumes when a cooldown ends", async () => {
     h.commander.replies.set("claude-code", QUOTA);
     h.commander.replies.set("codex", QUOTA);
-    // ZCode is an eligible engineer fallback (post-run write path), so the
-    // pause scenario needs it cooling down too — a commander reply never
-    // records one, because the commander walk stops at antigravity's answer.
+    // Antigravity and ZCode are eligible engineer fallbacks (post-run write path),
+    // so the pause scenario needs them cooling down too — a commander reply never
+    // records one for engineer.
+    h.health.recordFailure({ runtimeId: "antigravity", failureClass: "QUOTA_EXHAUSTED", reason: "usage limit", role: "backend-engineer" });
     h.health.recordFailure({ runtimeId: "zcode", failureClass: "QUOTA_EXHAUSTED", reason: "usage limit", role: "backend-engineer" });
     const run = create();
     await h.service.tick();
     let stored = h.store.get(run.runId)!;
     expect(stored.status).toBe("PAUSED_RUNTIME_EXHAUSTED");
     expect(stored.autoResumeAt).not.toBeNull();
-    expect(stored.runtimeHistory.some((e) => e.runtimeId === "antigravity" && e.event === "skipped" && /SECURITY/.test(e.detail ?? ""))).toBe(true);
+    expect(stored.runtimeHistory.some((e) => e.runtimeId === "antigravity" && e.event === "skipped" && /usage limit/.test(e.detail ?? ""))).toBe(true);
     expect(h.launcher.launches).toHaveLength(0);
     h.commander.replies.clear();
     await h.service.tick();
@@ -310,7 +311,7 @@ describe("STA Core work runs", () => {
 
   it("worker runtime exhaustion mid-run pauses the run and auto-resumes the same frozen run later", async () => {
     const run = await startAndFreeze(create());
-    for (const id of ["codex", "claude-code", "zcode"]) h.health.recordFailure({ runtimeId: id, failureClass: "QUOTA_EXHAUSTED", reason: "usage limit", runId: run.runId, role: "backend-engineer" });
+    for (const id of ["codex", "claude-code", "antigravity", "zcode"]) h.health.recordFailure({ runtimeId: id, failureClass: "QUOTA_EXHAUSTED", reason: "usage limit", runId: run.runId, role: "backend-engineer" });
     h.launcher.finish(h.home, run.runId, 4, '[bounded-run] GATE: task T-2 BLOCKED: runtime "claude-code" is unavailable: usage limit | routing.order is exhausted\n');
     await h.service.tick();
     const paused = h.store.get(run.runId)!;

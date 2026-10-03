@@ -274,12 +274,12 @@ describe("V13 TASK-016 — the executor and its version are pinned to the attemp
     expect(freezeAttempt(freezeInput()).runtime_version).toBeNull();
   });
 
-  // V13 TASK-027 R14C (a1): Antigravity lost Target-write certification with the
-  // approval isolation boundary; OpenCode never had it. Claude Code regained it
-  // in TASK-031 (whole-process OS sandbox + network lock). ZCode has no
-  // certification either but holds the explicitly admitted post-run write path,
-  // so it is held to that path's evidence instead — see the test below.
-  it.each(["antigravity", "opencode"])("refuses to freeze a governed write on uncertified executor %s", (runtime) => {
+  // V13 TASK-027 R14C (a1): OpenCode never had Target-write certification and
+  // has no admitted post-run write path. Claude Code regained certification in
+  // TASK-031 (whole-process OS sandbox + network lock). Codex, Antigravity and
+  // ZCode hold the explicitly admitted post-run write path, so they are held
+  // to that path's evidence instead — see the tests below.
+  it.each(["opencode"])("refuses to freeze a governed write on uncertified executor %s", (runtime) => {
     expect(() =>
       freezeAttempt(freezeInput({
         requested: { runtime },
@@ -288,6 +288,24 @@ describe("V13 TASK-016 — the executor and its version are pinned to the attemp
         capabilityReport: capabilityReport({ runtimeId: runtime }),
       })),
     ).toThrow(new RegExp(`runtime "${runtime}" is not certified|has support level "experimental"`));
+  });
+
+  it("freezes an Antigravity engineer on verified post-run write-guard evidence", () => {
+    const report = capabilityReport({ runtimeId: "antigravity", checks: [
+      { capability: RuntimeCapability.POST_RUN_WRITE_GUARD, claimed: true, verified: true },
+      { capability: RuntimeCapability.PRE_TOOL_GUARD, claimed: true, verified: false, reason: "no deep guard checker registered" },
+    ] });
+    const input = freezeInput({
+      requested: { runtime: "antigravity" },
+      observed: { runtime: "antigravity" },
+      modelExplicit: false,
+      capabilityReport: report,
+    });
+    const attempt = freezeAttempt(input);
+    expect(attempt.observed.runtime).toBe("antigravity");
+    expect(attempt.guard_evidence.pre_tool_guard).toBe(false);
+    expect(attempt.capability_evidence).toContainEqual({ capability: RuntimeCapability.POST_RUN_WRITE_GUARD, verified: true, detail: null });
+    expect(() => freezeAttempt({ ...input, attempt: 2, capabilityReport: { ...report, checks: report.checks.filter((check) => check.capability !== RuntimeCapability.POST_RUN_WRITE_GUARD) } })).toThrow(/requires a verified post-run write guard/);
   });
 
   it("freezes a ZCode engineer on verified post-run write-guard evidence while it stays experimental", () => {
@@ -318,12 +336,12 @@ describe("V13 TASK-016 — the executor and its version are pinned to the attemp
     expect(() => rerouteAttempt(ledger.readAttempt(first.attempt_id)!, {
       ...freezeInput({
         attempt: 2,
-        requested: { runtime: "antigravity", model: "gemini-3-pro", effort: "high" },
-        observed: { runtime: "antigravity", model: "gemini-3-pro", effort: "high" },
-        capabilityReport: capabilityReport({ runtimeId: "antigravity" }),
-        availability: { available: true, version: "1.2.12" },
+        requested: { runtime: "opencode", model: "deepseek-coder", effort: "high" },
+        observed: { runtime: "opencode", model: "deepseek-coder", effort: "high" },
+        capabilityReport: capabilityReport({ runtimeId: "opencode" }),
+        availability: { available: true, version: "0.1.0" },
       }),
-    })).toThrow(/runtime "antigravity" is not certified for unattended Target writes/);
+    })).toThrow(/runtime "opencode" is not certified for unattended Target writes/);
     expect(ledger.attemptsForTask(runId, "BE-004").map((a) => a.attempt)).toEqual([1]);
     expect(ledger.readAttempt(first.attempt_id)!.status).toBe("UNAVAILABLE");
   });
