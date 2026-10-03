@@ -10,8 +10,9 @@ import type { WorkRun } from "../../core/workRunStore.js";
 
 /**
  * `sta work` — the CLI face of STA Core. It never orchestrates by itself:
- * every state change goes through the same Local API the Web UI uses (the
- * service is started on demand), so CLI and Web share one implementation.
+ * every state change goes through the same Local API the STA Platform backend
+ * uses (the service is started on demand), so CLI and Platform share one
+ * implementation.
  * `sta work status` reads the Core database directly and works with the
  * service stopped. No Intent API is involved unless `--text` asks for it.
  *
@@ -124,8 +125,8 @@ export async function runWorkVerb(rest: string[]): Promise<number> {
       for (const line of render(result.run, language)) console.log(line);
       for (const line of [...result.intent.overrides, ...result.intent.warnings]) console.log(`  ! ${line}`);
       console.log(language === "th"
-        ? `ทำงานต่อใน background แล้ว — ปิด terminal ได้ · ดูผล: sta work status ${first}${rootName ? ` --root ${rootName}` : ""} · Web: http://127.0.0.1:${record.port}/`
-        : `Running in the background — you can close this terminal · sta work status ${first}${rootName ? ` --root ${rootName}` : ""} · Web: http://127.0.0.1:${record.port}/`);
+        ? `ทำงานต่อใน background แล้ว — ปิด terminal ได้ · ดูผล: sta work status ${first}${rootName ? ` --root ${rootName}` : ""} · API: http://127.0.0.1:${record.port}/api`
+        : `Running in the background — you can close this terminal · sta work status ${first}${rootName ? ` --root ${rootName}` : ""} · API: http://127.0.0.1:${record.port}/api`);
     }
     return 0;
   }

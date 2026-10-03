@@ -21,7 +21,7 @@
 
 ## Operate STA
 
-- **STA Core — Web UI, background service, runtime failover, Knowledge หลายตัว** →
+- **STA Core — Local API, background service, runtime failover, Knowledge หลายตัว** →
   [`core.md`](core.md) — `sta setup-machine`, `sta start`, `sta work`, Knowledge isolation, Intent API,
   Codex Windows sandbox, review
 - คำสั่งทั้งสอง surface → [`cli.md`](cli.md) — `software-team-agents` (workspace) + `sta` (pipeline)

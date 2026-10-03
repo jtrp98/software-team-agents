@@ -196,7 +196,7 @@ candidate ต้อง registered + available + มี capability ที่ stag
 (`error` ถูกปฏิเสธตอน load) · camp switch กลาง phase `🔒 Security gate` ทำ QA/security pass เดิมของ
 phase นั้นเป็นโมฆะ (ADR-025)
 
-**STA Core (`sta work` / Web UI):** child `bounded-run` ที่ Core เปิดรับลำดับต่อ role (engineer/reviewer/qa) และ
+**STA Core (`sta work`):** child `bounded-run` ที่ Core เปิดรับลำดับต่อ role (engineer/reviewer/qa) และ
 runtime health ร่วมผ่าน `--core-run <overlay>` — ลำดับนั้นแทน `routing.order` ที่ level-4 เท่านั้น (level 1/2 ยังชนะ),
 runtime ที่อยู่ใน cooldown (quota/rate limit/outage/auth/timeout ซ้ำ) อ่านเป็น unavailable ก่อน dispatch, และ
 gate ด้าน certification/capability/approval isolation ทั้งหมดยังทำงานเหมือนเดิม — runtime ที่ไม่ผ่านถูกข้าม

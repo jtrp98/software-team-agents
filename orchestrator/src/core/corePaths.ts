@@ -26,7 +26,6 @@ export interface CorePaths {
   readonly runsDir: string;
   readonly logsDir: string;
   readonly secretsDir: string;
-  readonly webRoot: string;
 }
 
 export function corePaths(home = coreHome()): CorePaths {
@@ -40,7 +39,6 @@ export function corePaths(home = coreHome()): CorePaths {
     runsDir: path.join(coreDir, "runs"),
     logsDir: path.join(coreDir, "logs"),
     secretsDir: path.join(home, "secrets"),
-    webRoot: path.join(coreDir, "web"),
   };
 }
 

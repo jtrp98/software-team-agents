@@ -25,7 +25,7 @@ import { assertInsideMachineRoots, MachineConfigError, type MachineConfig } from
  * over the existing named-root registry in `installation.yaml`. It adds no
  * second registry: names and paths are read from and written through
  * `threeRepo/installation.ts`, so `sta configure knowledge-root --root`,
- * `sta knowledge add` and the Web UI all edit the same map.
+ * `sta knowledge add` and the STA Platform backend all edit the same map.
  *
  * Isolation starts here: every listing below is computed from ONE root's own
  * files (`_docs/module/*`, `targets.yaml`, `.workflow/targets.local.yaml`).

@@ -1,0 +1,32 @@
+# ─── .NET / dotnet build outputs ─────────────────────────────
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+TestResults/
+*.dotCover
+*.binlog
+artifacts/
+
+# ─── secrets — ห้าม commit ทุกกรณี ───────────────────────────
+.env
+.env.*
+!.env.example
+bootstrap-admin-credentials.txt
+
+# ─── Node / Next.js (เผื่อไว้ระดับ platform ด้วย) ─────────────
+node_modules/
+.next/
+out/
+npm-debug.log*
+.pnpm-store/
+
+# ─── IDE / OS ────────────────────────────────────────────────
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

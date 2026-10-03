@@ -118,13 +118,14 @@ stale. ไม่มีคำตอบที่ผูกกับ request ถู�
 ในไฟล์ item ไม่ใช่ authority; `roles review`/`roles approve` ถูกปฏิเสธ. โมเดลเต็มอยู่ที่
 [`knowledge/README.md`](../knowledge/README.md) § Role workspaces
 
-### STA Core — service, Web UI, work runs — คู่มือ: [`core.md`](core.md)
+### STA Core — service, work runs — คู่มือ: [`core.md`](core.md)
 
 ```bash
 sta setup-machine --root C:\src [--language th|en] [--intent-provider gemini|offline] [--intent-model <id>] [--intent-key-stdin]
                   [--commander-order a,b,..] [--engineer-order ..] [--reviewer-order ..] [--qa-order ..]
                   [--knowledge <name>=<path>]... [--no-detect]     # idempotent
-sta start [--port <n>] · sta stop · sta core status    # background service (127.0.0.1) + Web UI
+sta start [--port <n>] · sta stop · sta core status    # background service (127.0.0.1) + Local API
+sta settings · sta settings intent-key <key> [--clear] # machine.yaml + Intent key (machine-local secret store)
 sta work <module> [--root <name>] [--phase <n> | --task <id,...>] [--until next-gate] [--autonomy edit|full] [--text "<คำสั่ง>"]
 sta work status [<module>|<run-id>] [--root <name>] [--json]   # อ่าน core.db ตรง ใช้ได้แม้ service ไม่เปิด
 sta work pause|resume|stop <module>|<run-id> [--root <name>] [--force]

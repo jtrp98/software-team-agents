@@ -31,7 +31,7 @@ import {
 
 /**
  * STA Core's work-run controller — deterministic, non-LLM, and the one
- * implementation behind both `sta work` and the Web UI.
+ * implementation behind both `sta work` and the STA Platform backend.
  *
  * A work run is driven as a sequence of bounded-run SEGMENTS. Each segment is
  * the existing `sta bounded-run` (start, or `--resume` of the same frozen run)

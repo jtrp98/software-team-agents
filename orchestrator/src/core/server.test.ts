@@ -76,13 +76,9 @@ describe("STA Core Local API + Web", () => {
     return { status: response.status, body: (await response.json().catch(() => null)) as any, headers: response.headers };
   };
 
-  it("serves the Web UI with its token and a strict CSP; the API refuses a request without the token", async () => {
+  it("answers /api only (no served page) and refuses a request without the token", async () => {
     const page = await fetch(`http://127.0.0.1:${port}/`);
-    const html = await page.text();
-    expect(html).toContain(token);
-    expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
-    const script = await fetch(`http://127.0.0.1:${port}/app.js`);
-    expect(script.headers.get("content-type")).toContain("javascript");
+    expect(page.status).toBe(404);
     expect((await call("GET", "/api/runs", undefined, { "x-sta-token": "wrong" })).status).toBe(401);
   });
 

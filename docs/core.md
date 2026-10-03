@@ -1,7 +1,7 @@
-# STA Core — local service, Web UI และ runtime failover
+# STA Core — local service, Local API และ runtime failover
 
 STA Core คือ **ตัวควบคุมแบบ deterministic (ไม่ใช่ LLM)** ที่รันเป็น background process ของผู้ใช้ในเครื่อง
-ผู้ใช้สั่งงานผ่าน Web UI (หรือ `sta work`) ด้วยภาษาคน แล้ว STA Core เดินงาน implementation → review → QA
+ผู้ใช้สั่งงานผ่าน `sta work` หรือ STA Platform (team UI — `platform/frontend`) ด้วยภาษาคน แล้ว STA Core เดินงาน implementation → review → QA
 เองผ่าน `sta bounded-run` เดิม สลับ runtime เองเมื่อ quota หมด และหยุดให้คนตรวจตอนท้าย
 **ไม่มีการ push / merge / deploy อัตโนมัติ**
 
@@ -37,7 +37,7 @@ Browser ──► Local API (127.0.0.1, token) ──► STA Core (deterministic
 | Local API / Web | `core/server.ts`, `orchestrator/web/` | frontend อย่างเดียว |
 | Service | `core/service.ts` | `sta start` / `sta stop` (detached, user-level) |
 
-**CLI และ Web ใช้ STA Core ตัวเดียวกัน** — `sta work` เรียก Local API เดียวกับ Web UI (และเปิด service ให้เอง
+**CLI และ Platform ใช้ STA Core ตัวเดียวกัน** — `sta work` เรียก Local API เดียวกับ STA Platform backend (และเปิด service ให้เอง
 ถ้ายังไม่เปิด) ไม่มี orchestration สองชุด
 
 ## 2. ตั้งเครื่องครั้งแรก
@@ -163,24 +163,24 @@ Codex ใช้ hooks ตรวจ patch ก่อนรันพร้อมต
 - Intent API ล่ม: ใช้ offline parser (ไทย/อังกฤษ: ทำงาน/พัก/ทำต่อ/หยุด/สถานะ/phase/task) พร้อมคำเตือน;
   run ที่กำลังเดินไม่ได้ใช้ Intent อยู่แล้ว จึงไม่หยุด; `sta work …` ไม่ใช้ Intent API เลย
 
-## 8. เปิด STA Core และ Web UI
+## 8. เปิด STA Core
 
 ```powershell
-sta start            # detached, user-level; พิมพ์ URL เช่น http://127.0.0.1:4317/
+sta start            # detached, user-level; Local API อยู่ที่ http://127.0.0.1:4317/api (team UI: STA Platform)
 sta core status
 sta stop             # หยุด service — segment ที่กำลังรันยังทำต่อ และถูก reconcile ตอน start ครั้งหน้า
 ```
 
-- service bind `127.0.0.1` เท่านั้น ทุก `/api` ต้องมี token ต่อการ start (ฝังในหน้าที่ service serve เอง),
-  Host header ต้องเป็น loopback (กัน DNS rebinding), CSP `script-src 'self'`
-- ปิด browser ≠ หยุดงาน · เปิด Web ใหม่ = เห็น state เดิมจาก `core.db`
+- service bind `127.0.0.1` เท่านั้น ทุก `/api` ต้องมี token ต่อการ start (อ่านจาก service record ของเครื่อง),
+  Host header ต้องเป็น loopback (กัน DNS rebinding)
+- ปิด terminal/browser ≠ หยุดงาน · start ใหม่ = เห็น state เดิมจาก `core.db`
 - ไม่ใช่ Windows Service (ไม่ใช้ SYSTEM/Administrator) — เป็น process ของผู้ใช้ที่ login อยู่ ซึ่งเป็นเจ้าของ
   login ของ runtime ทั้งหลายด้วย ถ้าต้องการให้เปิดเองตอน login ให้คนตั้ง Task Scheduler รัน `sta start` เอง
 
 ## 9. เริ่มงาน
 
-Web: หน้า **งาน** → เลือก Knowledge → Module (กรองจาก Knowledge นั้น) → พิมพ์คำสั่ง → **เริ่มงาน**
-(ปุ่ม "ดูคำสั่งที่ระบบเข้าใจ" แสดง structured intent ก่อนเริ่ม)
+Platform: หน้า **Runs** → เลือก Knowledge → Module (กรองจาก Knowledge นั้น) → พิมพ์คำสั่ง → **เริ่มงาน**
+(team UI อยู่ที่ `platform/frontend` — คู่มือที่ `platform/README.md`)
 
 CLI:
 

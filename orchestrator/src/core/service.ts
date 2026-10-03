@@ -8,7 +8,7 @@ import { createCoreServer, newServiceToken } from "./server.js";
 
 /**
  * STA Core as a background service: a detached user-level Node process that
- * serves the Local API/Web UI on loopback and runs the control loop. Closing
+ * serves the Local API on loopback and runs the control loop. Closing
  * the browser or the terminal changes nothing; reopening the UI reads the same
  * `core.db`. Deliberately not a Windows Service: it runs as the signed-in user
  * (no SYSTEM account, no Administrator), which is also the identity the

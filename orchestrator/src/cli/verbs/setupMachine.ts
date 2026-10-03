@@ -143,6 +143,6 @@ export async function runSetupMachineVerb(rest: string[]): Promise<number> {
     for (const status of statuses) console.log(renderRuntime(status, th));
   }
 
-  console.log(th ? "5) เสร็จ — ต่อไป: sta start แล้วเปิด Web UI" : "5) Done — next: sta start, then open the Web UI");
+  console.log(th ? "5) เสร็จ — ต่อไป: sta start (สั่งงานผ่าน sta work หรือ STA Platform)" : "5) Done — next: sta start (work via sta work or STA Platform)");
   return 0;
 }

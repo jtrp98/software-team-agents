@@ -24,7 +24,7 @@ export async function runStartVerb(rest: string[]): Promise<number> {
   console.log(started
     ? (th ? `STA Core เริ่มทำงานแล้ว (pid ${record.pid})` : `STA Core started (pid ${record.pid})`)
     : (th ? `STA Core ทำงานอยู่แล้ว (pid ${record.pid})` : `STA Core is already running (pid ${record.pid})`));
-  console.log(`Web UI: http://127.0.0.1:${record.port}/`);
+  console.log(`Local API: http://127.0.0.1:${record.port}/api — team UI: STA Platform`);
   return 0;
 }
 

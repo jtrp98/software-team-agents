@@ -37,10 +37,10 @@ Knowledge / Target  ← ความรู้ร่วมของทีม (git
 
 อ้างอิงเต็มที่ [`docs/cli.md`](docs/cli.md) · runtime support รายตัวที่ [`docs/runtimes.md`](docs/runtimes.md)
 
-## STA Core — Web UI + background service
+## STA Core — Local API + background service
 
 `sta start` เปิด STA Core (ตัวควบคุม deterministic ไม่ใช่ LLM) เป็น background process ของผู้ใช้บน
-`127.0.0.1` พร้อม Web UI: เลือก **Knowledge → Module** พิมพ์คำสั่งภาษาคน แล้วปิด browser ได้ — STA เดิน
+`127.0.0.1` (Local API): สั่งงานผ่าน `sta work` หรือหน้า Runs ของ STA Platform (`platform/frontend`) — STA เดิน
 engineer → review → QA ผ่าน `sta bounded-run` เดิม, สลับ runtime เองเมื่อ quota หมด (Claude Code · Codex ·
 AGY · ZCode ตาม security boundary ของแต่ละตัว), pin Knowledge หนึ่งตัวต่อ run และหยุดให้คนตรวจตอนท้าย —
 ไม่มี push/merge/deploy อัตโนมัติ CLI เทียบเท่า: `sta work <module> --root <knowledge>` ·
@@ -111,7 +111,7 @@ BA/SA/PM/test-planner ทำงานจาก Knowledge workspace เสมอ 
 | ต้องการอะไร | อ่านที่ |
 |---|---|
 | ติดตั้ง / upgrade / uninstall | [`docs/getting-started.md`](docs/getting-started.md) |
-| STA Core: Web UI, `sta work`, runtime failover, Knowledge หลายตัว | [`docs/core.md`](docs/core.md) |
+| STA Core: Local API, `sta work`, runtime failover, Knowledge หลายตัว | [`docs/core.md`](docs/core.md) |
 | โมเดล workspace, binding, ขอบเขตการเขียน | [`docs/workspaces.md`](docs/workspaces.md) |
 | CLI reference ทั้งสอง surface | [`docs/cli.md`](docs/cli.md) |
 | Runtime support + guard coverage + routing | [`docs/runtimes.md`](docs/runtimes.md) |

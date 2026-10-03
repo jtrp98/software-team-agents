@@ -1,8 +1,6 @@
 import * as fs from "node:fs";
 import * as http from "node:http";
-import * as path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import type { StaCore } from "./core.js";
 import { diffOfRun, projectBoundedRun } from "./engineProjection.js";
 import { interpretCommand, IntentRejectedError, providerFromConfig, validateIntent, type IntentResult } from "./intent.js";
@@ -18,38 +16,34 @@ import {
 } from "./knowledgeRegistry.js";
 import { MachineConfigError, POOL_RUNTIME_IDS, saveMachineConfig, type MachineConfigInput } from "./machineConfig.js";
 import { listRunDocs, readRunDoc } from "./runDocs.js";
+import { answerEngineApproval, pendingApprovalsForRun } from "./engineApprovals.js";
 import { boundedRunIds, WorkRunError } from "./workRunService.js";
 import { SETTLED_STATUSES, type WorkRun } from "./workRunStore.js";
 import { t } from "./i18n.js";
 
 /**
- * The Local API — the only door into STA Core for the Web UI and for
- * `sta work`. A thin translation layer: every rule lives in the Core.
+ * The Local API — the only door into STA Core (for `sta work`, the STA
+ * Platform backend, and tooling). A thin translation layer: every rule lives
+ * in the Core. This service serves no page: the team UI is STA Platform
+ * (platform/frontend), and machine-level settings live in `sta settings`.
  *
  * Exposure: bound to 127.0.0.1 only. Every `/api` request must carry the
  * per-start token (`x-sta-token`), which the Core writes into its own
- * machine-local service record and injects into the page it serves; a
- * cross-origin page cannot read it and the server answers no CORS. The Host
- * header must name the loopback origin, which defeats DNS rebinding. Secrets
- * are accepted on PUT and never returned.
+ * machine-local service record; a cross-origin page cannot read it and the
+ * server answers no CORS. The Host header must name the loopback origin,
+ * which defeats DNS rebinding. Secrets are accepted on PUT and never returned.
  */
 
 export interface ServerOptions {
   core: StaCore;
   token: string;
   version: string;
-  /** Overrides the web asset directory (tests). */
-  webRoot?: string;
   onShutdown?: () => void;
   fetchImpl?: typeof fetch;
 }
 
 export function newServiceToken(): string {
   return randomBytes(24).toString("hex");
-}
-
-export function defaultWebRoot(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
 }
 
 class HttpError extends Error {
@@ -121,33 +115,9 @@ export function runSummary(run: WorkRun, language: "th" | "en") {
 /** Routes whose second segment is a fixed word, not an id. */
 const FIXED_ROUTES = new Set(["PUT settings/intent-key", "DELETE settings/intent-key", "POST runtimes/refresh", "POST intent/preview"]);
 
-const CONTENT_TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
-
 export function createCoreServer(options: ServerOptions): http.Server {
   const { core } = options;
-  const webRoot = options.webRoot ?? defaultWebRoot();
   let boundPort = 0;
-
-  const serveAsset = (res: http.ServerResponse, file: string): void => {
-    const resolved = path.resolve(webRoot, file);
-    if (!resolved.startsWith(path.resolve(webRoot) + path.sep)) throw new HttpError(404, "not found");
-    let body: string;
-    try {
-      body = fs.readFileSync(resolved, "utf8");
-    } catch {
-      throw new HttpError(404, "not found");
-    }
-    if (file === "index.html") body = body.replace("__STA_TOKEN__", options.token).replace("__STA_LANG__", core.machine().language);
-    res.writeHead(200, {
-      "content-type": CONTENT_TYPES[path.extname(resolved)] ?? "application/octet-stream",
-      "cache-control": "no-store",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-      "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
-      "referrer-policy": "no-referrer",
-    });
-    res.end(body);
-  };
 
   const interpret = async (body: Record<string, unknown>): Promise<IntentResult> => {
     const knowledgeName = str(body, "knowledge")!;
@@ -176,22 +146,36 @@ export function createCoreServer(options: ServerOptions): http.Server {
     return run;
   };
 
-  const route = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<unknown> => {
+  const route = async (req: http.IncomingMessage): Promise<unknown> => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const method = req.method ?? "GET";
     const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
     const language = core.machine().language;
 
-    if (parts[0] !== "api") {
-      if (method !== "GET") throw new HttpError(405, "method not allowed");
-      const file = parts.length === 0 ? "index.html" : parts.join("/");
-      if (!/^[a-z0-9._/-]+$/i.test(file)) throw new HttpError(404, "not found");
-      serveAsset(res, ["app.js", "app.css", "favicon.svg"].includes(file) ? file : "index.html");
-      return undefined;
-    }
+    if (parts[0] !== "api") throw new HttpError(404, "not found — this service answers /api only");
     if (!tokenMatches(options.token, req.headers["x-sta-token"] as string | undefined)) throw new HttpError(401, "missing or invalid STA token");
     const body = method === "POST" || method === "PUT" ? await readJson(req) : {};
     const [, resource, id, action] = parts;
+
+    // Engine-approval relay (the one STA-side hook the STA Platform uses): the
+    // platform inbox lists a run's pending engine approvals and relays the
+    // human's answer into the engine's own trusted decision path.
+    if (resource === "runs" && parts[3] === "approvals") {
+      const run = core.store.get(id!);
+      if (!run) throw new HttpError(404, `no such work run: ${id}`);
+      if (method === "GET" && parts.length === 4) {
+        return { runId: run.runId, approvals: pendingApprovalsForRun(run.knowledge.path, boundedRunIds(run)) };
+      }
+      if (method === "POST" && parts.length === 6 && parts[5] === "answer") {
+        const approved = body.approved;
+        if (typeof approved !== "boolean") throw new HttpError(400, "approved (boolean) is required");
+        const by = str(body, "by")!;
+        const taskId = str(body, "taskId")!;
+        await answerEngineApproval(run.knowledge.path, taskId, parts[4]!, approved, by, typeof body.note === "string" ? body.note : undefined);
+        core.store.appendEvent(run.runId, "approval_answered", `engine approval ${parts[4]} on ${taskId} answered by ${by} (${approved ? "approved" : "rejected"}) via STA Platform`);
+        return { ok: true };
+      }
+    }
 
     const literalKey = `${method} ${parts.slice(1).join("/")}`;
     const patternKey = `${method} ${resource ?? ""}${id !== undefined ? "/:id" : ""}${action !== undefined ? `/${action}` : ""}`;
@@ -383,7 +367,7 @@ export function createCoreServer(options: ServerOptions): http.Server {
       res.end("misdirected request: STA Core answers only on its loopback origin");
       return;
     }
-    route(req, res)
+    route(req)
       .then((payload) => {
         if (res.headersSent) return;
         res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
