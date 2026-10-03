@@ -247,6 +247,18 @@ describe("T-V8-017 — every refusal leaves no registration state", () => {
     expectNothingRegistered();
   });
 
+  it("seeds verified plan tasks so a scope with verified dependencies compiles cleanly", () => {
+    // In planMarkdown, BE-004 is the first task (predecessor of FE-010).
+    const planWithVerifiedPredecessor = planMarkdown.replace("Status: pending", "Status: verified");
+    const result = register({
+      scope: { kind: "tasks", taskIds: ["FE-010"] },
+      plan: planWithVerifiedPredecessor,
+    });
+    expect(result.run.task_order).toEqual(["FE-010"]);
+    expect(store.loadTask("BE-004")?.machine.current).toBe("DEPLOYED");
+    expect(store.loadTask("FE-010")).not.toBeNull();
+  });
+
   it("refuses to re-register a task whose immutable metadata already exists", () => {
     register();
     const second = createRunId();

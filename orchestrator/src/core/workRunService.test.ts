@@ -452,6 +452,16 @@ describe("one bounded run per Target", () => {
     ]), { kind: "tasks", taskIds: ["BE-1", "X-1"] });
     expect(groups.map((group) => group.key)).toEqual(["api", "api+web"]);
   });
+
+  it("excludes already verified tasks under all and phase scopes", () => {
+    const tasks = [
+      ...plan([["BE-1", ["api"], []]], { status: "verified" as const }),
+      ...plan([["BE-2", ["api"], ["BE-1"]]], { status: "pending" as const }),
+      ...plan([["FE-1", ["web"], []]], { status: "verified" as const }),
+    ];
+    const groups = groupTasksByTarget(tasks, { kind: "all" });
+    expect(groups.map((group) => [group.key, group.taskIds])).toEqual([["api", ["BE-2"]]]);
+  });
 });
 
 describe("STA Core work runs across two Targets", () => {

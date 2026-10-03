@@ -1,4 +1,4 @@
-import { AgentStage } from "../types.js";
+import { AgentStage, TaskState } from "../types.js";
 import { classifyTask, type ClassificationInput, type ClassificationResult } from "../classification/taskClassifier.js";
 import { isCanonicalPlan, parseCanonicalPlan, planTaskHash, type PlanReferences, type PlanTask } from "../docs/planTask.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
@@ -6,7 +6,9 @@ import { LEDGER_SCHEMA_VERSION, type LedgerRun, type LedgerTask, type RunBoundar
 import type { TaskStore } from "../store/taskStore.js";
 import type { TaskRegistry } from "./taskRegistry.js";
 import { canonicalPlanHash, type RuntimeTaskWorkRoot } from "./runtimeTask.js";
-import type { Environment } from "../environment/environment.js";
+import { Environment } from "../environment/environment.js";
+import { initTaskMachine } from "../state/taskState.js";
+import { buildEvidence } from "../evidence/evidenceStore.js";
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 
 /**
@@ -120,6 +122,72 @@ export interface ResolvedPlanTask {
 }
 
 /**
+ * Seeds any tasks marked `verified` in the plan into the task store as DEPLOYED
+ * with valid task-completion evidence, if not already present in the store.
+ * This guarantees cross-target and multi-stage runs can resolve verified dependencies
+ * even when operating on a fresh/clean state database.
+ */
+export function seedVerifiedPlanTasks(
+  store: TaskStore,
+  tasks: readonly PlanTask[],
+  now: () => number = Date.now,
+): void {
+  const timestamp = now();
+  for (const task of tasks) {
+    if (task.status !== "verified") continue;
+    if (store.loadTask(task.id) !== null) continue;
+
+    const classificationInput = classificationInputForPlanTask(task);
+    const classification = classifyTask(classificationInput);
+    const evidence = buildEvidence({
+      taskId: task.id,
+      stage: AgentStage.QA_ENGINEER,
+      attempt: 1,
+      role: "orchestrator",
+      subject: "task-completion",
+      payload: {
+        kind: "task-completion",
+        pipeline: classification.pipeline,
+      },
+      refs: [],
+      recordedAt: timestamp,
+    });
+
+    store.appendEvidence(evidence);
+    store.createTask({
+      taskId: task.id,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      dependsOn: task.dependsOn ?? [],
+      classification,
+      runtimeTask: null,
+      machine: {
+        ...initTaskMachine(classification.pipeline, classification.requiresHumanApproval),
+        current: TaskState.DEPLOYED,
+      },
+      retries: { review: 0, qa: 0, security: 0 },
+      gateContext: {},
+      approvals: [],
+      artifacts: {},
+      pipelineCursor: 0,
+      blockedReason: null,
+      lastFailure: null,
+      recoveryDecision: null,
+      inFlightAttempt: null,
+      settledAttempt: null,
+      paused: false,
+      cancelled: false,
+      cancelReason: null,
+      environment: Environment.LOCAL,
+      deployPrepared: true,
+      targetBindings: { targets: [] },
+      knowledgeRoot: null,
+      completionEvidenceId: evidence.evidenceId,
+    });
+  }
+}
+
+/**
  * The pure, non-mutating half of plan compilation: validate, hash and order
  * one scope. `compileAndRegisterPlan` and `previewPlanRegistration` both call
  * this and only this to answer "what scope, in what order, under what plan
@@ -138,6 +206,8 @@ export function resolvePlanScope(input: PlanScopeResolutionInput): { order: stri
   if (parsed.problems.length > 0) {
     throw new PlanRegistrationError("invalid-plan", `module ${input.module}: plan.md is not registrable`, parsed.problems);
   }
+
+  seedVerifiedPlanTasks(input.store, parsed.tasks);
 
   const selected = selectScope(parsed.tasks, input.scope);
   if (selected.length === 0) {
@@ -159,8 +229,9 @@ export function resolvePlanScope(input: PlanScopeResolutionInput): { order: stri
 
   let order: string[];
   try {
-    const graph = taskGraphFromPlan(selected);
-    order = graph.parallelLayers().flatMap((layer) => layer.map((node) => node.id).sort());
+    const fullGraph = taskGraphFromPlan(parsed.tasks);
+    const fullOrder = fullGraph.parallelLayers().flatMap((layer) => layer.map((node) => node.id).sort());
+    order = fullOrder.filter((id) => selectedIds.has(id));
   } catch (error) {
     throw new PlanRegistrationError("graph", `module ${input.module}: plan graph is not executable: ${String(error)}`);
   }
@@ -289,8 +360,8 @@ function classificationConflicts(task: PlanTask, classificationInput: Classifica
 }
 
 function selectScope(tasks: readonly PlanTask[], scope: PlanRunScope): PlanTask[] {
-  if (scope.kind === "all") return [...tasks];
-  if (scope.kind === "phase") return tasks.filter((task) => task.phase === scope.phase);
+  if (scope.kind === "all") return tasks.filter((task) => task.status !== "verified");
+  if (scope.kind === "phase") return tasks.filter((task) => task.phase === scope.phase && task.status !== "verified");
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const missing = scope.taskIds.filter((id) => !byId.has(id));
   if (missing.length > 0) {
