@@ -86,6 +86,10 @@ cd platform/frontend && npm run build   # typecheck + build
 
 - Per-run pool enforcement ฝั่ง STA ยังใช้ machine-level routing ของ STA เอง — platform คืน "ลำดับที่แนะนำ"
   ผ่าน `pools/resolve`; จะบังคับราย run ต้องมี hook เล็ก ๆ ฝั่ง STA (ยังไม่ทำ เพื่อไม่แก้ STA)
-- Gate ที่สร้างอัตโนมัติจากงานคือ run-level gates ของ STA (review/operational) — engine-level approval
-  (REQUIREMENT_INTERVIEW ฯลฯ) ยังตอบผ่าน `sta approve` ของ STA; platform สร้าง gate เองได้ผ่าน `POST /api/gates`
+- **Engine approvals เดินทางผ่าน relay แล้ว**: เมื่องานหยุดรอ engine approval (requirement interview,
+  QA failure, deploy ฯลฯ) sync worker ดึงรายการจาก STA (`GET /api/runs/:id/approvals`) มาสร้าง gate
+  ตาม `gate_policies` ให้คนถือ role นั้นตอบใน inbox แล้ว relay คำตอบกลับเข้า engine ledger ของ STA
+  (`POST /api/runs/:id/approvals/:requestId/answer`) — `sta approve` (chat relay) ยังใช้ได้เป็นช่องทางคู่
 - อีเมลเชิญยังไม่มี — ผู้ดูแลส่งรหัสผ่านเริ่มต้นให้เอง (มี status Invited รองรับ flow อีเมลในอนาคต)
+- การตั้งค่าระดับเครื่อง (machine.yaml, Intent key) อยู่ที่ `sta settings` / `sta setup-machine` —
+  STA Core serve Local API เท่านั้น (ไม่มีหน้าเว็บของตัวเองแล้ว; team UI คือ platform นี้)

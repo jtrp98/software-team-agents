@@ -32,6 +32,9 @@ public class HumanGate
     /// <summary>STA Core's own gate key within a run — the dedupe identity for auto-created gates.</summary>
     public string? StaGateKey { get; set; }
     public string? StaRunId { get; set; }
+    /// <summary>Set when this gate relays an engine approval decision — the STA task holding the approval ledger.</summary>
+    public string? StaApprovalTaskId { get; set; }
+    public string? StaApprovalRequestId { get; set; }
     public ActorType CreatedByType { get; set; } = ActorType.System;
     public int? CreatedById { get; set; }
     public DateTime CreatedAt { get; set; }

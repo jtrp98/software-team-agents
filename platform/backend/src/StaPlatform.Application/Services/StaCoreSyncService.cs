@@ -92,6 +92,20 @@ public class StaCoreSyncService(
             var key = $"{mirror.StaRunId}:{staGate.Id}";
             if (await db.HumanGates.AnyAsync(g => g.StaGateKey == key, ct)) continue;
             if (!knowledgeByName.TryGetValue(mirror.Knowledge.Name, out var knowledge)) continue;
+            if (staGate.Kind == "engine_waiting")
+            {
+                // A waiting engine usually holds concrete approval requests — route each to its role owner.
+                IReadOnlyList<StaEngineApproval> approvals;
+                try { approvals = await sta.ListEngineApprovalsAsync(mirror.StaRunId, ct); }
+                catch { approvals = []; }
+                if (approvals.Count > 0)
+                {
+                    foreach (var approval in approvals)
+                        await gates.EnsureFromEngineApprovalAsync(knowledge, mirror.Module, mirror.StaRunId, approval, mirror.CreatedById, ct);
+                    await gates.SupersedeRunOperationalAsync(knowledge.Id, mirror.StaRunId, ct);
+                    continue;
+                }
+            }
             var created = await gates.EnsureFromStaRunGateAsync(knowledge, mirror.Module, mirror.StaRunId, staGate, mirror.CreatedById, ct);
             if (created is not null)
                 await gates.SupersedeEarlierAsync(knowledge.Id, mirror.Module, created.GateType, key, ct);

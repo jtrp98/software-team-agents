@@ -27,6 +27,28 @@ public class GateService(
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly GateStatus[] OpenStatuses = [GateStatus.Open, GateStatus.Assigned, GateStatus.Waiting];
 
+    /// <summary>Engine approval type → gate type — the one integration mapping; the required role comes from gate_policies.</summary>
+    private static readonly IReadOnlyDictionary<string, string> EngineApprovalGateType = new Dictionary<string, string>
+    {
+        ["requirement-interview"] = GateTypes.RequirementDecision,
+        ["schema-confirmation"] = GateTypes.ArchitectureDecision,
+        ["uxui-signoff"] = GateTypes.UxDecision,
+        ["uxui-ack"] = GateTypes.UxDecision,
+        ["review-failure"] = GateTypes.DevDecision,
+        ["qa-failure"] = GateTypes.QaDecision,
+        ["security-risk"] = GateTypes.SecurityDecision,
+        ["deploy"] = GateTypes.ReleaseDecision,
+        ["ba-signoff"] = GateTypes.RequirementDecision,
+        ["ba-ack"] = GateTypes.RequirementDecision,
+        ["sa-signoff"] = GateTypes.ArchitectureDecision,
+        ["sa-ack"] = GateTypes.ArchitectureDecision,
+        ["dev-signoff"] = GateTypes.DevDecision,
+        ["dev-ack"] = GateTypes.DevDecision,
+    };
+
+    public static string? GateTypeForEngineApproval(string approvalType)
+        => EngineApprovalGateType.GetValueOrDefault(approvalType.ToLowerInvariant());
+
     // ───────────────────────── queries ─────────────────────────
 
     public async Task<List<GateCardDto>> MyGatesAsync(CancellationToken ct = default)
@@ -169,6 +191,8 @@ public class GateService(
             throw AppException.Conflict("Gate already answered");
         if (gate.Knowledge.OrganizationId != actor.OrganizationId)
             throw AppException.Forbidden("Gate นี้อยู่คนละองค์กร");
+        if (gate.StaApprovalRequestId is not null && request.Approved is null && request.Choice is null)
+            throw new AppException("gate นี้ถือคำถามของ engine — ต้องตอบ approve/reject หรือเลือกตัวเลือกที่ AI เสนอ");
 
         var actingRole = await AuthorizeAnswerAsync(actor, gate, ct);
 
@@ -276,6 +300,65 @@ public class GateService(
         return gate;
     }
 
+    /// <summary>
+    /// Creates the platform gate for one pending ENGINE approval (requirement
+    /// interview, QA failure, deploy…), routed to the role owner via
+    /// gate_policies. Answering it relays the decision back into the engine.
+    /// </summary>
+    public async Task<HumanGate?> EnsureFromEngineApprovalAsync(
+        Knowledge knowledge, string? module, string staRunId, StaEngineApproval approval, int? runCreatorId, CancellationToken ct = default)
+    {
+        var key = $"{staRunId}:apr:{approval.RequestId}";
+        var existing = await db.HumanGates.FirstOrDefaultAsync(g => g.StaGateKey == key, ct);
+        if (existing is not null) return existing;
+
+        var gateType = GateTypeForEngineApproval(approval.Type);
+        if (gateType is null) return null; // unknown engine approval type: the run-level gate still covers it
+
+        var requiredRole = (await db.GatePolicies.FirstOrDefaultAsync(p => p.GateType == gateType, ct))?.RequiredRole;
+        var now = DateTime.UtcNow;
+        var gate = new HumanGate
+        {
+            OrganizationId = knowledge.OrganizationId,
+            KnowledgeId = knowledge.Id,
+            Module = module,
+            GateType = gateType,
+            RequiredRole = requiredRole,
+            RoutingMode = GateRoutingMode.AnyAuthorized,
+            Status = GateStatus.Open,
+            Question = approval.Reason is { Length: > 0 } ? approval.Reason : $"engine approval {approval.Type} รอคำตอบ (task {approval.TaskId})",
+            ContextJson = JsonSerializer.Serialize(new { staRunId, staTaskId = approval.TaskId, staApprovalType = approval.Type, from = approval.From, to = approval.To }, Json),
+            BlockedRefsJson = JsonSerializer.Serialize(new[] { new { kind = "engine_approval", runId = staRunId, requestId = approval.RequestId, taskId = approval.TaskId } }, Json),
+            StaGateKey = key,
+            StaRunId = staRunId,
+            StaApprovalTaskId = approval.TaskId,
+            StaApprovalRequestId = approval.RequestId,
+            CreatedByType = ActorType.Ai,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.HumanGates.Add(gate);
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAndSaveAsync(ActorType.Ai, "gate.created", actingRole: "sta-core", objectType: "gate", objectId: gate.DisplayId,
+            knowledge: knowledge.Name, module: module, detail: new { engineApproval = approval.Type, gateType, requiredRole, auto = true }, ct: ct);
+        return gate;
+    }
+
+    /// <summary>Real approval gates took over a run's waiting state — the creator-routed operational stand-in retires.</summary>
+    public async Task SupersedeRunOperationalAsync(int knowledgeId, string staRunId, CancellationToken ct = default)
+    {
+        var stale = await db.HumanGates
+            .Where(g => g.KnowledgeId == knowledgeId && g.StaRunId == staRunId && g.GateType == GateTypes.Operational
+                        && OpenStatuses.Contains(g.Status))
+            .ToListAsync(ct);
+        foreach (var gate in stale)
+        {
+            gate.Status = GateStatus.Superseded;
+            gate.UpdatedAt = DateTime.UtcNow;
+        }
+        if (stale.Count > 0) await db.SaveChangesAsync(ct);
+    }
+
     public async Task MarkAnsweredByStaAsync(string staGateKey, CancellationToken ct = default)
     {
         var gate = await db.HumanGates.FirstOrDefaultAsync(g => g.StaGateKey == staGateKey && OpenStatuses.Contains(g.Status), ct);
@@ -348,6 +431,15 @@ public class GateService(
 
     private async Task DispatchToStaAsync(HumanGate gate, AnswerGateRequest request, CurrentUser actor, CancellationToken ct)
     {
+        // Engine approval: the decision goes INTO the engine's ledger, then the run resumes on it.
+        if (gate.StaApprovalRequestId is not null)
+        {
+            if (gate.StaRunId is null || gate.StaApprovalTaskId is null) return;
+            var relayed = request.Approved ?? request.Choice is "continue" or "resume" or "acknowledge";
+            await sta.AnswerEngineApprovalAsync(gate.StaRunId, gate.StaApprovalRequestId!, gate.StaApprovalTaskId, relayed, actor.Name, request.Comment, ct);
+            await sta.ResumeAsync(gate.StaRunId, ct);
+            return;
+        }
         if (gate.StaRunId is null) return;
         try
         {

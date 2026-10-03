@@ -92,6 +92,15 @@ public class StaCoreClient(IHttpClientFactory httpClientFactory, IOptions<StaCor
     public async Task<StaRuntimes?> ListRuntimesAsync(CancellationToken ct = default)
         => await GetAsync<StaRuntimes>("runtimes", ct);
 
+    public async Task<IReadOnlyList<StaEngineApproval>> ListEngineApprovalsAsync(string runId, CancellationToken ct = default)
+    {
+        var result = await GetAsync<StaApprovalList>($"runs/{Uri.EscapeDataString(runId)}/approvals", ct);
+        return result?.Approvals ?? [];
+    }
+
+    public Task AnswerEngineApprovalAsync(string runId, string requestId, string taskId, bool approved, string by, string? note, CancellationToken ct = default)
+        => PostAsync<object>($"runs/{Uri.EscapeDataString(runId)}/approvals/{Uri.EscapeDataString(requestId)}/answer", new { approved, by, note, taskId }, ct);
+
     // ───────────────────────── plumbing ─────────────────────────
 
     private async Task<T?> GetAsync<T>(string path, CancellationToken ct)

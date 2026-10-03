@@ -25,6 +25,10 @@ public interface IStaCoreClient
     Task<StaRunDetail?> ApproveAsync(string runId, string by, string? note, CancellationToken ct = default);
     Task<StaRunDetail?> SendBackAsync(string runId, string by, string note, CancellationToken ct = default);
     Task<StaRuntimes?> ListRuntimesAsync(CancellationToken ct = default);
+    /// <summary>Pending engine approvals inside a run's tasks — the relay surface for the platform inbox.</summary>
+    Task<IReadOnlyList<StaEngineApproval>> ListEngineApprovalsAsync(string runId, CancellationToken ct = default);
+    /// <summary>Relays one human decision into the engine's approval ledger through STA's trusted local path.</summary>
+    Task AnswerEngineApprovalAsync(string runId, string requestId, string taskId, bool approved, string by, string? note, CancellationToken ct = default);
 }
 
 public class StaKnowledgeInfo
@@ -158,6 +162,21 @@ public class StaPrepareCommit
 public class StaRuntimes
 {
     public List<StaRuntimeStatus> Statuses { get; set; } = [];
+}
+
+public class StaEngineApproval
+{
+    [JsonPropertyName("taskId")] public string TaskId { get; set; } = "";
+    [JsonPropertyName("requestId")] public string RequestId { get; set; } = "";
+    public string Type { get; set; } = "";
+    public string? From { get; set; }
+    public string? To { get; set; }
+    public string Reason { get; set; } = "";
+}
+
+public class StaApprovalList
+{
+    public List<StaEngineApproval> Approvals { get; set; } = [];
 }
 
 public class StaRuntimeStatus
