@@ -477,9 +477,7 @@ describe("STA Core work runs across two Targets", () => {
   });
   const create = () => h.service.create({ knowledge: "schoolbright", module: "timetableai", commandText: "ทำงาน", intent: intent("schoolbright", "timetableai"), intentSource: "cli", overrides: [] });
   const finishWith = async (runId: string, boundedRunId: string, exitCode: number, verdict: string) => {
-    fs.appendFileSync(h.launcher.launches.at(-1)!.logPath, `[bounded-run] froze run ${boundedRunId}: x
-[bounded-run] ${verdict}
-`);
+    fs.appendFileSync(h.launcher.launches.at(-1)!.logPath, `[bounded-run] froze run ${boundedRunId}: x\n[bounded-run] ${verdict}\n`);
     h.launcher.finish(h.home, runId, exitCode, "");
     await h.service.tick();
   };

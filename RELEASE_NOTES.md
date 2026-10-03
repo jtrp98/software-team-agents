@@ -33,18 +33,22 @@
 - **No Codex Windows sandbox (owner decision 2026-10-03).** Headless Claude Code runs directly with
   the user's own login (the TASK-031 Codex-sandbox wrapper is opt-in only, `osIsolation: true`), and
   `codex exec` runs with `--dangerously-bypass-approvals-and-sandbox` (no `windows.sandbox`, no OS
-  permission profile). The TASK-027 a1 approval-isolation preflight is retired with it. Consequences:
-  Codex is no longer certified for unattended Target writes (no pre-tool guard), so the engineer
-  stage runs on Claude Code; Codex, AGY and ZCode serve commander, review and QA. Remaining guards:
-  workspace hooks, Codex git execpolicy, post-run write-scope check, deterministic gate, checkpoint.
+  permission profile). The TASK-027 a1 approval-isolation preflight is retired with it.
+- **Post-Run Write Guard for Engineer stages (Codex, ZCode, Antigravity).** Rather than restricting
+  engineer writes to Claude Code alone, runtimes with post-execution verification (Codex, ZCode, Antigravity)
+  are admitted to unattended Target writes under `POST_RUN_WRITE_GUARD`. The orchestrator inspects the working
+  tree diff against the task's contract post-run, fails closed on any out-of-scope write, and verifies
+  Knowledge workspace immutability via pre/post turn fingerprinting. Default engineer fallback order is
+  `codex` → `claude-code` → `antigravity` → `zcode`.
 - **Plan human gates:** a plan task's declared `breaking-contract`, `business`, `design-ambiguity` or
   `plan-approval` gate now requires a person's approval before Done (plan-task-v1 "gate enforcement
   remains with the safety kernel") instead of the whole plan being refused as a classification conflict.
 - **Claude Code `Not logged in`** is classified as an auth refusal (fallback), not a task error.
 - `machine.yaml` beside `installation.yaml` (machine root, language, Intent, role orders, cooldowns);
   Knowledge roots stay in `installation.yaml`.
-- Target-write certification is still enforced on every fallback: an uncertified runtime is skipped
-  for the engineer stage, never run with a weaker boundary.
+- **Target-write certification is still enforced on every fallback:** an uncertified runtime (without
+  in-band pre-tool enforcement or a verified post-run write guard) is skipped for the engineer stage, never
+  run with a weaker boundary.
 
 ## software-team-agents 9.0.0 — init refuses a Target checkout (2026-10-02)
 
