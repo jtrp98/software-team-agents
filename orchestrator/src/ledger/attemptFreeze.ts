@@ -1,6 +1,6 @@
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import type { RuntimeCapabilityReport } from "../runtime/runtimeCapabilityDetection.js";
-import { isUnattendedTargetWriteAllowed, targetWriteGuardCapability, RUNTIME_SUPPORT, type RuntimeId } from "../runtime/runtimeSupport.js";
+import { isUnattendedTargetWriteAllowed, targetWriteGuardCapability, usesPostRunTargetWriteGuard, RUNTIME_SUPPORT, type RuntimeId } from "../runtime/runtimeSupport.js";
 import type { RuntimeAgentRequest } from "../runtime/runtimeAdapter.js";
 import type { AgentStage } from "../types.js";
 import {
@@ -101,7 +101,14 @@ export function freezeAttempt(input: FreezeAttemptInput): LedgerAttempt {
     ? RUNTIME_SUPPORT[input.observed.runtime as RuntimeId]
     : null;
   if (!support) reasons.push(`runtime "${input.observed.runtime}" is not a known runtime`);
-  else if (support.level !== "supported") {
+  // V8 admitted only "supported" runtimes to an unattended Target-writing
+  // attempt. Since then the support record grew an explicitly admitted weaker
+  // write path — the post-run write guard (Codex, ZCode) — and a runtime that
+  // declares it may freeze a Target-writing attempt on POST_RUN_WRITE_GUARD
+  // evidence instead of pre-tool certification. Every other below-supported
+  // runtime still refuses here; nothing about this exception raises a level
+  // or certifies anyone.
+  else if (support.level !== "supported" && !(input.targetWrite && usesPostRunTargetWriteGuard(input.observed.runtime))) {
     reasons.push(
       `runtime "${input.observed.runtime}" has support level "${support.level}"; V8 admits only "supported" runtimes to an unattended Target-writing attempt`,
     );

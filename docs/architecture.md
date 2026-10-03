@@ -272,9 +272,9 @@ node ../.claude/tests/run.js   # hook/script self-test — ต้องเขี
 
 ## ข้อจำกัด (current)
 
-- **Codex interactive ยัง unguarded** — headless รองรับ engineer ผ่าน post-run write guard และ exit checks
-  กลาง; ไม่มี pre-tool certification การตรวจหลังรันปฏิเสธ attempt ที่ scope ผิดหรือ snapshot ไม่มี
-  แต่ไม่ป้องกันหรือย้อนการเขียน และไม่ครอบคลุมไฟล์ ignored หรือไฟล์นอก roots ของ snapshot
+- **Codex interactive ยัง unguarded** — headless ใช้ adapter-owned PreToolUse hooks ตรวจ patch ตาม grant
+  ก่อนเขียน และยังบังคับ post-run write guard กับ exit checks กลาง; hooks มี failure/coverage gaps
+  จึงยังไม่ certified สำหรับ unattended Target writes; snapshot ไม่ครอบคลุมไฟล์ ignored หรือไฟล์นอก roots
 - **OpenCode runtime** — spike+UAT smoke ผ่านและ exit checks ใช้ runner กลางแบบ fail-closedแล้ว แต่
   doc-rewrite guard ยังไม่พอร์ตลง plugin
 - **Contract write-globs จำกัด** — pattern ปัจจุบันครอบ `src/lib/**`, `server/**`, `app/api/**`,

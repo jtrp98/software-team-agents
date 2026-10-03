@@ -4,14 +4,16 @@ import { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { detectRuntimes, knownUnavailable, securityRolesFor, type CommandRunner } from "./runtimeConnect.js";
 
 describe("Runtime Connect (no Codex sandbox — owner decision 2026-10-03)", () => {
-  it("reports Codex engineer eligibility without claiming pre-tool enforcement", () => {
+  it("reports Codex hooks and mandatory post-run checks without claiming write certification", () => {
     expect(securityRolesFor("claude-code")).toMatchObject({ commander: true, engineer: true, reviewer: true, qa: true });
     expect(securityRolesFor("codex")).toMatchObject({ commander: true, engineer: true, reviewer: true, qa: true });
-    for (const id of ["antigravity", "zcode"]) {
+    expect(securityRolesFor("zcode")).toMatchObject({ commander: true, engineer: true, reviewer: true, qa: true });
+    for (const id of ["antigravity"]) {
       expect(securityRolesFor(id), id).toMatchObject({ commander: true, engineer: false, reviewer: true, qa: true });
     }
-    expect(securityRolesFor("codex").detail).toMatch(/checked after the run/);
-    expect(securityRolesFor("codex").detail).not.toMatch(/certified/);
+    expect(securityRolesFor("codex").detail).toMatch(/PreToolUse hooks/);
+    expect(securityRolesFor("codex").detail).toMatch(/mandatory post-run/);
+    expect(securityRolesFor("codex").detail).toMatch(/remain uncertified/);
   });
 
   it("detects all four pool runtimes with no sandbox state or setup action anywhere", async () => {

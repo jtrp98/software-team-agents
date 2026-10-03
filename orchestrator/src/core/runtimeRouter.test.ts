@@ -64,19 +64,18 @@ describe("STA Core runtime router", () => {
     expect(securityEligibility("zcode", "commander").eligible).toBe(true);
   });
 
-  it("Codex quota falls back to Claude engineer; when both are down the run pauses", () => {
+  it("Codex quota falls back to Claude engineer; when both are down, ZCode's post-run write path takes the work", () => {
     health.recordFailure({ runtimeId: "codex", failureClass: "QUOTA_EXHAUSTED", reason: "q" });
     expect(selectRuntime("engineer", { config, health: snapshot() }).selected).toBe("claude-code");
     health.recordFailure({ runtimeId: "claude-code", failureClass: "QUOTA_EXHAUSTED", reason: "q" });
     const decision = selectRuntime("engineer", { config, health: snapshot() });
-    expect(decision.selected).toBeUndefined();
-    expect(decision.recoverable).toBe(true);
-    expect(decision.attempts.filter((a) => a.reason.startsWith("SECURITY")).map((a) => a.runtimeId)).toEqual(["antigravity", "zcode"]);
+    expect(decision.selected).toBe("zcode");
+    expect(decision.attempts.filter((a) => a.reason.startsWith("SECURITY")).map((a) => a.runtimeId)).toEqual(["antigravity"]);
   });
 
   it("a pool with only uncertified runtimes for the engineer is not recoverable by waiting", () => {
-    const narrow = parseMachineConfig({ roles: { engineer: { order: ["antigravity", "zcode"] } } });
-    const decision = selectRuntime("engineer", { config: narrow, health: health.snapshot(["antigravity", "zcode"]) });
+    const narrow = parseMachineConfig({ roles: { engineer: { order: ["antigravity"] } } });
+    const decision = selectRuntime("engineer", { config: narrow, health: health.snapshot(["antigravity"]) });
     expect(decision.exhausted).toBe(true);
     expect(decision.recoverable).toBe(false);
   });

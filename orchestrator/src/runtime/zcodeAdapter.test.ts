@@ -11,7 +11,6 @@ import {
   parseZcodeSummary,
   parseZcodeTrustStatus,
   untrustedManagedHooks,
-  verifyZcodeRunWrites,
   ZcodeAdapter,
 } from "./zcodeAdapter.js";
 
@@ -162,6 +161,7 @@ describe("ZcodeAdapter — identity and probe", () => {
     expect(adapter.id).toBe("zcode");
     for (const capability of [
       RuntimeCapability.PRE_TOOL_GUARD,
+      RuntimeCapability.POST_RUN_WRITE_GUARD,
       RuntimeCapability.STRUCTURED_RESULT,
       RuntimeCapability.ATTEMPT_RESUME,
       RuntimeCapability.ATTEMPT_CANCEL,
@@ -349,7 +349,7 @@ describe("ZcodeAdapter — governed lifecycle (persisted attempt, verification, 
     const prepared = await adapter.prepare(request(fx, { autonomy: "edit", guards: GUARDS }));
     const result = await adapter.execute(prepared);
     expect(result.status).toBe("ERROR");
-    expect(result.diagnostics.join(" ")).toMatch(/outside\.txt was written outside the grant/);
+    expect(result.diagnostics.join(" ")).toMatch(/postflight: not covered by this role's write paths/);
     const evidence = await adapter.collectEvidence(prepared);
     expect(evidence.result?.status).toBe("ERROR");
     expect(evidence.logs.join("\n")).toMatch(/post-run verification failed/);
@@ -426,14 +426,5 @@ describe("ZCode parsers and checks", () => {
     expect(parseZcodeSummary(SUMMARY)).toMatchObject({ sessionId: expect.stringMatching(/^sess_/), response: "DONE", projectionStatus: "completed" });
     expect(parseZcodeSummary(JSON.stringify({ sessionId: "sess_x", response: "" }))!.usage).toEqual({});
     expect(parseZcodeSummary("garbage")).toBeNull();
-  });
-
-  it("a write-capable run with no snapshot is unverified, and an empty grant writes nothing", () => {
-    const base = { role: "r", cwd: "/w", definitionPath: "d", prompt: "p" } as const;
-    expect(verifyZcodeRunWrites({ ...base, autonomy: "edit", guards: GUARDS }, undefined)[0]).toMatch(/cannot be verified/);
-    expect(verifyZcodeRunWrites({ ...base, autonomy: "read-only", guards: NO_GUARDS }, undefined)).toEqual([]);
-    expect(verifyZcodeRunWrites({ ...base, autonomy: "edit", guards: NO_GUARDS }, ["a.ts"])[0]).toMatch(/outside the grant/);
-    expect(verifyZcodeRunWrites({ ...base, autonomy: "edit", guards: GUARDS }, [".env"])[0]).toMatch(/outside the grant/);
-    expect(verifyZcodeRunWrites({ ...base, autonomy: "edit", guards: GUARDS }, ["src/a.ts"])).toEqual([]);
   });
 });

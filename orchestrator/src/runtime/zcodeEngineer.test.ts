@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CodexAdapter } from "./codexAdapter.js";
+import { renderZcodeConfigJson } from "./bindingGenerator.js";
+import { ZcodeAdapter, managedZcodeHooks } from "./zcodeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { detectRuntimeCapabilities } from "./runtimeCapabilityDetection.js";
@@ -16,7 +17,10 @@ import { writeTargetConfig } from "../targetcli/targetMeta.js";
 import type { RuntimeAgentRequest, SpawnSync } from "./runtimeAdapter.js";
 
 // Exercise real file edits and lifecycle checks with filesystem snapshots,
-// without creating Git state or invoking an AI provider in a unit test.
+// without creating Git state or invoking an AI provider in a unit test. The
+// ZCode CLI itself is a fake spawn answering --version, `hooks trust status`
+// (all managed hooks trusted) and `-p --json` with a parsable summary — the
+// same live shapes zcodeAdapter.test.ts pins.
 vi.mock("../qa/changeSource.js", async (original) => ({
   ...await original<typeof import("../qa/changeSource.js")>(),
   captureChangeSetFingerprint: vi.fn(),
@@ -24,7 +28,9 @@ vi.mock("../qa/changeSource.js", async (original) => ({
 
 let fixture: string;
 let project: string;
-let spawns: number;
+let entry: string;
+let home: string;
+let runs: number;
 
 function fileHashes(root: string): Record<string, string> {
   const files: Record<string, string> = {};
@@ -39,11 +45,49 @@ function fileHashes(root: string): Record<string, string> {
   return files;
 }
 
+const SUMMARY = JSON.stringify({
+  sessionId: "sess_11111111-2222-3333-4444-555555555555",
+  response: "DONE",
+  usage: { inputTokens: 120, outputTokens: 7 },
+  projection: { status: "completed" },
+});
+
+function trustStatus(): string {
+  return JSON.stringify({
+    workspacePath: "W",
+    workspaceIdentity: "W",
+    bundleDigest: "b".repeat(64),
+    reasonCode: "workspace_hooks_trusted",
+    items: managedZcodeHooks().map(({ event, script }, index) => ({
+      reviewItemId: `workspace-hook-${index}`,
+      event,
+      matcher: null,
+      displayCommand: `node \${CLAUDE_PROJECT_DIR}/.claude/hooks/${script}`,
+      sourcePath: ".zcode/config.json",
+      configuredEnabled: true,
+      hookDeclarationDigest: String(index).repeat(64).slice(0, 64),
+      trustState: "trusted_persistent",
+    })),
+  });
+}
+
 beforeEach(() => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codex-engineer-"));
+  fixture = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-engineer-"));
   project = path.join(fixture, "project");
-  fs.mkdirSync(project);
-  spawns = 0;
+  fs.mkdirSync(path.join(project, ".claude", "agents"), { recursive: true });
+  fs.writeFileSync(path.join(project, ".claude", "agents", "backend-engineer.md"), "---\nname: backend-engineer\n---\nROLE INSTRUCTIONS\n");
+  fs.mkdirSync(path.join(project, ".zcode"), { recursive: true });
+  fs.writeFileSync(path.join(project, ".zcode", "config.json"), renderZcodeConfigJson());
+  const install = path.join(fixture, "install", "resources");
+  fs.mkdirSync(path.join(install, "glm"), { recursive: true });
+  fs.mkdirSync(path.join(install, "config", "provider"), { recursive: true });
+  fs.writeFileSync(path.join(install, "glm", "zcode.cjs"), "// fake zcode entry\n");
+  fs.writeFileSync(path.join(install, "config", "provider", "zcode-builtin.json"), "{}\n");
+  entry = path.join(install, "glm", "zcode.cjs");
+  home = path.join(fixture, "home");
+  fs.mkdirSync(path.join(home, ".zcode", "v2"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".zcode", "v2", "provider_config.json"), "{}\n");
+  runs = 0;
   vi.mocked(captureChangeSetFingerprint).mockReset().mockImplementation(async (input) => {
     const roots = typeof input === "string" ? [{ path: input }] : input;
     const files: Record<string, string> = {};
@@ -56,18 +100,37 @@ beforeEach(() => {
 
 afterEach(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
-function adapter(write: () => void): CodexAdapter {
+function adapter(write: () => void, trust: string = trustStatus()): ZcodeAdapter {
   const spawnSync: SpawnSync = (_command, args) => {
-    if (args.includes("--version")) return { status: 0, stdout: "codex-cli test", stderr: "" } as ReturnType<SpawnSync>;
-    spawns += 1;
+    const rest = args.slice(1);
+    if (rest[0] === "--version") return { status: 0, stdout: "0.16.9\n", stderr: "" } as ReturnType<SpawnSync>;
+    if (rest[0] === "hooks") return { status: 0, stdout: trust, stderr: "" } as ReturnType<SpawnSync>;
+    runs += 1;
     write();
-    return { status: 0, stdout: "done", stderr: "" } as ReturnType<SpawnSync>;
+    return { status: 0, stdout: SUMMARY, stderr: "" } as ReturnType<SpawnSync>;
   };
-  return new CodexAdapter({ projectRoot: project, spawnSync, journalRoot: path.join(fixture, "journal") });
+  return new ZcodeAdapter({
+    projectRoot: project,
+    cliEntry: entry,
+    nodePath: "node",
+    spawnSync,
+    env: { USERPROFILE: home, HOME: home },
+    platform: "linux",
+    journalRoot: path.join(fixture, "journal"),
+  });
 }
 
 function request(overrides: Partial<RuntimeAgentRequest> = {}): RuntimeAgentRequest {
-  return { taskId: "BE-CODEX", cwd: project, prompt: "implement the task", autonomy: "edit", guards: { writeAllow: ["src/**"], writeDeny: [], forbidCommands: ["git"], exitChecks: [] }, ...overrides };
+  return {
+    taskId: "BE-ZCODE",
+    role: "backend-engineer",
+    definitionPath: ".claude/agents/backend-engineer.md",
+    cwd: project,
+    prompt: "implement the task",
+    autonomy: "edit",
+    guards: { writeAllow: ["src/**"], writeDeny: [], forbidCommands: ["git"], exitChecks: [] },
+    ...overrides,
+  };
 }
 
 function write(file: string, content = "export {};"): void {
@@ -76,27 +139,31 @@ function write(file: string, content = "export {};"): void {
   fs.writeFileSync(target, content);
 }
 
-describe("Codex engineer post-run write path", () => {
-  it("routes both engineer roles with hooks and mandatory post-run capability, without pre-tool certification", async () => {
+/** A synced checkout carries the guard payload the adapter's preflight requires of its cwd. */
+function syncZcodePayload(root: string): void {
+  fs.mkdirSync(path.join(root, ".zcode"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".zcode", "config.json"), renderZcodeConfigJson());
+}
+
+describe("ZCode engineer post-run write path", () => {
+  it("routes both engineer roles with verified post-run capability, without pre-tool certification", async () => {
     const runtime = adapter(() => {});
     const report = await detectRuntimeCapabilities(runtime, { probe: { available: true } });
     const verified = new Set(report.checks.filter((check) => check.verified).map((check) => check.capability));
     expect(verified.has(RuntimeCapability.POST_RUN_WRITE_GUARD)).toBe(true);
-    expect(verified.has(RuntimeCapability.PRE_TOOL_GUARD)).toBe(true);
     for (const stage of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]) {
-      const route = resolveRuntimeRoute({ stage, role: stage, projectRoot: project, registry: new RuntimeRegistry([runtime]), config: null, flags: { runtime: "codex" }, modelPolicy: null, hasTargetWrite: true, verifiedCapabilities: { codex: verified } });
+      const route = resolveRuntimeRoute({ stage, role: stage, projectRoot: project, registry: new RuntimeRegistry([runtime]), config: null, flags: { runtime: "zcode" }, modelPolicy: null, hasTargetWrite: true, verifiedCapabilities: { zcode: verified } });
       expect(route.error).toBeUndefined();
-      expect(route.selected?.runtime.id).toBe("codex");
+      expect(route.selected?.runtime.id).toBe("zcode");
     }
   });
 
-  it("accepts an allowed file and preserves honest guard reporting and evidence", async () => {
+  it("accepts an allowed file, certifies the post-run guard, and preserves honest evidence", async () => {
     const runtime = adapter(() => write("src/order.ts"));
     const attempt = await runtime.prepare(request());
     const result = await runtime.execute(attempt);
     expect(result.status).toBe("OK");
     expect(result.guards.enforced).toContain(RuntimeCapability.POST_RUN_WRITE_GUARD);
-    expect(result.guards.enforced).not.toContain(RuntimeCapability.PRE_TOOL_GUARD);
     expect((await runtime.collectEvidence(attempt)).changedFiles).toEqual(["src/order.ts"]);
   });
 
@@ -113,7 +180,7 @@ describe("Codex engineer post-run write path", () => {
     const runtime = adapter(() => write("src/order.ts"));
     const result = await runtime.execute(await runtime.prepare(request()));
     expect(result.status).toBe("ERROR");
-    expect(spawns).toBe(0);
+    expect(runs).toBe(0);
     expect(result.guards.enforced).not.toContain(RuntimeCapability.POST_RUN_WRITE_GUARD);
   });
 
@@ -124,12 +191,24 @@ describe("Codex engineer post-run write path", () => {
     expect(result.guards.enforced).not.toContain(RuntimeCapability.POST_RUN_WRITE_GUARD);
   });
 
+  it("refuses before spawn when a STA guard hook is not persistently trusted", async () => {
+    const pending = JSON.parse(trustStatus());
+    pending.reasonCode = "workspace_hooks_pending_trust";
+    pending.items[0].trustState = "pending_trust";
+    const runtime = adapter(() => write("src/order.ts"), JSON.stringify(pending));
+    const result = await runtime.executeAgent(request());
+    expect(result.status).toBe("ERROR");
+    expect(runs).toBe(0);
+    expect(result.diagnostics.join(" ")).toMatch(/not trusted_persistent/);
+  });
+
   it("rejects mutations to the read-only Knowledge workspace during a Target run", async () => {
     seedRealContracts(project);
     const target = path.join(fixture, "target");
     fs.mkdirSync(target);
+    syncZcodePayload(target);
     const runtime = adapter(() => write("_docs/requirement.md", "forged"));
-    const result = await runtime.execute(await runtime.prepare(request({ cwd: target, bindingRoot: project, role: "backend-engineer", knowledgeRoot: project, workRoots: [{ targetId: "backend", path: target, access: "write" }] })));
+    const result = await runtime.execute(await runtime.prepare(request({ cwd: target, bindingRoot: project, knowledgeRoot: project, workRoots: [{ targetId: "backend", path: target, access: "write" }] })));
     expect(result.status).toBe("ERROR");
     expect(result.diagnostics.join(" ")).toMatch(/read-only root/);
   });
@@ -140,6 +219,7 @@ describe("Codex engineer post-run write path", () => {
     fs.copyFileSync(path.resolve(__dirname, "../../../stacks/node/stack.yaml"), path.join(project, "stacks", "node", "stack.yaml"));
     const target = path.join(fixture, "target");
     fs.mkdirSync(target);
+    syncZcodePayload(target);
     writeTargetConfig(target, {
       schema_version: 1, target_id: "backend", registered_at: "fixture", overrides: [],
       stack: { profile: "node", package_manager: "npm", commands: { install: "npm install", build: "npm run build", test: "npm test", lint: "npm run lint", typecheck: "npm run typecheck" }, schema_paths: [], source_roots: ["."], detected_at: "fixture", fingerprint: `sha256:${"0".repeat(64)}` },
@@ -149,29 +229,18 @@ describe("Codex engineer post-run write path", () => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, "export {};");
     });
-    const result = await runtime.execute(await runtime.prepare(request({ cwd: target, bindingRoot: project, role: "backend-engineer", knowledgeRoot: project, guards: { writeAllow: [], writeDeny: [], forbidCommands: ["git"], exitChecks: [] }, workRoots: [{ targetId: "backend", path: target, access: "write" }] })));
+    const result = await runtime.execute(await runtime.prepare(request({ cwd: target, bindingRoot: project, guards: { writeAllow: [], writeDeny: [], forbidCommands: ["git"], exitChecks: [] }, workRoots: [{ targetId: "backend", path: target, access: "write" }] })));
     expect(result.status, result.diagnostics.join("\n")).toBe(allowed ? "OK" : "ERROR");
     if (!allowed) expect(result.diagnostics.join(" ")).toMatch(/not covered by this role/);
   });
 
-  it("direct execution enforces the post-run guard and no-hardcoded-secret exit check", async () => {
+  it("direct execution refuses a run whose write falls outside the granted paths", async () => {
     // Generate disposable synthetic data so this test never embeds a credential literal.
     const syntheticValue = randomBytes(16).toString("hex");
-    const runtime = adapter(() => write("src/order.ts", `const password = ${JSON.stringify(syntheticValue)};`));
+    const runtime = adapter(() => write("outside.txt", `const password = ${JSON.stringify(syntheticValue)};`));
     const sta = createSta({ registry: new RuntimeRegistry([runtime]), cwd: project, runStore: path.join(fixture, "store"), env: {} });
-    const result = await sta.execute({ runtime: "codex", task: "implement", permissions: { write: true, writePaths: ["src/**"] } });
+    const result = await sta.execute({ runtime: "zcode", role: "backend-engineer", task: "implement", permissions: { write: true, writePaths: ["src/**"] } });
     expect(result.status).toBe("failed");
-    expect(result.evidence.diagnostics.join(" ")).toMatch(/no-hardcoded-secret: FAIL/);
-  });
-
-  it("direct engineer execution refuses a failing typecheck after a permitted edit", async () => {
-    fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(1)"' } }));
-    fs.mkdirSync(path.join(project, ".codex", "agents"), { recursive: true });
-    fs.writeFileSync(path.join(project, ".codex", "agents", "backend-engineer.toml"), 'name = "backend-engineer"\ndescription = "test"\ndeveloper_instructions = "implement the task"\n');
-    const runtime = adapter(() => write("src/order.ts"));
-    const sta = createSta({ registry: new RuntimeRegistry([runtime]), cwd: project, runStore: path.join(fixture, "store"), env: {} });
-    const result = await sta.execute({ runtime: "codex", role: "backend-engineer", task: "implement", permissions: { write: true, writePaths: ["src/**"] } });
-    expect(result.status).toBe("failed");
-    expect(result.evidence.diagnostics.join(" ")).toMatch(/code-green: FAIL/);
+    expect(result.evidence.diagnostics.join(" ")).toMatch(/postflight/);
   });
 });

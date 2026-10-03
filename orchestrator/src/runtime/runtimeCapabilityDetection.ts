@@ -226,6 +226,15 @@ export async function detectRuntimeCapabilities(
         if (claimed.has(cap) && !deep.verified.has(cap)) reasons.set(cap, deep.reason);
       }
     }
+    // A binding file is where this runtime's *native* guards live. A capability
+    // this framework itself assembles around every invocation — the post-run
+    // write guard — has no project file to inspect, so a runtime that declares
+    // it per-run is verified per-run by `RuntimeAgentResult.guards`, exactly
+    // the rule a runtime with no binding file at all follows.
+    if (adapter.binding.guardEnforcement === "per-run" && claimed.has(RuntimeCapability.POST_RUN_WRITE_GUARD)) {
+      verified.add(RuntimeCapability.POST_RUN_WRITE_GUARD);
+      reasons.delete(RuntimeCapability.POST_RUN_WRITE_GUARD);
+    }
   }
 
   // Everything else claimed that this module has no independent way to check

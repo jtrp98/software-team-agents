@@ -275,9 +275,11 @@ describe("V13 TASK-016 — the executor and its version are pinned to the attemp
   });
 
   // V13 TASK-027 R14C (a1): Antigravity lost Target-write certification with the
-  // approval isolation boundary; zcode never had it. Claude Code regained it in
-  // TASK-031 (whole-process OS sandbox + network lock).
-  it.each(["zcode", "antigravity"])("refuses to freeze a governed write on uncertified executor %s", (runtime) => {
+  // approval isolation boundary; OpenCode never had it. Claude Code regained it
+  // in TASK-031 (whole-process OS sandbox + network lock). ZCode has no
+  // certification either but holds the explicitly admitted post-run write path,
+  // so it is held to that path's evidence instead — see the test below.
+  it.each(["antigravity", "opencode"])("refuses to freeze a governed write on uncertified executor %s", (runtime) => {
     expect(() =>
       freezeAttempt(freezeInput({
         requested: { runtime },
@@ -285,7 +287,29 @@ describe("V13 TASK-016 — the executor and its version are pinned to the attemp
         modelExplicit: false,
         capabilityReport: capabilityReport({ runtimeId: runtime }),
       })),
-    ).toThrow(new RegExp(`runtime "${runtime}" is not certified for unattended Target writes`));
+    ).toThrow(new RegExp(`runtime "${runtime}" is not certified|has support level "experimental"`));
+  });
+
+  it("freezes a ZCode engineer on verified post-run write-guard evidence while it stays experimental", () => {
+    const report = capabilityReport({ runtimeId: "zcode", checks: [
+      { capability: RuntimeCapability.POST_RUN_WRITE_GUARD, claimed: true, verified: true },
+      { capability: RuntimeCapability.PRE_TOOL_GUARD, claimed: true, verified: false, reason: "no deep guard checker registered" },
+    ] });
+    const input = freezeInput({
+      requested: { runtime: "zcode" },
+      observed: { runtime: "zcode" },
+      modelExplicit: false,
+      capabilityReport: report,
+    });
+    const attempt = freezeAttempt(input);
+    expect(attempt.observed.runtime).toBe("zcode");
+    expect(attempt.guard_evidence.pre_tool_guard).toBe(false);
+    expect(attempt.capability_evidence).toContainEqual({ capability: RuntimeCapability.POST_RUN_WRITE_GUARD, verified: true, detail: null });
+    // The admitted path is still an evidence gate: without the verified
+    // capability the same experimental runtime refuses, and the level carve-out
+    // never admits a runtime that has not declared the path.
+    expect(() => freezeAttempt({ ...input, attempt: 2, capabilityReport: { ...report, checks: report.checks.filter((check) => check.capability !== RuntimeCapability.POST_RUN_WRITE_GUARD) } })).toThrow(/requires a verified post-run write guard/);
+    expect(() => freezeAttempt({ ...input, attempt: 3, requested: { runtime: "opencode" }, observed: { runtime: "opencode" } })).toThrow(/V8 admits only "supported" runtimes/);
   });
 
   it("a reroute onto an uncertified executor is refused and leaves the halted attempt as it was", () => {

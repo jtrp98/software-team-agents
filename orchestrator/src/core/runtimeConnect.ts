@@ -93,7 +93,9 @@ export function securityRolesFor(runtimeId: string): RuntimeConnectStatus["secur
   const writes = isUnattendedTargetWriteAllowed(runtimeId);
   const detail = isUnattendedTargetWriteCertified(runtimeId)
     ? "runs directly with your own login; pre-tool hooks guard Target writes — certified for unattended Target writes"
-    : writes ? "runs directly with your own login; engineer writes are checked after the run — violations reject the attempt but are not prevented or undone"
+    : writes ? (runtimeId === "codex"
+      ? "runs directly with your own login; adapter-owned PreToolUse hooks check patch paths before execution, with mandatory post-run scope and exit checks — unattended Target writes remain uncertified"
+      : "runs directly with your own login; engineer writes are checked after the run — violations reject the attempt but are not prevented or undone")
     : "runs directly with your own login; no pre-tool write guard — STA uses it for commander, review and QA, never to write a Target";
   return { commander: true, engineer: writes, reviewer: true, qa: true, detail };
 }

@@ -432,8 +432,8 @@ function opencodeCoverage(targetRoot: string): GuardCoverage {
  * `--dangerously-bypass-hook-trust`, a crashing hook fails open, and
  * Stop/SubagentStop do not enforce exit checks. Presence therefore stays
  * `unguarded`; counting registrations as capability would be a fail-open claim.
- * The headless adapter is separate: it compiles the run packet into a native
- * permission profile and isolated execpolicy, so it does not claim these hooks.
+ * The headless adapter is separate: it uses adapter-owned inline PreToolUse
+ * hooks in an isolated home, plus mandatory post-run scope and exit checks.
  */
 /** Pure/static — quotes the verified exec-mode posture into the registry claim. */
 export function codexCoverageWithHooks(): GuardCoverage {
@@ -443,7 +443,7 @@ export function codexCoverageWithHooks(): GuardCoverage {
     enforced: [],
     unenforced: ALL_GUARD_CAPABILITIES,
     detail:
-      "`.codex/hooks.json` is compatibility wiring only: real-install UAT on Codex 0.154.0/0.155.1 found PreToolUse denial only with --dangerously-bypass-hook-trust, hook crashes fail open, and Stop/SubagentStop do not enforce codex exec; interactive/project-hook guard capabilities remain unclaimed (the headless adapter uses a separate per-run native profile)",
+      "`.codex/hooks.json` alone does not prove enforcement: hooks require trust, hook errors can fail open, and tool coverage has exceptions. Interactive/project-hook guard capabilities remain unclaimed; the headless adapter instead enables its own inline PreToolUse hook with --dangerously-bypass-hook-trust in an isolated home, confirms invocation through receipts, and retains mandatory post-run scope and exit checks",
   };
 }
 

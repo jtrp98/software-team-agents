@@ -2,10 +2,11 @@ import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_pr
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { canWritePath } from "../agents/pathPermissions.js";
+import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 import { zcodeCoverage } from "../targetcli/guardSettings.js";
 import { renderZcodeManagedHooks } from "./bindingGenerator.js";
 import { LocalWorkspace } from "./localWorkspace.js";
+import { verifyPostRunWrites } from "./postRunWriteGuard.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { classifyProviderRefusal } from "./runtimeFailureClass.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
@@ -87,18 +88,25 @@ import { roleEnv, roleLabel } from "./runtimeAdapter.js";
  *
  * WHAT IS NOT CLAIMED
  *
- *   NAMED_AGENTS (the role definition is folded into the prompt, as Codex
- *   does), MODEL_SELECTION, POST_TOOL_GUARD / EXIT_GUARD / PER_AGENT_EXIT_GUARD
- *   (the Stop hook exists, but its continuation cap and headless behaviour are
- *   unverified — exit checks stay STA's post-hoc job), STRUCTURED_RESULT is
- *   claimed (the `--json` summary), COST_REPORTING is not (no cost field),
- *   INTERACTIVE_PROMPTS is not (`-p` is non-interactive). ZCode stays
- *   `experimental` and uncertified for unattended Target writes until real
- *   governed UAT and TASK-017/018/025 say otherwise.
+ * NAMED_AGENTS (the role definition is folded into the prompt, as Codex
+ * does), MODEL_SELECTION, POST_TOOL_GUARD / EXIT_GUARD / PER_AGENT_EXIT_GUARD
+ * (the Stop hook exists, but its continuation cap and headless behaviour are
+ * unverified — exit checks stay STA's post-hoc job), STRUCTURED_RESULT is
+ * claimed (the `--json` summary), COST_REPORTING is not (no cost field),
+ * INTERACTIVE_PROMPTS is not (`-p` is non-interactive). PRE_TOOL_GUARD is
+ * claimed for the trusted-hook path only and is not a write certification:
+ * engineer (Target-writing) stages run through the explicitly admitted
+ * post-run write guard, exactly as Codex does — the lifecycle refuses before
+ * spawn without a usable baseline snapshot, rejects writes outside the grant
+ * or mutations to the read-only Knowledge workspace, and reports
+ * POST_RUN_WRITE_GUARD enforced only when the check actually ran. ZCode stays
+ * `experimental` and uncertified for unattended Target writes until real
+ * governed UAT and TASK-017/018/025 say otherwise.
  */
 
 const ZCODE_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.PRE_TOOL_GUARD,
+  RuntimeCapability.POST_RUN_WRITE_GUARD,
   RuntimeCapability.PROJECT_LEVEL_BINDING,
   RuntimeCapability.STRUCTURED_RESULT,
   RuntimeCapability.ATTEMPT_RESUME,
@@ -188,6 +196,11 @@ export class ZcodeAdapter implements ExecutorPort {
     // definition is the Claude-rendered one, folded into the prompt.
     definitionPath: (role) => `.claude/agents/${role}.md`,
     guardConfigPath: ".zcode/config.json",
+    // Hybrid on purpose: the hook guards ride the committed binding file
+    // (deep-checked from it), while the post-run write guard is assembled by
+    // the executor lifecycle for every invocation — there is no project file
+    // for that half, so it is verified per-run by `RuntimeAgentResult.guards`.
+    guardEnforcement: "per-run",
   };
   readonly capabilities: ReadonlySet<RuntimeCapability> = new Set(ZCODE_CAPABILITIES);
   /** No per-run model flag exists — nothing is reachable by name, so nothing is claimed. */
@@ -211,15 +224,32 @@ export class ZcodeAdapter implements ExecutorPort {
     this.platform = opts.platform ?? process.platform;
     this.env = opts.env ?? process.env;
     this.lifecycle = new SingleShotLifecycle(this.id, {
-      run: (req) => this.executeAgent(req),
+      run: (req) => this.runWithKnowledgeCheck(req),
       sessionRefFrom: (result) => parseZcodeSummary(rawStdout(result))?.sessionId,
-      verifyRun: (req, changedFiles) => verifyZcodeRunWrites(req, changedFiles),
+      verifyRun: verifyPostRunWrites,
+      postRunWriteGuard: true,
       journalRoot: opts.journalRoot,
     });
   }
 
   prepare(req: RuntimeAgentRequest): Promise<PreparedExecutorAttempt> {
     return this.lifecycle.prepare(req);
+  }
+
+  /** Target runs also snapshot their separate, read-only Knowledge workspace. */
+  private async runWithKnowledgeCheck(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
+    const knowledgeRoot = req.knowledgeRoot ?? req.cwd;
+    if (!req.workRoots?.length || req.workRoots.some((root) => path.resolve(root.path) === path.resolve(knowledgeRoot))) return this.executeAgent(req);
+    try {
+      const before = await captureChangeSetFingerprint(knowledgeRoot);
+      const result = await this.executeAgent(req);
+      const after = await captureChangeSetFingerprint(knowledgeRoot);
+      const changed = [...new Set([...Object.keys(before.files), ...Object.keys(after.files)])].filter((file) => before.files[file] !== after.files[file]);
+      const violations = verifyPostRunWrites({ ...req, cwd: knowledgeRoot, workRoots: undefined, autonomy: "read-only" }, changed);
+      return violations.length > 0 ? { ...result, status: "ERROR", diagnostics: [...result.diagnostics, ...violations] } : result;
+    } catch (error) {
+      return { status: "ERROR", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [`Knowledge workspace snapshot unavailable: ${String(error)}`] };
+    }
   }
   execute(attempt: PreparedExecutorAttempt): Promise<RuntimeAgentResult> {
     return this.lifecycle.execute(attempt);
@@ -596,30 +626,4 @@ function parseJsonObject(stdout: string): Record<string, unknown> | null {
     if (parsed) return parsed;
   }
   return null;
-}
-
-/**
- * The post-run write check `verifyRun` hands the lifecycle: every file the
- * work-root snapshots say a write-capable run changed must be writable under
- * that run's own guard rules (an empty grant writes nothing), and such a run
- * whose writes could not be snapshotted is not verified at all — fail closed.
- * A read-only run must change nothing.
- */
-export function verifyZcodeRunWrites(req: RuntimeAgentRequest, changedFiles: readonly string[] | undefined): string[] {
-  const readOnly = req.autonomy === "read-only";
-  if (changedFiles === undefined) {
-    return readOnly ? [] : ["the run's writes could not be snapshotted (work root is not a usable git checkout), so they cannot be verified against the grant"];
-  }
-  const multiRoot = (req.workRoots?.length ?? 0) > 1;
-  const violations: string[] = [];
-  for (const key of changedFiles) {
-    const file = multiRoot && key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
-    if (readOnly) {
-      violations.push(`${file} changed during a read-only run that may change nothing`);
-      continue;
-    }
-    const decision = canWritePath({ write: [...req.guards.writeAllow], deny: [...req.guards.writeDeny], read: [] }, file);
-    if (!decision.allowed) violations.push(`${file} was written outside the grant: ${decision.reason}`);
-  }
-  return violations;
 }

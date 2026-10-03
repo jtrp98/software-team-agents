@@ -271,6 +271,7 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
   const request: RuntimeAgentRequest = {
     role: ROLE,
     cwd: root,
+    bindingRoot: root,
     knowledgeRoot: KNOWLEDGE_ROOT,
     workRoots: WORK_ROOTS,
     definitionPath: adapter.binding.definitionPath(ROLE),
@@ -357,7 +358,7 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     {
       caseId: "hook-plugin-execution",
       verdict:
-        adapter.binding.guardEnforcement === "per-run" && adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)
+        adapter.id !== "codex" && adapter.binding.guardEnforcement === "per-run" && adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)
           ? preToolEnforced
             ? "ENFORCED"
             : "FAIL"
@@ -368,7 +369,7 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
           : guards.reason
             ? "REPORTED_UNENFORCED"
             : "FAIL",
-      detail: adapter.binding.guardEnforcement === "per-run" && adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)
+      detail: adapter.id !== "codex" && adapter.binding.guardEnforcement === "per-run" && adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)
         ? "native permission profile compiled for this invocation"
         : adapter.binding.guardConfigPath ?? guards.reason,
     },

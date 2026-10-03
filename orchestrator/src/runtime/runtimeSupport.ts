@@ -67,7 +67,7 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
       `interactive sessions and the headless adapter are verified on real Codex 0.154.0/0.155.1/0.160.0 installs, including JSONL, output-schema and cached-token normalisation. ` +
       `Interactive guard coverage (once synced): ${codexCoverageWithHooks().detail}. ` +
       `Owner decision 2026-10-03: headless \`codex exec\` runs without the Windows elevated sandbox or any per-run OS permission profile (\`--dangerously-bypass-approvals-and-sandbox\`), so it reads and writes files normally; git stays refused by the isolated execpolicy, writes outside the grant are refused after the run by the provider-neutral write-scope check, and exit checks run through the provider-neutral ExitCheckRunner. ` +
-      `With no pre-tool write guard, unattended Target writes are not certified. Codex may serve engineer stages through its post-run write guard: missing snapshots or out-of-scope writes reject the attempt, but this check cannot prevent or undo the writes. ` +
+      `Adapter-owned PreToolUse hooks check apply_patch paths against the contract and packet, refuse opaque shell commands and unsupported local tools, and run through an isolated home with --dangerously-bypass-hook-trust. Patch allow/deny was verified on Codex 0.160.0; per-run receipts confirm hook invocation. Hooks are not a complete enforcement boundary, so unattended Target writes are not certified and engineer stages still require the post-run write guard: missing snapshots or out-of-scope writes reject the attempt, but the after-run check cannot prevent or undo writes. ` +
       `V10 does not change this status`,
   },
   opencode: {
@@ -90,10 +90,13 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   zcode: {
     level: "experimental",
     unattendedTargetWrites: false,
+    postRunTargetWrites: true,
     claim:
       `The ZCode install bundles its agent CLI (\`resources/glm/zcode.cjs\`, headless \`-p --json\`), which the governed ZcodeAdapter drives through the V13 executor lifecycle (V13 TASK-015): fresh-session resume, honest cancel accounting, evidence with the native session id and run-changed files, and a post-run write check that turns any write outside the grant into ERROR. ` +
       `A guarded run is refused before spawn unless the synced \`.zcode/config.json\` hooks are all persistently trusted (the headless engine skips untrusted project hooks; a person inspects with \`zcode hooks trust review\` and grants with \`zcode hooks trust grant\` — review alone changes nothing); an explicit model or effort is refused (no per-run flag), and a packet too long for the Windows command line is refused, never truncated. ` +
-      `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`). Unattended Target-write stages stay refused; automatic routing also needs \`routing.allow_below_supported\` for this experimental runtime. ` +
+      `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`). ` +
+      `With no pre-tool write certification, unattended Target writes are not certified. ZCode may serve engineer stages through its post-run write guard, the same admitted weaker path Codex uses: a missing before/after snapshot or a write outside the grant rejects the attempt, but this check cannot prevent or undo the writes. ` +
+      `While the runtime stays experimental, automatic routing still needs \`routing.allow_below_supported\`; an explicit \`--runtime zcode\` is a deliberate operator choice. ` +
       `Per-role Target/Knowledge write bounds apply to a direct-mode session only through a STA-issued scoped attempt grant (\`sta grant issue\` writing \`.workflow/attempt-grant.json\` — V13 TASK-012); ` +
       `an ungranted session keeps the universal floor plus the governed-artifact denial, and read permissions stay instruction-level. ` +
       `Guard coverage (once synced): ${zcodeCoverageWithSyncedPayload().detail}. ` +

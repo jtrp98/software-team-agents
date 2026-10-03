@@ -6,7 +6,7 @@ import { AgentStage } from "../types.js";
 import type { LedgerAttempt } from "../ledger/runLedger.js";
 import { seedRealContracts } from "../testing/contractFixtures.js";
 import { createRuntimeExecutor } from "./runtimeExecutor.js";
-import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
+import { ALL_MOCK_CAPABILITIES, MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS, type RuntimeAdapter } from "./runtimeAdapter.js";
 import { EXECUTOR_LIFECYCLE_CAPABILITIES, RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
@@ -134,31 +134,70 @@ describe("TASK-016 — selection requires certification, capability and availabi
   });
 
   it("refuses an uncertified runtime for a governed write even when named explicitly, but lets it run analysis", () => {
-    const zcode = new MockRuntimeAdapter({ id: "zcode", models: ["sonnet"] });
+    const opencode = new MockRuntimeAdapter({ id: "opencode", models: ["sonnet"] });
     const write = resolveRuntimeRoute({
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([zcode]),
+      registry: new RuntimeRegistry([opencode]),
       config: null,
-      flags: { runtime: "zcode" },
-      availability: { zcode: { available: true } },
+      flags: { runtime: "opencode" },
+      availability: { opencode: { available: true } },
       hasTargetWrite: true,
     });
     expect(write.selected).toBeUndefined();
-    expect(write.error).toContain('runtime "zcode" is not certified for unattended Target writes');
+    expect(write.error).toContain('runtime "opencode" is not certified for unattended Target writes');
 
     const analysis = resolveRuntimeRoute({
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([zcode]),
+      registry: new RuntimeRegistry([opencode]),
+      config: null,
+      flags: { runtime: "opencode" },
+      availability: { opencode: { available: true } },
+      hasTargetWrite: false,
+    });
+    expect(analysis.selected?.runtime.id).toBe("opencode");
+  });
+
+  // ZCode's engineer path is the same admitted post-run write guard Codex
+  // uses: routing asks it for POST_RUN_WRITE_GUARD instead of pre-tool
+  // certification, and a candidate without that capability is cut.
+  it("routes ZCode engineer stages on its post-run write path, and cuts an adapter lacking the capability", () => {
+    const capable = new MockRuntimeAdapter({ id: "zcode", models: ["sonnet"] });
+    for (const stage of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]) {
+      const route = resolveRuntimeRoute({
+        role: stage,
+        stage,
+        projectRoot: project(),
+        registry: new RuntimeRegistry([capable]),
+        config: null,
+        flags: { runtime: "zcode" },
+        availability: { zcode: { available: true } },
+        hasTargetWrite: true,
+      });
+      expect(route.error).toBeUndefined();
+      expect(route.selected?.runtime.id).toBe("zcode");
+    }
+
+    const incapable = new MockRuntimeAdapter({
+      id: "zcode",
+      models: ["sonnet"],
+      capabilities: ALL_MOCK_CAPABILITIES.filter((capability) => capability !== RuntimeCapability.POST_RUN_WRITE_GUARD),
+    });
+    const refused = resolveRuntimeRoute({
+      role: "backend-engineer",
+      stage: AgentStage.BACKEND_ENGINEER,
+      projectRoot: project(),
+      registry: new RuntimeRegistry([incapable]),
       config: null,
       flags: { runtime: "zcode" },
       availability: { zcode: { available: true } },
-      hasTargetWrite: false,
+      hasTargetWrite: true,
     });
-    expect(analysis.selected?.runtime.id).toBe("zcode");
+    expect(refused.selected).toBeUndefined();
+    expect(refused.error).toContain("post-run-write-guard");
   });
 
   it("refuses an unavailable executor, and an order walk skips it as infrastructure", () => {
@@ -211,6 +250,21 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
       registry: new RuntimeRegistry([runtime]), packetBaseRevision: async () => FIXTURE_REVISION,
       runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: ["src/**"], moduleName: "sales-crm" }),
       frozenAttempt: frozen({ requested: { runtime: "codex", model: "sonnet", effort: "high" }, observed: { runtime: "codex", model: "sonnet", effort: "high" }, guard_evidence: { target_write: true, pre_tool_guard: false, writable_roots: [root] } }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe(confirmed ? "PASS" : "FAIL");
+    expect(runtime.requests).toHaveLength(1);
+    if (confirmed) expect(result.postflightGuard?.ok).toBe(true);
+    else expect(result.outcome.failure_reason).toMatch(/did not confirm post-run-write-guard/);
+  });
+
+  it.each([true, false])("dispatches ZCode Target writes only when the result confirms the post-run guard: %s", async (confirmed) => {
+    const root = project();
+    const runtime = new MockRuntimeAdapter({ id: "zcode", models: ["sonnet"], respond: () => okResult({ guards: { enforced: confirmed ? [RuntimeCapability.POST_RUN_WRITE_GUARD] : [], unenforced: [RuntimeCapability.PRE_TOOL_GUARD] } }) });
+    const result = await createRuntimeExecutor({
+      runtime, projectRoot: root, moduleName: () => "sales-crm", guards: () => ({ ...NO_GUARDS, writeAllow: ["src/**"] }),
+      registry: new RuntimeRegistry([runtime]), packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: ["src/**"], moduleName: "sales-crm" }),
+      frozenAttempt: frozen({ requested: { runtime: "zcode", model: "sonnet", effort: "high" }, observed: { runtime: "zcode", model: "sonnet", effort: "high" }, guard_evidence: { target_write: true, pre_tool_guard: false, writable_roots: [root] } }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
     expect(result.outcome.result).toBe(confirmed ? "PASS" : "FAIL");
     expect(runtime.requests).toHaveLength(1);

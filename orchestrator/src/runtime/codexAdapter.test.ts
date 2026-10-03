@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
+import { spawnSync as nativeSpawnSync } from "node:child_process";
 import {
   CodexAdapter,
   codexExecPolicyFor,
@@ -13,6 +14,7 @@ import {
 } from "./codexAdapter.js";
 import { NO_GUARDS, type RuntimeGuards, type RuntimeWorkRoot } from "./runtimeAdapter.js";
 import type { SpawnSync } from "./claudeCodeAdapter.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 // The host sandbox can report uv_os_get_passwd ENOMEM; keep adapter fixtures
 // independent of the account database while production still resolves it.
@@ -362,10 +364,10 @@ describe("CodexAdapter — declared shape stays conservative after real-install 
     expect(adapter.binding.guardConfigPath).toBeNull();
   });
 
-  it("claims the verified structured result, but no pre-tool guard (no sandbox), named-agent, native exit, cost, or interactive-prompt capability", () => {
+  it("claims structured result and adapter-owned pre-tool hooks, but no named-agent, native exit, cost, or interactive-prompt capability", () => {
     const adapter = new CodexAdapter({ projectRoot: tmpProject() });
     expect(adapter.capabilities.has("structured-result" as never)).toBe(true);
-    expect(adapter.capabilities.has("pre-tool-guard" as never)).toBe(false);
+    expect(adapter.capabilities.has("pre-tool-guard" as never)).toBe(true);
     for (const cap of [
       "named-agents",
       "post-tool-guard",
@@ -505,6 +507,7 @@ describe("Codex work-root grants", () => {
 
   it("passes no sandbox write-root flags: without a sandbox every root is reachable, and writes are checked after the run", async () => {
     const projectRoot = tmpProject();
+    seedRealContracts(projectRoot);
     writeRoleBinding(projectRoot, "backend-engineer");
     let capturedArgs: string[] = [];
     const spawnSync: SpawnSync = (_cmd, args) => {
@@ -524,6 +527,25 @@ describe("Codex work-root grants", () => {
 });
 
 describe("Codex per-run permission profile", () => {
+  it("confirms PRE_TOOL_GUARD only when its generated hook actually produces receipts", async () => {
+    const root = tmpProject();
+    writeRoleBinding(root, "backend-engineer");
+    const spawnSync: SpawnSync = (_command, _args, options) => {
+      const runHome = options.env?.CODEX_HOME ?? "";
+      const hook = nativeSpawnSync(process.execPath, [path.join(runHome, "write-guard.cjs")], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch\n*** Add File: outside.ts\n+export {};\n*** End Patch" } }),
+        encoding: "utf8", windowsHide: true,
+      });
+      expect(hook.status).toBe(0);
+      expect(JSON.parse(hook.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+      return cliResult(0, "done");
+    };
+    const adapter = new CodexAdapter({ projectRoot: root, spawnSync });
+    const result = await adapter.executeAgent(baseRequest({ cwd: root, autonomy: "edit", guards: SOME_GUARDS }));
+    expect(result.guards.enforced).toContain("pre-tool-guard");
+    expect(result.guards.unenforced).not.toContain("pre-tool-guard");
+  });
+
   it("converts trailing trees and expands interior module wildcards without widening to the parent", () => {
     const root = tmpProject();
     fs.mkdirSync(path.join(root, "_docs", "module", "alpha"), { recursive: true });
@@ -583,7 +605,7 @@ describe("Codex per-run permission profile", () => {
       runHome = options.env?.CODEX_HOME ?? "";
       policy = fs.readFileSync(path.join(runHome, "rules", "sta.rules"), "utf8");
       config = fs.readFileSync(path.join(runHome, "config.toml"), "utf8");
-      hookScript = fs.readFileSync(path.join(runHome, "git-guard.cjs"), "utf8");
+      hookScript = fs.readFileSync(path.join(runHome, "write-guard.cjs"), "utf8");
       return cliResult(0, "done");
     };
     const adapter = new CodexAdapter({ projectRoot: root, spawnSync });
@@ -593,9 +615,11 @@ describe("Codex per-run permission profile", () => {
     expect(result.status).toBe("OK");
     expect(policy).toContain('pattern = ["git"]');
     expect(config).toContain('trust_level = "untrusted"');
-    expect(hookScript).toContain("gitExecutable");
+    expect(hookScript).toContain("patchDenial");
+    expect(hookScript).toContain("permissionDecision: 'deny'");
     expect(capturedArgs.join("\n")).toContain("hooks.PreToolUse=");
-    expect(capturedArgs).not.toContain("--dangerously-bypass-hook-trust");
+    expect(capturedArgs).toContain("--dangerously-bypass-hook-trust");
+    expect(capturedArgs.join("\n")).toContain('matcher = ".*"');
     expect(runHome).toMatch(/sta-codex-home-/);
     expect(fs.existsSync(runHome)).toBe(false);
   });

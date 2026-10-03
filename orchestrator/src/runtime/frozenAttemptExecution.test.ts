@@ -138,10 +138,16 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(0);
   });
 
-  // An uncertified runtime is refused for Target writes.
-  // The refusal keys on the runtime's certification, never on the lane.
-  it("T-V10 (TASK-004) refuses a zcode Target-write attempt the same way", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "zcode", models: ["glm-4.7"], respond: () => okResult() });
+  // ZCode is on the admitted post-run write path: the refusal that keys on
+  // certification is gone, and what refuses instead is a result that never
+  // confirmed the post-run write guard — the runtime's own word is not enough.
+  it("refuses a zcode Target-write attempt whose result does not confirm the post-run write guard", async () => {
+    const runtime = new MockRuntimeAdapter({
+      id: "zcode",
+      models: ["glm-4.7"],
+      capabilities: [RuntimeCapability.POST_RUN_WRITE_GUARD, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
+      respond: () => okResult({ guards: { enforced: [], unenforced: [RuntimeCapability.POST_RUN_WRITE_GUARD] } }),
+    });
     const result = await executorFor({
       runtime,
       projectRoot: tmpProject(),
@@ -151,12 +157,12 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
       frozenAttempt: frozen({
         requested: { runtime: "zcode", model: "glm-4.7", effort: "high" },
         observed: { runtime: "zcode", model: "glm-4.7", effort: "high" },
-        guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
+        guard_evidence: { target_write: true, pre_tool_guard: false, writable_roots: ["C:/target"] },
       }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
     expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toContain('runtime "zcode" is not certified for unattended Target writes');
-    expect(runtime.requests).toHaveLength(0);
+    expect(result.outcome.failure_reason).toMatch(/did not confirm post-run-write-guard enforcement/);
+    expect(runtime.requests).toHaveLength(1);
   });
 
   it("allows a certified claude-code Target-write attempt when pre-tool guard is confirmed", async () => {
@@ -184,9 +190,10 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
   });
 
   // V13 TASK-027 R14C (a1): a previously frozen antigravity Target-write attempt
-  // no longer dispatches once certification is withdrawn (zcode never had it;
-  // claude-code regained it in TASK-031).
-  it.each(["antigravity", "zcode"])("refuses a frozen %s Target-write attempt after a1 withdrew its certification", async (id) => {
+  // no longer dispatches once certification is withdrawn (zcode now runs on the
+  // admitted post-run write path instead; claude-code regained certification in
+  // TASK-031).
+  it.each(["antigravity"])("refuses a frozen %s Target-write attempt after a1 withdrew its certification", async (id) => {
     const runtime = new MockRuntimeAdapter({
       id,
       models: ["glm-4.7"],

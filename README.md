@@ -14,7 +14,7 @@ Human            ← intent, constraints, การตัดสินใจท�
   ↓
 software-team-agents   ← repo นี้: process/workflow layer + orchestrator (Framework)
   ↓
-AI Runtime       ← Claude Code (default) / Codex / OpenCode / Antigravity / ZCode Desktop (interactive)
+AI Runtime       ← Claude Code (default) / Codex / OpenCode / Antigravity / ZCode Desktop
   ↓
 Knowledge / Target  ← ความรู้ร่วมของทีม (git repo แยก) / repo ของ product จริงที่ AI เขียนโค้ด
 ```

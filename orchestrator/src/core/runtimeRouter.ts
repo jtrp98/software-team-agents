@@ -25,10 +25,12 @@ export interface SecurityEligibility {
 /**
  * What a role needs from a runtime's security boundary, from the declared
  * support record — the same fact the dispatch gate enforces later: the
- * engineer needs an admitted Target-write path. Codex uses post-run scope
- * verification; other runtimes still require pre-tool certification. Analysis,
- * review and QA roles need no certification (owner decision 2026-10-03
- * retired the OS approval-isolation requirement along with the Codex sandbox).
+ * engineer needs an admitted Target-write path. Codex and ZCode use post-run
+ * scope verification; other runtimes still require pre-tool certification.
+ * Analysis, review and QA roles need no certification (owner decision
+ * 2026-10-03 retired the OS approval-isolation requirement along with the
+ * Codex sandbox). ZCode stays experimental: the bounded-run freeze still
+ * demands `routing.allow_below_supported` before it will auto-route there.
  */
 export function securityEligibility(runtimeId: string, role: RouteRole): SecurityEligibility {
   if (role === "engineer" && !isUnattendedTargetWriteAllowed(runtimeId)) {

@@ -407,7 +407,9 @@ export function createSta(options: StaOptions): Sta {
 
     let result: RuntimeAgentResult;
     try {
-      const postRunWrites = run.permissions.write && usesPostRunTargetWriteGuard(adapter.id) && !adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD);
+      const postRunWrites = run.permissions.write && usesPostRunTargetWriteGuard(adapter.id) &&
+        adapter.capabilities.has(RuntimeCapability.POST_RUN_WRITE_GUARD) &&
+        (adapter.binding.guardEnforcement === "per-run" || !adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD));
       const baseline = postRunWrites && request.guards.exitChecks.length > 0
         ? await captureExitCheckBaseline(run.workRoots?.length ? run.workRoots.map((root) => root.path) : [run.workspace])
         : undefined;

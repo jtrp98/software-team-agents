@@ -11,6 +11,7 @@ import { canonicalPath, permissionPathsFor, tomlString } from "./permissionPaths
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
 import { verifyPostRunWrites } from "./postRunWriteGuard.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
+import { codexPreToolGuardScript } from "./codexPreToolGuard.js";
 import type {
   ExecutorAttemptRef,
   ExecutorCancelOutcome,
@@ -109,8 +110,9 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  * designed against, written to prove the interface is not Claude-Code-shaped
  * in disguise.
  *
- * Headless runs have no OS sandbox or pre-tool write enforcement. The executor
- * lifecycle checks changed files against the grant and rejects unknown or
+ * Headless runs have no OS sandbox. Adapter-owned PreToolUse hooks check patch
+ * destinations before execution and refuse opaque shell/local tool calls.
+ * The executor lifecycle also checks changed files against the grant and rejects unknown or
  * out-of-scope writes after the run. This detects violations inside the
  * snapshotted repositories; it cannot prevent or undo writes, inspect arbitrary
  * external paths, or detect files ignored by the Git-based snapshots.
@@ -118,8 +120,8 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  * WHAT IS REASONABLY CONFIDENT
  * - `codex exec "<prompt>"` runs one non-interactive turn and exits — the shape
  *   `executeAgent` needs (a single request in, a single result out).
- * - Runs use `--dangerously-bypass-approvals-and-sandbox` and an isolated
- *   execpolicy that refuses git. Scope and exit checks are evaluated after the run.
+ * - Runs use `--dangerously-bypass-approvals-and-sandbox`, an isolated
+ *   execpolicy, and adapter-owned hooks enabled with `--dangerously-bypass-hook-trust`.
  * - `AGENTS.md` (and a project `.codex/config.toml`) are Codex's project-level,
  *   committed configuration — the `PROJECT_LEVEL_BINDING` capability is claimed
  *   on that basis alone, not on any guard mechanism.
@@ -136,7 +138,8 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  * - `POST_TOOL_GUARD` / `EXIT_GUARD` / `PER_AGENT_EXIT_GUARD` — V12 UAT proved
  *   project hooks need a trust bypass, a crashing hook fails open, and Stop did
  *   not fire under `codex exec`. The adapter does not trust those hooks. It
- *   does not claim `PRE_TOOL_GUARD`; provider-neutral exit checks
+ *   claims `PRE_TOOL_GUARD` for its own inline hook, confirmed per-run by receipts;
+ *   hook errors/unsupported tool paths can still fail open. Provider-neutral exit checks
  *   remain the runner's responsibility.
  * - `STRUCTURED_RESULT` — real-install UAT pinned the JSONL + output-schema
  *   round trip, so the normalised structured result is now a declared
@@ -162,6 +165,7 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  */
 
 const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
+  RuntimeCapability.PRE_TOOL_GUARD,
   RuntimeCapability.POST_RUN_WRITE_GUARD,
   RuntimeCapability.MODEL_SELECTION,
   RuntimeCapability.PROJECT_LEVEL_BINDING,
@@ -247,57 +251,38 @@ interface PreparedCodexHome {
   cleanup(): void;
 }
 
-/** Adapter-owned companion to the execpolicy parser for opaque shell strings. */
-const CODEX_GIT_GUARD_SCRIPT = String.raw`'use strict';
-let raw = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => { raw += chunk; });
-process.stdin.on('end', () => {
-  let input;
-  try { input = JSON.parse(raw); }
-  catch { console.error('Blocked: malformed PreToolUse input.'); process.exit(2); }
-  const command = String(input?.tool_input?.command || '');
-  const gitExecutable = /(?:^|[\s;&|()])(?:["']?(?:[A-Za-z]:[\\/][^"';|]*[\\/]|\/[^"';|]*\/)?)git(?:\.exe|\.cmd|\.bat|\.com|\.ps1)?(?=$|[\s"';&|()])/i;
-  const dotGit = /(?:^|[\\/])\.git(?:[\\/]|$)/i;
-  if (gitExecutable.test(command) || dotGit.test(command)) {
-    console.error('Blocked: Git commands and direct .git access belong to the human operator.');
-    process.exit(2);
-  }
-  process.exit(0);
-});
-`;
-
-function codexInlineGitHookArgs(runHome: string): string[] {
-  const script = path.join(runHome, "git-guard.cjs");
-  const command = `node ${JSON.stringify(script)}`;
-  const handler = `{ type = "command", command = ${tomlString(command)}, command_windows = ${tomlString(command)}, timeout = 10 }`;
-  const registration = `{ matcher = "Bash|PowerShell", hooks = [${handler}] }`;
-  return ["--config", `hooks.PreToolUse=[${registration}]`];
+function codexInlineWriteHookArgs(runHome: string): string[] {
+  const script = path.join(runHome, "write-guard.cjs");
+  const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const command = `${shellQuote(process.execPath)} ${shellQuote(script)}`;
+  const commandWindows = `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}'`;
+  const handler = `{ type = "command", command = ${tomlString(command)}, command_windows = ${tomlString(commandWindows)}, timeout = 10 }`;
+  const registration = `{ matcher = ".*", hooks = [${handler}] }`;
+  return ["--enable", "hooks", "--dangerously-bypass-hook-trust", "--config", `hooks.PreToolUse=[${registration}]`];
 }
 
 function prepareCodexRunHome(
-  commands: readonly string[],
-  projectRoot: string,
+  req: RuntimeAgentRequest,
   sourceHome: string,
   inheritAuth: boolean,
 ): PreparedCodexHome {
   const runHome = fs.mkdtempSync(path.join(os.tmpdir(), "sta-codex-home-"));
   try {
-    const policy = codexExecPolicyFor(commands);
+    const policy = codexExecPolicyFor(req.guards.forbidCommands);
     if (policy.length > 0) {
       const rulesDir = path.join(runHome, "rules");
       fs.mkdirSync(rulesDir, { recursive: true });
       fs.writeFileSync(path.join(rulesDir, "sta.rules"), `${policy}\n`, "utf8");
     }
 
-    // Project-local config, hooks, and execpolicy are ignored for this run.
-    // Only the adapter's permission profile and execpolicy are active.
+    // Ignore project config and hooks; the trust bypass applies only to the
+    // adapter-owned inline hook in this isolated home, never arbitrary project scripts.
     fs.writeFileSync(
       path.join(runHome, "config.toml"),
-      `[projects.${tomlString(path.resolve(projectRoot))}]\ntrust_level = "untrusted"\n`,
+      `[projects.${tomlString(path.resolve(req.cwd))}]\ntrust_level = "untrusted"\n`,
       "utf8",
     );
-    fs.writeFileSync(path.join(runHome, "git-guard.cjs"), CODEX_GIT_GUARD_SCRIPT, "utf8");
+    fs.writeFileSync(path.join(runHome, "write-guard.cjs"), codexPreToolGuardScript(req, runHome), "utf8");
 
     if (inheritAuth) {
       const authSource = path.join(sourceHome, "auth.json");
@@ -337,9 +322,8 @@ function prepareCodexRunHome(
 /**
  * How `codex exec` is invoked. Owner decision 2026-10-03: Codex runs the way a
  * person runs it — no Windows elevated sandbox, no per-run OS permission
- * profile — so it reads and writes files normally. Without that OS boundary
- * nothing enforces a write scope *before* a tool runs, so the guard report says
- * so honestly (PRE_TOOL_GUARD unenforced): engineer stages use the
+ * profile. The adapter adds a scoped PreToolUse hook separately; this function
+ * alone never claims it ran. Engineer stages also require the
  * post-run write guard, and the provider-neutral post-run write-scope check still
  * turns any write outside the grant into ERROR, and the isolated execpolicy
  * still refuses git.
@@ -410,8 +394,8 @@ export class CodexAdapter implements ExecutorPort {
     // selector is documented (see header).
     dir: ".codex",
     definitionPath: (role) => `.codex/agents/${role}.toml`,
-    // Project hooks remain untrusted. The lifecycle assembles post-run write
-    // checks per request; PRE_TOOL_GUARD remains unclaimed.
+    // Project hooks remain untrusted. Adapter-owned inline hooks and post-run
+    // checks are assembled per request; receipts confirm hook invocation.
     guardConfigPath: null,
     guardEnforcement: "per-run",
   };
@@ -535,7 +519,7 @@ export class CodexAdapter implements ExecutorPort {
         ],
       };
     }
-    const guards = invocation.guards;
+    let guards = invocation.guards;
 
     // NAMED_AGENTS is not claimed (no documented exec-level selector): the
     // role's official `.toml` binding is read and its developer_instructions
@@ -585,6 +569,7 @@ export class CodexAdapter implements ExecutorPort {
       }
       prompt = `${instructions}\n\n---\n\n${req.prompt}`;
     }
+    prompt += "\n\nSTA tool policy: use apply_patch for edits. Shell permits only simple rg, cat, Get-Content, Get-ChildItem, pwd and Get-Location reads, without expressions or redirection. STA runs build/test exit checks after your work; do not bypass a denied tool through another tool.";
 
     // Tier bindings are explicit runtime choices.  Unlike role frontmatter,
     // they must become Codex CLI arguments or the run merely records the
@@ -619,7 +604,7 @@ export class CodexAdapter implements ExecutorPort {
     let runHome: PreparedCodexHome | null = null;
     try {
       const sourceHome = req.env?.CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
-      runHome = prepareCodexRunHome(req.guards.forbidCommands, req.cwd, sourceHome, this.inheritCodexAuth);
+      runHome = prepareCodexRunHome(req, sourceHome, this.inheritCodexAuth);
     } catch (error) {
       return {
         status: "ERROR",
@@ -647,7 +632,7 @@ export class CodexAdapter implements ExecutorPort {
     const args = [
       "exec",
       ...invocation.args,
-      ...(runHome ? codexInlineGitHookArgs(runHome.path) : []),
+      ...(runHome ? codexInlineWriteHookArgs(runHome.path) : []),
       ...(req.modelExplicit && req.model ? ["--model", req.model] : []),
       ...(req.effort ? ["--config", `model_reasoning_effort=\"${req.effort}\"`] : []),
       "--json",
@@ -678,6 +663,18 @@ export class CodexAdapter implements ExecutorPort {
     } catch (e) {
       return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics: [`failed to spawn \`codex\`: ${String(e)}`] };
     } finally {
+      // Confirm only hooks that actually ran, never just a registration or a
+      // successful provider exit. Receipts contain no tool input or file data.
+      if (runHome && requiresPreToolGuard(req.guards, req.autonomy)) {
+        try {
+          const lines = fs.readFileSync(path.join(runHome.path, "guard-verdicts.jsonl"), "utf8").trim().split("\n");
+          const verified = lines.length > 0 && lines.every((line) => {
+            const verdict = JSON.parse(line);
+            return typeof verdict.tool === "string" && ["allow", "deny"].includes(verdict.decision);
+          });
+          if (verified) guards = guardReport(true, req.guards.exitChecks.length > 0, true);
+        } catch { /* No confirmed hook invocation: keep PRE_TOOL_GUARD unenforced. */ }
+      }
       runHome?.cleanup();
     }
 
@@ -782,7 +779,7 @@ export class CodexAdapter implements ExecutorPort {
   }
 }
 
-/** Per-run truth: native permissions cover pre-tool writes/commands; exit checks remain provider-neutral. */
+/** Hook receipts confirm pre-tool execution; post-run and exit checks remain mandatory. */
 function guardReport(preToolEnforced: boolean, wantsExitGuard: boolean, wantsPreToolGuard = preToolEnforced): RuntimeGuardReport {
   if (!wantsPreToolGuard && !wantsExitGuard) return { enforced: [], unenforced: [] };
   const enforced = preToolEnforced ? [RuntimeCapability.PRE_TOOL_GUARD] : [];
@@ -793,13 +790,13 @@ function guardReport(preToolEnforced: boolean, wantsExitGuard: boolean, wantsPre
   return {
     enforced,
     unenforced,
-    reason: wantsExitGuard
-      ? "Codex runs without an OS sandbox (owner decision 2026-10-03): git is refused by the isolated execpolicy, writes are checked after the run, exit checks are enforced by the provider-neutral runner"
-      : undefined,
+    reason: preToolEnforced
+      ? "Adapter-owned PreToolUse hook ran: patch paths are checked before execution and opaque shell commands are refused. Hooks have runtime failure/coverage gaps; post-run scope and provider-neutral exit checks remain mandatory."
+      : "No PreToolUse hook invocation was confirmed for this run. Post-run scope and provider-neutral exit checks remain mandatory; no OS sandbox is used.",
   };
 }
 
-/** A read-only OS sandbox makes write/command denial non-operative; every writable mode needs a real pre-tool guard. */
+/** Whether the request needs an explicit per-run pre-tool enforcement report. */
 function requiresPreToolGuard(requested: RuntimeGuards, autonomy: RuntimeAutonomy): boolean {
   return autonomy !== "read-only" &&
     (requested.writeAllow.length > 0 || requested.writeDeny.length > 0 || requested.forbidCommands.length > 0);
