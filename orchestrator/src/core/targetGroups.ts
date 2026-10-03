@@ -23,8 +23,8 @@ export interface TargetGroup {
 }
 
 function inScope(task: PlanTask, scope: WorkRun["scope"]): boolean {
-  if (scope.kind === "tasks") return scope.taskIds.includes(task.id);
   if (task.status === "verified") return false;
+  if (scope.kind === "tasks") return scope.taskIds.includes(task.id);
   if (scope.kind === "phase") return task.phase === scope.phase;
   return true;
 }

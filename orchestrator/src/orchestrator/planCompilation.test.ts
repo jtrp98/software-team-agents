@@ -259,6 +259,25 @@ describe("T-V8-017 — every refusal leaves no registration state", () => {
     expect(store.loadTask("FE-010")).not.toBeNull();
   });
 
+  it("excludes verified tasks when selecting by task ids and compiles only pending tasks", () => {
+    const planWithVerifiedPredecessor = planMarkdown.replace("Status: pending", "Status: verified");
+    const result = register({
+      scope: { kind: "tasks", taskIds: ["BE-004", "FE-010"] },
+      plan: planWithVerifiedPredecessor,
+    });
+    expect(result.run.task_order).toEqual(["FE-010"]);
+    expect(store.loadTask("BE-004")?.machine.current).toBe("DEPLOYED");
+    expect(store.loadTask("FE-010")).not.toBeNull();
+  });
+
+  it("refuses a tasks scope where all tasks are already verified", () => {
+    const allVerified = planMarkdown.replaceAll("Status: pending", "Status: verified");
+    expect(() => register({
+      scope: { kind: "tasks", taskIds: ["BE-004"] },
+      plan: allVerified,
+    })).toThrow(/selected scope contains no task/);
+  });
+
   it("refuses to re-register a task whose immutable metadata already exists", () => {
     register();
     const second = createRunId();

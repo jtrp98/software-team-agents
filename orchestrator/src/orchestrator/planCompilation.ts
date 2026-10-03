@@ -368,7 +368,7 @@ function selectScope(tasks: readonly PlanTask[], scope: PlanRunScope): PlanTask[
     throw new PlanRegistrationError("unknown-task", `selected task(s) are not in this plan: ${missing.join(", ")}`);
   }
   // Selection order never decides execution order — the graph does.
-  return tasks.filter((task) => scope.taskIds.includes(task.id));
+  return tasks.filter((task) => scope.taskIds.includes(task.id) && task.status !== "verified");
 }
 
 /**
