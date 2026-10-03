@@ -134,7 +134,7 @@ describe("parseBoundedRunArgs", () => {
   });
 });
 
-import { BoundedRunCodexFixture, boundedRunProject as project, playPlanTaskStage, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
+import { BoundedRunEngineFixture, boundedRunProject as project, playPlanTaskStage, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 
@@ -144,16 +144,16 @@ declareInstallationConfigOverrideChannelForTest();
 function planTaskAdapter(
   targetRoot: string,
   options: { module?: string; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},
-): BoundedRunCodexFixture {
+): BoundedRunEngineFixture {
   let engineerCalls = 0;
-  return new BoundedRunCodexFixture(targetRoot, (req, files) => {
+  return new BoundedRunEngineFixture(targetRoot, (req, files) => {
     if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
     return playPlanTaskStage(req, files, targetRoot, { ...options, engineerCall: engineerCalls });
   });
 }
 
 /** Plays every stage of the plan-task workflow (engineer, reviewer, QA) to a verified pass. */
-export function completingAdapter(targetRoot: string): BoundedRunCodexFixture {
+export function completingAdapter(targetRoot: string): BoundedRunEngineFixture {
   return planTaskAdapter(targetRoot);
 }
 
@@ -298,7 +298,7 @@ describe("sta bounded-run (CLI)", () => {
     } finally {
       console.log = spy;
     }
-    expect(code).toBe(0);
+    expect(code, logs.join("\n")).toBe(0);
     expect(logs.some((l) => l.includes("froze run"))).toBe(true);
     expect(logs.some((l) => l.includes("COMPLETED"))).toBe(true);
 
@@ -814,8 +814,8 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
       // single-repo freeze had no policy reachable and froze null); the
       // explicit --effort rides through beside it.
       // The legacy frontmatter still supplies the requested model label;
-      // Codex uses its runtime default because this was not an explicit model selection.
-      expect(attempts[0]!.requested).toEqual({ runtime: "codex", model: "sonnet", effort: "high" });
+      // The engineer runtime uses its default because this was not an explicit model selection.
+      expect(attempts[0]!.requested).toEqual({ runtime: "claude-code", model: "sonnet", effort: "high" });
       expect(attempts[0]!.route_basis).toBe("level-1");
     } finally {
       ledger.close();

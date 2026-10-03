@@ -10,6 +10,7 @@ import { StaConfigInvalidError, StaConfigMissingError, loadStaConfig, type StaCo
 import { EXECUTOR_LIFECYCLE_CAPABILITIES, RuntimeCapability } from "./runtimeCapabilities.js";
 import { isExecutorPort } from "./executorPort.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
+import { applyCoreRuntimeHealth, coreOverlayOrderFor } from "./coreRouteOverlay.js";
 import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
 import { isUnattendedTargetWriteCertified, RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
 import {
@@ -274,7 +275,10 @@ function unresolved(
  * probes or executes; callers supply cached availability and must refuse
  * `error`.
  */
-export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRoute {
+export function resolveRuntimeRoute(input: ResolveRuntimeRouteOptions): RuntimeRoute {
+  // Shared STA Core runtime health folds in as availability: a cooling runtime
+  // is skipped before dispatch exactly like a probe-unavailable one.
+  const opts: ResolveRuntimeRouteOptions = { ...input, availability: applyCoreRuntimeHealth(input.availability) };
   const diagnostics: string[] = [];
   const defaultRuntimeId = opts.defaultRuntimeId ?? DEFAULT_RUNTIME_ID;
   const config = opts.config !== undefined ? opts.config : loadConfigSafely(opts.projectRoot, diagnostics);
@@ -300,7 +304,11 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     specs = [byRole];
   } else {
     precedenceLevel = 4;
-    const ordered = orderedRuntimeIds(config, diagnostics);
+    // STA Core's per-role order (an explicit `--core-run` overlay) replaces the
+    // project-wide `routing.order` for engineer/reviewer/qa stages only.
+    const coreOrder = coreOverlayOrderFor(opts.stage);
+    if (coreOrder) diagnostics.push(`STA Core route overlay ordered this ${opts.role} stage: ${coreOrder.join(" → ")}`);
+    const ordered = coreOrder ?? orderedRuntimeIds(config, diagnostics);
     const runtimeIds = ordered ?? [config?.execution?.runner ?? defaultRuntimeId];
     specs = runtimeIds.map((runtimeId, index) => ({
       runtimeId,

@@ -51,6 +51,7 @@ import {
 } from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { isUnattendedTargetWriteCertified } from "./runtimeSupport.js";
+import { reportCoreRuntimeOutcome } from "./coreRouteOverlay.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
 import type { PersistedTask } from "../store/taskStore.js";
@@ -1232,6 +1233,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
 
       metrics = metricsFrom(result, { ...declared, attempt_id: attemptId, session_ref: attemptSessionRef });
+      // STA Core: every dispatch outcome feeds shared runtime health (a no-op
+      // outside a Core-launched run), so a quota found here is skipped by the
+      // next stage instead of being rediscovered.
+      reportCoreRuntimeOutcome(activeRuntime.id, role, result);
 
       if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(

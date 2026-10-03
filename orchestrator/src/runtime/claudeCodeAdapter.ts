@@ -10,6 +10,7 @@ import { startEgressAllowlistProxy, type StartEgressAllowlistProxy } from "./egr
 import { canonicalPath, permissionPathsFor, tomlString } from "./permissionPaths.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
+import { classifyProviderRefusal, type RuntimeFailureClass } from "./runtimeFailureClass.js";
 import type {
   ExecutorAttemptRef,
   ExecutorCancelOutcome,
@@ -330,6 +331,34 @@ export function claudeIsolationInvocationFor(
  * into UNAVAILABLE.
  */
 const PROVIDER_REFUSAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
+
+/**
+ * Claude Code's own subscription-limit result, as the CLI prints it when a
+ * claude.ai plan's usage window is spent: `Claude AI usage limit reached|<epoch>`.
+ * Anchored to the whole `result` of an `is_error` envelope, so a task whose
+ * answer merely quotes the phrase can never match.
+ */
+const CLAUDE_USAGE_LIMIT_RESULT = /^Claude AI usage limit reached(?:\|(\d{9,13}))?\s*$/i;
+
+/** The CLI's own result when no login is available to it (observed 2026-10-03: `Not logged in · Please run /login`). */
+const CLAUDE_NOT_LOGGED_IN_RESULT = /^Not logged in/i;
+
+/**
+ * STA Core — normalize a Claude Code refusal into the shared taxonomy. Pure,
+ * exported for the adapter's tests; only ever called on a result already
+ * classified UNAVAILABLE from the envelope's structured fields.
+ */
+export function classifyClaudeRefusal(cli: { api_error_status?: number; result?: string }): { failureClass: RuntimeFailureClass; retryAt?: number } {
+  const message = cli.result ?? "";
+  if (CLAUDE_NOT_LOGGED_IN_RESULT.test(message.trim())) return { failureClass: "TEMPORARY_AUTH_FAILURE" };
+  const usage = CLAUDE_USAGE_LIMIT_RESULT.exec(message.trim());
+  if (usage) {
+    const epoch = usage[1] ? Number(usage[1]) : undefined;
+    const retryAt = epoch === undefined ? undefined : epoch < 1e12 ? epoch * 1000 : epoch;
+    return { failureClass: "QUOTA_EXHAUSTED", ...(retryAt !== undefined ? { retryAt } : {}) };
+  }
+  return { failureClass: classifyProviderRefusal(cli.api_error_status, message) };
+}
 
 interface ClaudeCliJsonResult {
   is_error?: boolean;
@@ -652,13 +681,14 @@ export class ClaudeCodeAdapter implements ExecutorPort {
     // Only when a schema was requested — default runs stay free-form.
     if (this.outputSchema) args.push("--json-schema", JSON.stringify(this.outputSchema));
 
-    // A direct run (`sta execute`) asks for no OS wrapper: claude runs the way
-    // a person runs it — their own login and network, in the run's cwd — and the
-    // workspace's own .claude/settings.json hooks still guard every tool call.
-    if (req.osIsolation === false) return this.executeDirect(req, args, modelDiagnostics);
+    // Owner decision 2026-10-03: claude runs the way a person runs it — their
+    // own login and network, in the run's cwd — for direct and orchestrated runs
+    // alike; the workspace's own .claude/settings.json hooks guard every tool
+    // call. The TASK-031 Codex-sandbox wrapper below runs only when a caller
+    // explicitly asks for it (`osIsolation: true`); STA itself no longer does.
+    if (req.osIsolation !== true) return this.executeDirect(req, args, modelDiagnostics);
 
-    // TASK-031: every other claude process runs inside the per-run OS isolation
-    // wrapper.
+    // TASK-031 (opt-in only): the per-run OS isolation wrapper.
     let runDirs: ClaudeIsolationRunDirs;
     let isolation: ClaudeIsolationInvocation;
     try {
@@ -845,11 +875,26 @@ export class ClaudeCodeAdapter implements ExecutorPort {
     if (cli.is_error === true && cli.terminal_reason === "api_error" && typeof cli.api_error_status === "number" && PROVIDER_REFUSAL_STATUSES.has(cli.api_error_status)) {
       return {
         status: "UNAVAILABLE",
+        ...classifyClaudeRefusal(cli),
         exitCode: proc.status ?? null,
         text: "",
         usage,
         guards,
         diagnostics: [...diagnostics, `\`claude\` provider refused to serve (HTTP ${cli.api_error_status}): ${cli.result ?? "no message"}`],
+        raw: cli,
+      };
+    }
+    // The subscription usage window is a refusal to serve this account too,
+    // reported in the envelope's own `result` rather than as an HTTP status.
+    if (cli.is_error === true && typeof cli.result === "string" && (CLAUDE_USAGE_LIMIT_RESULT.test(cli.result.trim()) || CLAUDE_NOT_LOGGED_IN_RESULT.test(cli.result.trim()))) {
+      return {
+        status: "UNAVAILABLE",
+        ...classifyClaudeRefusal(cli),
+        exitCode: proc.status ?? null,
+        text: "",
+        usage,
+        guards,
+        diagnostics: [...diagnostics, `\`claude\` cannot serve this account: ${cli.result.trim()}`],
         raw: cli,
       };
     }

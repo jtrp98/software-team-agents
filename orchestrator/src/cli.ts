@@ -33,6 +33,9 @@ import { runChangedVerb } from "./cli/verbs/changed.js";
 import { runReportVerb } from "./cli/verbs/report.js";
 import { runBoundedRunVerb, BOUNDED_RUN_USAGE } from "./cli/verbs/boundedRun.js";
 import { runExecuteVerb } from "./cli/verbs/execute.js";
+import { runCoreVerb, runStartVerb, runStopServiceVerb } from "./cli/verbs/core.js";
+import { runWorkVerb, WORK_USAGE } from "./cli/verbs/work.js";
+import { runSetupMachineVerb, SETUP_MACHINE_USAGE } from "./cli/verbs/setupMachine.js";
 import { runGrantVerb, GRANT_USAGE } from "./cli/verbs/grant.js";
 import { runProjectsVerb } from "./cli/verbs/projects.js";
 import { runInitVerb } from "./cli/verbs/init.js";
@@ -204,6 +207,11 @@ export function retiredWaveFlagMessage(flag: string): string {
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
+  "STA Core (local service + Web UI — see docs/core.md):\n" +
+  "  sta setup-machine --root <dir> [--language th|en] ...   first-time machine setup (idempotent); full flags: " + SETUP_MACHINE_USAGE + "\n" +
+  "  sta start [--port <n>] | sta stop | sta core status     run STA Core in the background; the Web UI is on http://127.0.0.1:<port>/\n" +
+  `  ${WORK_USAGE.split("\n").join("\n  ")}\n` +
+  "  sta knowledge add <name> <path> [--default] | list | validate [<name>] | default <name> | remove <name> | modules <name>   Knowledge workspaces (registration only; remove never deletes files)\n" +
   "  sta execute --runtime <claude-code|codex|antigravity|zcode|opencode> --task <text> [--workspace <dir>] [--role <persona>] [--writable-target <id|path>]... [--context <text>] [--write] [--write-path <glob>]... [--no-delegate] [--autonomy <read-only|propose|edit|full>] [--action <side-effect>]... [--max-depth <n>] [--max-children <n>] [--max-runs <n>] [--timeout-ms <n>] [--model <m>] [--effort <e>] [--parent-run <run-id>]   run one task on any runtime and print its JSON result (0 completed, 1 failed, 3 needs_approval, 4 partial); inside a run, STA_RUN_ID makes it a child run; no workflow, module or role required\n" +
   "  sta execute resume <run-id> [--context <text>] | approve <run-id> --request <id> (--yes|--no) --by <name> [--note <text>] | show <run-id>   continue a run, relay a person's decision on a declared side effect, or print its run tree\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
@@ -607,6 +615,11 @@ const VERBS = [
   "report",
   "bounded-run",
   "execute",
+  "work",
+  "start",
+  "stop",
+  "core",
+  "setup-machine",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -687,6 +700,17 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, d
       return runBoundedRunVerb(rest, defaultProjectRoot, dependencies);
     case "execute":
       return runExecuteVerb(rest, defaultProjectRoot, dependencies);
+    case "work":
+      return runWorkVerb(rest);
+    case "start":
+      return runStartVerb(rest);
+    case "stop":
+      // `sta stop <module|run-id>` stops a work run; bare `sta stop` stops the service.
+      return positionalArg(rest) ? runWorkVerb(["stop", ...rest]) : runStopServiceVerb();
+    case "core":
+      return runCoreVerb(rest);
+    case "setup-machine":
+      return runSetupMachineVerb(rest);
   }
 }
 

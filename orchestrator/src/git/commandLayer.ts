@@ -24,7 +24,7 @@ export type GitCommandRequest =
   | { readonly command: "symbolic-ref" }
   | { readonly command: "status --porcelain"; readonly nullTerminated?: boolean }
   | { readonly command: "ls-files"; readonly mode: "untracked" }
-  | { readonly command: "diff"; readonly mode: "name-only" | "cached-name-only" | "stat"; readonly revision?: string; readonly paths?: readonly string[] }
+  | { readonly command: "diff"; readonly mode: "name-only" | "cached-name-only" | "stat" | "name-status" | "patch"; readonly revision?: string; readonly paths?: readonly string[] }
   | { readonly command: "log"; readonly maxCount?: number; readonly grep?: string; readonly revision?: string; readonly includeBody?: boolean }
   | { readonly command: "cat-file"; readonly object: string }
   | { readonly command: "merge-base"; readonly left: string; readonly right: string }
@@ -191,7 +191,11 @@ function buildGitArgs(request: GitCommandRequest): string[] {
         ? ["diff", "--cached", "--name-only"]
         : request.mode === "name-only"
           ? ["diff", "--name-only"]
-          : ["diff", "--stat"];
+          : request.mode === "name-status"
+            ? ["diff", "--name-status"]
+            : request.mode === "patch"
+              ? ["diff", "--no-color", "--no-ext-diff"]
+              : ["diff", "--stat"];
       if (request.revision) {
         rejectOptionLike(request.revision, "revision");
         args.push(request.revision);
@@ -365,6 +369,16 @@ export class GitCommandLayer {
 
   catFileExists(object: string): Promise<GitProcessResult> {
     return this.execute({ command: "cat-file", object });
+  }
+
+  /** Read-only: files changed in a revision range (STA Core review page). */
+  diffNameStatus(revision: string): Promise<GitProcessResult> {
+    return this.execute({ command: "diff", mode: "name-status", revision });
+  }
+
+  /** Read-only: the patch of a revision range, never through an external diff driver. */
+  diffPatch(revision: string): Promise<GitProcessResult> {
+    return this.execute({ command: "diff", mode: "patch", revision });
   }
 
   mergeBase(left: string, right: string): Promise<GitProcessResult> {

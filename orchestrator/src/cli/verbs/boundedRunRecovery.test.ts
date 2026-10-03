@@ -9,7 +9,7 @@ import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
-import { BoundedRunCodexFixture, boundedRunProject, playPlanTaskStage, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
+import { BoundedRunEngineFixture, boundedRunProject, playPlanTaskStage, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 
 declareInstallationConfigOverrideChannelForTest();
@@ -95,9 +95,9 @@ function inspect<T>(root: string, read: (ledger: SqliteRunLedger) => T): T {
 function planTaskAdapter(
   targetRoot: string,
   options: { module?: string; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},
-): BoundedRunCodexFixture {
+): BoundedRunEngineFixture {
   let engineerCalls = 0;
-  return new BoundedRunCodexFixture(targetRoot, (req, files) => {
+  return new BoundedRunEngineFixture(targetRoot, (req, files) => {
     if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
     return playPlanTaskStage(req, files, targetRoot, { ...options, engineerCall: engineerCalls });
   });
@@ -108,7 +108,7 @@ function planTaskAdapter(
  * defect the engine leaves incomplete and a later invocation reruns), then
  * plays every plan-task stage to completion.
  */
-function flakyAdapter(targetRoot: string, failFirstDev: boolean): BoundedRunCodexFixture {
+function flakyAdapter(targetRoot: string, failFirstDev: boolean): BoundedRunEngineFixture {
   return planTaskAdapter(targetRoot, {
     engineer: (call) => (failFirstDev && call === 1 ? { status: "ERROR", exitCode: 1, text: "runtime error: the agent crashed mid-attempt" } : undefined),
   });

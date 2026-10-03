@@ -406,6 +406,35 @@ export function configureDefaultRoot(rootName: string, configPath = defaultInsta
 }
 
 /**
+ * STA Core `knowledge remove` — drops exactly one named registration from a v2
+ * installation. Registration only: the Knowledge repository, its Targets and
+ * every file on disk are untouched. The default cannot be removed while other
+ * roots exist (switch the default first), and the last root cannot be removed
+ * (a v2 file always names a default). A v1 file has no named entries to remove.
+ */
+export function removeNamedKnowledgeRoot(rootName: string, configPath = defaultInstallationConfigPath()): InstallationConfigV2 {
+  const config = loadExistingInstallationConfigForWrite(configPath);
+  if (!config) throw new InstallationConfigError(`no installation config at ${configPath}`);
+  if (config.schema_version !== 2) {
+    throw new InstallationConfigError("installation config is v1 (one unnamed root); there is no named registration to remove");
+  }
+  if (config.knowledge_roots[rootName] === undefined) {
+    throw new InstallationConfigError(`unknown Knowledge root "${rootName}"; available roots: ${sortedRootNames(config)}`);
+  }
+  const remaining = Object.fromEntries(Object.entries(config.knowledge_roots).filter(([name]) => name !== rootName));
+  if (Object.keys(remaining).length === 0) {
+    throw new InstallationConfigError(`"${rootName}" is the only registered Knowledge root; register another before removing it`);
+  }
+  if (config.default_root === rootName) {
+    throw new InstallationConfigError(`"${rootName}" is the default root; set another default first (sta knowledge default <name>)`);
+  }
+  return persistV2InstallationConfig(
+    { schema_version: 2, default_root: config.default_root, knowledge_roots: remaining, identities: config.identities },
+    configPath,
+  );
+}
+
+/**
  * Declares (or replaces) the design-account identities — `sta configure
  * identity --figma-email <e> --claude-email <e>`. Merges into whatever
  * config already exists so binding a Knowledge root and declaring identities

@@ -250,6 +250,8 @@ export function classificationInputForPlanTask(task: PlanTask, overrides: Classi
     touchesSensitiveArea:
       task.risk.includes("security") || task.risk.includes("authorization") || task.humanGate.includes("security"),
     isProductionDeployOrMigration: task.humanGate.includes("deployment") || task.humanGate.includes("migration"),
+    // Any other declared gate is still a person's approval before Done (plan-task-v1).
+    declaresHumanGate: task.humanGate.some((gate) => gate !== "security"),
     touchesBackend: task.owner === AgentStage.BACKEND_ENGINEER,
     touchesFrontend: task.owner === AgentStage.FRONTEND_ENGINEER,
   };

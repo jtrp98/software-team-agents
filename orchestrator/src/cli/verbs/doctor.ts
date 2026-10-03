@@ -4,6 +4,7 @@ import { detectRuntimeCapabilities } from "../../runtime/runtimeCapabilityDetect
 import { exitCodeFor, runDoctor } from "../../threeRepo/doctor.js";
 import { flagValue } from "../support.js";
 import { extractRootSelectorFlag } from "../../threeRepo/rootSelector.js";
+import { coreDoctorLines } from "../../core/coreDoctor.js";
 
 /** `doctor` — aggregate read-only diagnostics; never mutates, exits non-zero only on FAIL. */
 export async function runDoctorVerb(rest: string[]): Promise<number> {
@@ -40,6 +41,12 @@ export async function runDoctorVerb(rest: string[]): Promise<number> {
     const failed = report.checks.filter((c) => c.status === "FAIL").length;
     const warned = report.checks.filter((c) => c.status === "WARNING").length;
     console.log(`[orchestrator] doctor: ${report.ok ? "usable" : "BLOCKED"} (${failed} fail, ${warned} warning)`);
+    // STA Core section — informational; it never changes doctor's exit code.
+    try {
+      for (const line of await coreDoctorLines()) console.log(line);
+    } catch (error) {
+      console.log(`! STA Core section unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return exitCodeFor(report);
   } catch (error) {
     console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);

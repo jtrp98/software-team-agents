@@ -10,7 +10,6 @@ import { ArtifactType } from "../artifacts/schemas.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { createRuntimeExecutor as rawCreateRuntimeExecutor } from "./runtimeExecutor.js";
-import { approvalIsolationDenial } from "../cli/composition/approvalIsolation.js";
 
 function createRuntimeExecutor(opts: Parameters<typeof rawCreateRuntimeExecutor>[0]) {
   const projectRoot = opts.projectRoot;
@@ -1336,7 +1335,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   });
   it("records the exact packet and contract before invoking the adapter", async () => {
     let dispatchCount = 0;
-    const runtime = new MockRuntimeAdapter({ id: "codex", respond: () => {
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => {
       expect(dispatchCount).toBe(1);
       return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } });
     } });
@@ -1361,7 +1360,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     expect(dispatchCount).toBe(1);
   });
   it("binds an actual STA role run to the packet persisted before the adapter call", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "codex", respond: () =>
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () =>
       okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const scoped = scopedFixture("T-sta-dispatch");
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
@@ -1426,7 +1425,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   });
 
   it("runs a Target-writing stage in its canonical Target root while retaining explicit scope", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "codex", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const scoped = scopedFixture("T-target");
     const task = { runtimeTask: scoped.runtimeTask, taskId: "T-target", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
@@ -1440,7 +1439,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   });
 
   it("V11 TASK-019 — a stage's env carries the selected root name beside the path (DR §5 env/launch)", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "codex", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const scoped = scopedFixture("T-root-name");
     const task = { runtimeTask: scoped.runtimeTask, taskId: "T-root-name", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
@@ -1472,7 +1471,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     ];
     const pairs: { path?: string; name?: string }[] = [];
     for (const selected of selections) {
-      const runtime = new MockRuntimeAdapter({ id: "codex", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+      const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
       const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
       const scoped = scopedFixture(`T-isolation-${selected.name}`);
       const task = { runtimeTask: scoped.runtimeTask, taskId: `T-isolation-${selected.name}`, classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
@@ -1488,7 +1487,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   });
 
   it("T-V1-16 two-Target isolation: the guard env carries only the write-access root, never the read-only sibling", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "codex", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
     const scoped = scopedFixture("T-two");
     const task = { runtimeTask: scoped.runtimeTask, taskId: "T-two", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }, { target_id: "web", role: AgentStage.FRONTEND_ENGINEER }] } } as never;
@@ -1561,7 +1560,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   it("T-V9-012 runs both admitted shapes with packet roots equal to each stage's single guard root", async () => {
     for (const shape of ["split", "fullstack"] as const) {
       const runtime = new MockRuntimeAdapter({
-        id: "codex",
+        id: "claude-code",
         respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
       });
       const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
@@ -1613,7 +1612,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   });
 
   it("V10 TASK-009 admits more than one writable Target in an engineer invocation and scopes the packet to all of them", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "codex", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const scoped = scopedFixture("T-plural-write");
     const second = tmpProject();
@@ -2251,7 +2250,7 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
  * mismatch, and binds the digest it checked to every attempt (PASS or FAIL).
  */
 describe("createRuntimeExecutor — contract dispatch preflight (V13 TASK-005)", () => {
-  it("TASK-027 a1 refuses a hook-only runtime before recording or preparing an attempt", async () => {
+  it("a dispatch preflight refusal stops before recording or preparing an attempt", async () => {
     const root = tmpProject();
     const approval = path.join(root, "approval-channel");
     fs.mkdirSync(approval);
@@ -2259,7 +2258,7 @@ describe("createRuntimeExecutor — contract dispatch preflight (V13 TASK-005)",
     const recordDispatch = vi.fn();
     const result = await createRuntimeExecutor({
       runtime, projectRoot: root, moduleName: () => "sales-crm", guards: () => NO_GUARDS,
-      approvalIsolationPreflight: (adapter, request) => approvalIsolationDenial(adapter, request, approval),
+      approvalIsolationPreflight: () => "APPROVAL_ISOLATION_UNAVAILABLE: injected preflight refusal",
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-A1-DENY", context: [], recordDispatch });
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("APPROVAL_ISOLATION_UNAVAILABLE");
@@ -2268,7 +2267,7 @@ describe("createRuntimeExecutor — contract dispatch preflight (V13 TASK-005)",
     expect(recordDispatch).not.toHaveBeenCalled();
   });
 
-  it("TASK-025 runs the a1 preflight before dispatch for every executable role", async () => {
+  it("the dispatch preflight runs before dispatch for every executable role", async () => {
     const root = tmpProject();
     const approval = path.join(root, "approval-channel");
     fs.mkdirSync(approval);
@@ -2279,7 +2278,7 @@ describe("createRuntimeExecutor — contract dispatch preflight (V13 TASK-005)",
         const recordDispatch = vi.fn();
         const result = await createRuntimeExecutor({
           runtime, projectRoot: root, moduleName: () => "sales-crm", guards: () => NO_GUARDS,
-          approvalIsolationPreflight: (adapter, request) => approvalIsolationDenial(adapter, request, approval),
+          approvalIsolationPreflight: () => "APPROVAL_ISOLATION_UNAVAILABLE: injected preflight refusal",
         })({ stage, taskId: `T-A1-${id}-${stage}`, context: [], recordDispatch });
         expect(result.outcome.failure_reason, `${id}/${stage}`).toContain("APPROVAL_ISOLATION_UNAVAILABLE");
         expect(runtime.requests, `${id}/${stage}`).toEqual([]);

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { approvalChannelDir } from "../gates/humanChannelConfig.js";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { classifyProviderRefusal, type RuntimeFailureClass } from "./runtimeFailureClass.js";
 import { resolveNpmCliScript as resolveNpmCliScriptImpl, type CommandResolver } from "./npmCliResolver.js";
 import { canonicalPath, permissionPathsFor, tomlString } from "./permissionPaths.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
@@ -167,7 +168,6 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
 
 const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.MODEL_SELECTION,
-  RuntimeCapability.PRE_TOOL_GUARD,
   RuntimeCapability.PROJECT_LEVEL_BINDING,
   RuntimeCapability.STRUCTURED_RESULT,
   // V13 TASK-014 — the lifecycle implemented through `SingleShotLifecycle`:
@@ -198,7 +198,18 @@ export const CODEX_PERMISSION_PROFILE_UNAVAILABLE = "CODEX_PERMISSION_PROFILE_UN
  * `ERROR: We're currently experiencing high demand…`, which is not a refusal to
  * serve this account and stays ERROR.
  */
-const PROVIDER_REFUSAL_PATTERN = /^ERROR: (?:exceeded retry limit, last status: 429\b|unexpected status 40[13]\b)/m;
+const PROVIDER_REFUSAL_PATTERN = /^ERROR: (?:exceeded retry limit, last status: 429\b|unexpected status 40[13]\b|You've hit your usage limit\b)/m;
+
+/**
+ * STA Core — normalize one matched Codex refusal line into the shared
+ * taxonomy. A ChatGPT-plan usage window (`You've hit your usage limit`) is a
+ * quota; an exhausted 429 retry loop is a rate limit unless the provider says
+ * quota; 401/403 is an auth/session refusal.
+ */
+export function classifyCodexRefusal(line: string): RuntimeFailureClass {
+  const status = /status:? (\d{3})\b/.exec(line)?.[1];
+  return classifyProviderRefusal(status ? Number(status) : undefined, line);
+}
 
 const CODEX_PERMISSION_PROFILE = "sta_run";
 const ALWAYS_READ_ONLY_IN_WORKSPACE = [".git", ".codex", ".agents"] as const;
@@ -307,28 +318,6 @@ function prepareCodexRunHome(
       }
     }
 
-    // Windows elevated sandbox setup markers: if the user's codex installation
-    // has already completed sandbox setup, carry the markers into the run home
-    // so `codex exec` does not report sandbox setup missing or fail commands.
-    const sandboxMigration = path.join(sourceHome, ".sandbox_migration");
-    if (fs.existsSync(sandboxMigration)) {
-      try {
-        fs.copyFileSync(sandboxMigration, path.join(runHome, ".sandbox_migration"));
-      } catch {
-        // best-effort
-      }
-    }
-    const sandboxSetupMarker = path.join(sourceHome, ".sandbox", "setup_marker.json");
-    if (fs.existsSync(sandboxSetupMarker)) {
-      try {
-        const targetSandboxDir = path.join(runHome, ".sandbox");
-        fs.mkdirSync(targetSandboxDir, { recursive: true });
-        fs.copyFileSync(sandboxSetupMarker, path.join(targetSandboxDir, "setup_marker.json"));
-      } catch {
-        // best-effort
-      }
-    }
-
     return {
       path: runHome,
       cleanup: () => {
@@ -350,51 +339,21 @@ function prepareCodexRunHome(
 }
 
 /**
- * Build one self-contained native permission profile. The approval channel is
- * an exact OS deny-read/write path within an otherwise broad-read profile.
- * Packet-denied paths are only read-only because their contract denies mutation.
+ * How `codex exec` is invoked. Owner decision 2026-10-03: Codex runs the way a
+ * person runs it — no Windows elevated sandbox, no per-run OS permission
+ * profile — so it reads and writes files normally. Without that OS boundary
+ * nothing enforces a write scope *before* a tool runs, so the guard report says
+ * so honestly (PRE_TOOL_GUARD unenforced): routing keeps Codex off
+ * Target-writing stages, the provider-neutral post-run write-scope check still
+ * turns any write outside the grant into ERROR, and the isolated execpolicy
+ * still refuses git.
  */
 export function codexPermissionInvocationFor(
   req: Pick<RuntimeAgentRequest, "cwd" | "autonomy" | "guards" | "workRoots" | "env">,
-  protectedDir = approvalChannelDir(),
 ): CodexPermissionInvocation {
   const wantsPreTool = requiresPreToolGuard(req.guards, req.autonomy);
   const wantsExit = req.guards.exitChecks.length > 0;
-
   const cwd = path.resolve(req.cwd);
-  const approvalPath = canonicalPath(protectedDir);
-  const cwdWorkRoot = req.workRoots?.find((root) => path.resolve(root.path) === cwd);
-  if (cwdWorkRoot?.access === "read") {
-    throw new Error(`cwd ${cwd} is Target "${cwdWorkRoot.targetId}" bound read-only; refusing to turn it into a writable Codex workspace root`);
-  }
-
-  const permissions = new Map<string, "read" | "write">();
-  permissions.set(".", "read");
-  for (const pattern of req.autonomy === "read-only" ? [] : req.guards.writeAllow) {
-    const expanded = codexPermissionPathsFor(cwd, pattern);
-    if (expanded.length === 0) {
-      throw new Error(`write-allow pattern ${JSON.stringify(pattern)} cannot be represented safely for Codex because its wildcard parent does not exist`);
-    }
-    for (const allowed of expanded) permissions.set(allowed, "write");
-  }
-  for (const protectedPath of ALWAYS_READ_ONLY_IN_WORKSPACE) permissions.set(protectedPath, "read");
-  for (const pattern of req.guards.writeDeny) {
-    for (const denied of codexPermissionPathsFor(cwd, pattern)) permissions.set(denied, "read");
-  }
-
-  const workspaceEntries = [...permissions.entries()]
-    .map(([permissionPath, access]) => `${tomlString(permissionPath)} = ${tomlString(access)}`)
-    .join(", ");
-  const filesystemEntries = [
-    '":root" = "read"',
-    `${tomlString(approvalPath)} = "deny"`,
-    `":workspace_roots" = { ${workspaceEntries} }`,
-  ].filter(Boolean).join(", ");
-  const profile = `{ filesystem = { ${filesystemEntries} }, network = { enabled = false } }`;
-  const writeRoots = [...new Set((req.autonomy === "read-only" ? [] : req.workRoots ?? [])
-    .filter((root) => root.access === "write")
-    .map((root) => path.resolve(root.path))
-    .filter((root) => root !== cwd))];
   const args = [
     "--strict-config",
     "--ephemeral",
@@ -402,16 +361,9 @@ export function codexPermissionInvocationFor(
     cwd,
     "--config",
     "project_root_markers=[]",
-    "--config",
-    'approval_policy="never"',
-    ...(process.platform === "win32" ? ["--config", 'windows.sandbox="elevated"'] : []),
-    "--config",
-    `default_permissions=${tomlString(CODEX_PERMISSION_PROFILE)}`,
-    "--config",
-    `permissions.${CODEX_PERMISSION_PROFILE}=${profile}`,
-    ...writeRoots.flatMap((root) => ["--add-dir", root]),
+    "--dangerously-bypass-approvals-and-sandbox",
   ];
-  return { args, guards: guardReport(wantsPreTool, wantsExit) };
+  return { args, guards: guardReport(false, wantsExit, wantsPreTool) };
 }
 
 /** Codex's current configurable reasoning levels for the GPT-5.6/Astra family. */
@@ -462,13 +414,11 @@ export class CodexAdapter implements ExecutorPort {
     // selector is documented (see header).
     dir: ".codex",
     definitionPath: (role) => `.codex/agents/${role}.toml`,
-    // Project hooks remain intentionally untrusted. `null` says the binding
-    // file itself proves no guard; guarded headless runs are certified by the
-    // per-run permission profile and isolated execpolicy below.
+    // Project hooks remain intentionally untrusted, and since the owner
+    // decision of 2026-10-03 no per-run OS profile is compiled either: `null`
+    // with no per-run enforcement says honestly that nothing guards a write
+    // before the tool runs (writes are checked after the run instead).
     guardConfigPath: null,
-    // Headless execution does not trust project hooks. It compiles the active
-    // packet into a native permission profile and reports that exact run.
-    guardEnforcement: "per-run",
   };
   readonly capabilities: ReadonlySet<RuntimeCapability> = new Set(CODEX_CAPABILITIES);
   readonly models: ReadonlySet<string>;
@@ -790,6 +740,7 @@ export class CodexAdapter implements ExecutorPort {
       const line = stderr.split("\n").find((l) => PROVIDER_REFUSAL_PATTERN.test(l)) ?? "";
       return {
         status: "UNAVAILABLE",
+        failureClass: classifyCodexRefusal(line),
         exitCode: proc.status ?? null,
         text: "",
         usage,
@@ -827,7 +778,7 @@ function guardReport(preToolEnforced: boolean, wantsExitGuard: boolean, wantsPre
     enforced,
     unenforced,
     reason: wantsExitGuard
-      ? "Codex write/command scope is enforced by the per-run native permission profile and isolated execpolicy; exit checks are enforced by the provider-neutral runner"
+      ? "Codex runs without an OS sandbox (owner decision 2026-10-03): git is refused by the isolated execpolicy, writes are checked after the run, exit checks are enforced by the provider-neutral runner"
       : undefined,
   };
 }

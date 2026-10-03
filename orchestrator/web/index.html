@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="sta-token" content="__STA_TOKEN__">
+  <meta name="sta-lang" content="__STA_LANG__">
+  <title>STA Core</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/work"><span class="brand-mark">◆</span> STA Core</a>
+    <nav class="nav" id="nav">
+      <a href="#/work" data-route="work" data-i18n="nav.work">งาน</a>
+      <a href="#/runs" data-route="runs" data-i18n="nav.runs">Runs</a>
+      <a href="#/runtimes" data-route="runtimes" data-i18n="nav.runtimes">Runtime</a>
+      <a href="#/knowledge" data-route="knowledge" data-i18n="nav.knowledge">Knowledge</a>
+      <a href="#/settings" data-route="settings" data-i18n="nav.settings">ตั้งค่า</a>
+    </nav>
+    <div class="topbar-right">
+      <span class="pill" id="core-pill">…</span>
+      <button class="link" id="lang-toggle" type="button">EN</button>
+    </div>
+  </header>
+  <main id="app" class="container" aria-live="polite"></main>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

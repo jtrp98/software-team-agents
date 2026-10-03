@@ -80,12 +80,12 @@ function register(extraWorkRoots: (targetRoot: string) => readonly RuntimeTaskWo
   return { root, targetRoot, store, ledger, run: result.run };
 }
 
-// V13 TASK-027 R14C (a1): codex is the only runtime certified for governed
-// Target writes. Like the real CodexAdapter, its guards are compiled per run
-// (no binding file), so capability detection verifies them from the claim.
+// Claude Code is the only runtime certified for governed Target writes
+// (owner decision 2026-10-03). This mock compiles its guards per run (no
+// binding file), so capability detection verifies them from the claim.
 function guardedAdapter(): MockRuntimeAdapter {
   return new MockRuntimeAdapter({
-    id: "codex",
+    id: "claude-code",
     models: ["sonnet"],
     binding: { ...mockBinding(), guardConfigPath: null, guardEnforcement: "per-run" },
     respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
@@ -101,7 +101,7 @@ function boundary(f: ReturnType<typeof register>, registry: RuntimeRegistry): Le
     runtimeStateRoot: f.root,
     contractRoot: f.root,
     registry,
-    runtimeSelection: () => ({ defaultRuntimeId: "codex" }),
+    runtimeSelection: () => ({ defaultRuntimeId: "claude-code" }),
     guards: contractGuardResolver(f.root),
     dependencyEvidence: () => [],
     adapterVersion: "test@1",

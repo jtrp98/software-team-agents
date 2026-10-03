@@ -70,6 +70,7 @@ import type { RuntimeTaskWorkRoot } from "../../orchestrator/runtimeTask.js";
 import { resolveFrameworkRoot } from "../../targetcli/roots.js";
 import { parseCanonicalPlan } from "../../docs/planTask.js";
 import { resolveHumanDecisionChannel } from "../../gates/humanChannelConfig.js";
+import { activateCoreRouteOverlay, activeCoreRouteOverlay, assertPinnedKnowledge, deactivateCoreRouteOverlay } from "../../runtime/coreRouteOverlay.js";
 
 /**
  * T-V8-021 — the explicit bounded-run CLI.
@@ -128,11 +129,14 @@ export interface BoundedRunArgs {
   effort?: string;
   autonomy?: RuntimeAutonomy;
   classification: ClassificationInput;
+  /** STA Core: the overlay file of the work run that launched this child (`--core-run <path>`). */
+  coreRun?: string;
 }
 
 export const BOUNDED_RUN_USAGE =
   "sta bounded-run --module <name> (--all | --phase <n> | --task <id>[,<id>...]) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--runtime <id>] [--model <name>] [--effort <name>] [--target-root <path>] [--target-id <id>...] [--root <name>] [--knowledge-root <path>] [--run-branch <name>] [--project-root <path>] [--state-db <path>] <classification override flags>\n" +
   "sta bounded-run --resume <run-id> [--module <name>] [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--project-root <path>] [--state-db <path>]\n" +
+  "  --core-run <overlay.json> is set only by STA Core (`sta work`): per-role runtime order, shared runtime health and the pinned Knowledge root for this child.\n" +
   "  One initial command previews scope/order/gates/routes, then (without --dry-run) freezes and runs every task through the one task engine — owner engineer (frozen attempt + checkpoint), reviewer, QA, security when sensitive — to the chosen boundary. Never waives a hard gate.\n" +
   "  --root <name> selects the named Knowledge root (V11); --knowledge-root <path> is the deprecated compatibility channel — it must canonical-match exactly one registered root and is refused together with --root. A resume always uses the root frozen in the run.\n" +
   `  classification override flags (optional; deterministic classifyTask() remains authority): ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
@@ -156,6 +160,7 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
   let model: string | undefined;
   let effort: string | undefined;
   let autonomy: RuntimeAutonomy | undefined;
+  let coreRun: string | undefined;
   const classification: ClassificationInput = {};
   let scopeFlagSeen: string | undefined;
 
@@ -215,6 +220,8 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
         throw new CliUsageError(`bounded-run: invalid root name "${value}": must match ${KNOWLEDGE_ROOT_NAME_PATTERN.source}`);
       }
       rootName = value;
+    } else if (arg === "--core-run") {
+      coreRun = requireValue(arg, argv[++i]);
     } else if (arg === "--run-branch") {
       runBranch = requireValue(arg, argv[++i]);
     } else if (arg === "--runtime") {
@@ -262,6 +269,7 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
     projectRoot, stateDb, module: moduleName, scope, until, dryRun, resumeRunId,
     targetRoot, targetId: targetIds.length === 1 ? targetIds[0] : undefined,
     targetIds, knowledgeRoot, rootName, runBranch, runtime, model, effort, autonomy, classification,
+    ...(coreRun ? { coreRun } : {}),
   };
 }
 
@@ -405,6 +413,40 @@ function sameRoot(left: string, right: string): boolean {
 
 export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: string, dependencies: CliDependencies = {}): Promise<number> {
   const args = parseBoundedRunArgs(rest, defaultProjectRoot);
+  if (!args.coreRun) return runBoundedRunVerbInner(args, dependencies);
+  // STA Core launched this child: its per-role order and shared runtime
+  // health apply for exactly this process, and its Knowledge pin is checked
+  // once the root resolves (below).
+  let overlay;
+  try {
+    overlay = activateCoreRouteOverlay(path.resolve(args.coreRun));
+  } catch (error) {
+    console.error(`[bounded-run] ${error instanceof Error ? error.message : String(error)}`);
+    return 2;
+  }
+  if (args.module && args.module !== overlay.module) {
+    deactivateCoreRouteOverlay();
+    console.error(`[bounded-run] --core-run is pinned to module ${overlay.module}, not ${args.module}`);
+    return 2;
+  }
+  // The exit record is how the Core learns this segment's outcome even when it
+  // restarted while the segment ran (it then has no child handle to wait on).
+  const exitRecord = path.join(path.dirname(path.resolve(args.coreRun)), `segment-${overlay.segment}.exit.json`);
+  let exitCode = 1;
+  try {
+    exitCode = await runBoundedRunVerbInner(args, dependencies);
+    return exitCode;
+  } finally {
+    deactivateCoreRouteOverlay();
+    try {
+      fs.writeFileSync(exitRecord, JSON.stringify({ segment: overlay.segment, exitCode, at: Date.now() }), "utf8");
+    } catch {
+      // the Core treats a missing record as an interrupted segment and reconciles
+    }
+  }
+}
+
+async function runBoundedRunVerbInner(args: BoundedRunArgs, dependencies: CliDependencies): Promise<number> {
   const runtimeRegistry: RuntimeRegistry = (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(args.projectRoot);
   const defaultRuntimeId = selectRuntime({ projectRoot: args.projectRoot, runtime: args.runtime, model: args.model, effort: args.effort, phases: [] }, "").defaultRuntimeId;
 
@@ -448,6 +490,14 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   } catch (error) {
     console.error(`[bounded-run] ${error instanceof Error ? error.message : String(error)}`);
     return 1;
+  }
+  // STA Core Knowledge isolation: a Core-launched run may only ever use the
+  // Knowledge root pinned when the work run was created.
+  try {
+    assertPinnedKnowledge(knowledgeRoot, args.rootName);
+  } catch (error) {
+    console.error(`[bounded-run] ${error instanceof Error ? error.message : String(error)}`);
+    return 2;
   }
   const docsRoot = resolveContextDocsRoot(args.projectRoot, process.env, args.rootName);
   // Contract/agent-registry authority: `resolveFrameworkRoot()` applies to
@@ -506,6 +556,12 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       targetRoot = run.target_root;
       targetId = run.target_id;
       knowledgeRoot = run.knowledge_root;
+      try {
+        assertPinnedKnowledge(knowledgeRoot, args.rootName);
+      } catch (error) {
+        console.error(`[bounded-run] ${error instanceof Error ? error.message : String(error)}`);
+        return 2;
+      }
       const moduleName = args.module ?? run.module;
       const planMarkdown = readModuleDoc(docsRoot, moduleName, "plan.md");
       if (planMarkdown === null) {
@@ -832,6 +888,17 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       dependencyEvidence: (taskId) => dependencyEvidenceFromStore(store, taskId),
       adapterVersion: cliVersion(),
     });
+
+    // STA Core resume after runtime exhaustion: a task the engine stopped only
+    // because no runtime could serve it runs its same stage again. Every other
+    // block (gate, budget, finding, in-flight attempt) is left for a person.
+    if (args.resumeRunId && activeCoreRouteOverlay()) {
+      for (const taskId of frozenRun.task_order) {
+        if (!engineRegistry.has(taskId)) continue;
+        const released = engineRegistry.releaseRuntimeUnavailableBlock(taskId);
+        if (released.released) console.log(`[bounded-run] STA Core released the runtime-unavailability block on ${taskId} (${released.reason})`);
+      }
+    }
 
     const locked: string[] = [];
     try {

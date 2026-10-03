@@ -341,7 +341,7 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     {
       caseId: "target-binding",
       verdict: surface.includes(TARGET_ROOT) || (env.STA_WRITABLE_WORK_ROOTS ?? "").includes(TARGET_ROOT) ? "PASS" : "FAIL",
-      detail: impl.id === "codex" ? "OS-enforced --add-dir sandbox grant" : "STA_WRITABLE_WORK_ROOTS carried to the pre-tool guard",
+      detail: "STA_WRITABLE_WORK_ROOTS carried to the run",
     },
     { caseId: "allowed-write-guard", verdict: guardVerdict(), detail: guards.reason ?? "write scope active for this run" },
     {
@@ -413,11 +413,13 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
           "hook-plugin-execution": "ENFORCED",
           "exit-handling": "ENFORCED",
         },
+        // Owner decision 2026-10-03: no sandbox, no per-run OS profile — every
+        // pre-tool guard is honestly reported unenforced.
         codex: {
-          "allowed-write-guard": "ENFORCED",
-          "forbidden-write-guard": "ENFORCED",
-          "state-changing-git-protection": "ENFORCED",
-          "hook-plugin-execution": "ENFORCED",
+          "allowed-write-guard": "REPORTED_UNENFORCED",
+          "forbidden-write-guard": "REPORTED_UNENFORCED",
+          "state-changing-git-protection": "REPORTED_UNENFORCED",
+          "hook-plugin-execution": "REPORTED_UNENFORCED",
           "exit-handling": "REPORTED_UNENFORCED",
         },
         opencode: {

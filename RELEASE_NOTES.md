@@ -1,5 +1,51 @@
 # Release Notes
 
+## software-team-agents 9.1.0 — STA Core: local service, Web UI and runtime failover (2026-10-03)
+
+> **Version 9.1.0 and release date 2026-10-03 confirmed by the release owner.** The Minor bucket is
+> the mechanical result of the version rule at the bottom of this file: new CLI verbs and a new
+> capability, backward compatible — no input that passed before is refused now, and no default
+> flips for an existing command. `templates/manifest.json` is re-stamped by `npm run build`;
+> `@software-team-agents/orchestrator` stays at `0.3.0`.
+
+**Bucket: Minor (`9.0.0 → 9.1.0`, confirmed).** Migration: none required. Existing
+`sta run`/`bounded-run`/`status`/`pause`/`resume <task-id>` keep their meaning; STA Core is opt-in
+(`sta setup-machine`, `sta start`). Guide: [`docs/core.md`](docs/core.md).
+
+- **STA Core** (`orchestrator/src/core/`): a deterministic, non-LLM work-run controller that drives
+  the existing `sta bounded-run` in detached segments; persisted in
+  `%LOCALAPPDATA%\software-team-agents\core\core.db`; survives browser close and service restart.
+- **Local API + Web UI** (`orchestrator/web/`, served by `sta start` on 127.0.0.1 with a per-start token):
+  Work, Runs, Review, Runtime, Knowledge and Settings pages; Thai by default.
+- **New CLI:** `sta setup-machine`, `sta start` / `sta stop` / `sta core status`, `sta work …`,
+  `sta knowledge add|list|validate|default|remove|modules`. Existing `sta status|pause|resume <task-id>`
+  keep their task-level meaning.
+- **Runtime failure taxonomy** (`runtime/runtimeFailureClass.ts`) with adapter-side normalization for
+  Claude Code (incl. the subscription usage-limit result), Codex (incl. the plan usage-limit line),
+  AGY and ZCode; **runtime health + cooldowns** shared between the service and its children;
+  per-role routing order with explicit preferred/exclusive semantics; Commander as a role with failover.
+- **`sta bounded-run --core-run <overlay>`** (set only by STA Core): per-role order, shared health,
+  pinned Knowledge assertion and a segment exit record.
+- **`TaskRegistry.releaseRuntimeUnavailableBlock`**: lifts only a BLOCKED caused by "no runtime could
+  serve this stage", so a run paused for runtime exhaustion resumes the same stage.
+- **Intent Engine** (Gemini, configurable model; offline parser fallback) with schema + policy
+  validation; API key stored with Windows DPAPI outside every repository.
+- **No Codex Windows sandbox (owner decision 2026-10-03).** Headless Claude Code runs directly with
+  the user's own login (the TASK-031 Codex-sandbox wrapper is opt-in only, `osIsolation: true`), and
+  `codex exec` runs with `--dangerously-bypass-approvals-and-sandbox` (no `windows.sandbox`, no OS
+  permission profile). The TASK-027 a1 approval-isolation preflight is retired with it. Consequences:
+  Codex is no longer certified for unattended Target writes (no pre-tool guard), so the engineer
+  stage runs on Claude Code; Codex, AGY and ZCode serve commander, review and QA. Remaining guards:
+  workspace hooks, Codex git execpolicy, post-run write-scope check, deterministic gate, checkpoint.
+- **Plan human gates:** a plan task's declared `breaking-contract`, `business`, `design-ambiguity` or
+  `plan-approval` gate now requires a person's approval before Done (plan-task-v1 "gate enforcement
+  remains with the safety kernel") instead of the whole plan being refused as a classification conflict.
+- **Claude Code `Not logged in`** is classified as an auth refusal (fallback), not a task error.
+- `machine.yaml` beside `installation.yaml` (machine root, language, Intent, role orders, cooldowns);
+  Knowledge roots stay in `installation.yaml`.
+- Target-write certification is still enforced on every fallback: an uncertified runtime is skipped
+  for the engineer stage, never run with a weaker boundary.
+
 ## software-team-agents 9.0.0 — init refuses a Target checkout (2026-10-02)
 
 > **Version 9.0.0 and release date 2026-10-02 confirmed by the release owner.** The Major bucket is

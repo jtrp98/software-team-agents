@@ -24,9 +24,6 @@ const ADAPTER_MODULES = ["claudeCodeAdapter.js", "codexAdapter.js", "mockAdapter
 /** Files allowed to name a concrete adapter. The composition root is the only production entry. */
 const ALLOWED_IMPORTERS = new Set([
   "cli/composition/runtimeRegistry.ts",
-  // TASK-027 a1: the production dispatch composition verifies the concrete
-  // Codex spawn profile; runtimeExecutor itself still knows only the port.
-  "cli/composition/approvalIsolation.ts",
   // TASK-030: this fixture composes a Codex identity only inside CLI tests;
   // the reverse import is rejected below so no production path can call it.
   "cli/verbs/boundedRunFixture.testSupport.ts",

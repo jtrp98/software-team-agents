@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import type { RuntimeAgentRequest } from "../../runtime/runtimeAdapter.js";
-import { CodexAdapter } from "../../runtime/codexAdapter.js";
+import { ClaudeCodeAdapter } from "../../runtime/claudeCodeAdapter.js";
 import { MemoryWorkspace, okResult } from "../../runtime/mockAdapter.js";
 import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
 import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
@@ -34,20 +34,23 @@ export interface BoundedRunFixture { root: string; targetRoot: string }
  */
 export type FixtureGit = (root: string, ...args: string[]) => string;
 
-/** Test-only Codex composition: real Codex identity and native a1 preflight,
- * with a scripted role body so CLI tests never spawn a model process. */
-export class BoundedRunCodexFixture extends CodexAdapter {
+/** Test-only engineer composition: the real Claude Code identity (the runtime
+ * certified for unattended Target writes), with a scripted role body so CLI
+ * tests never spawn a model process. */
+export class BoundedRunEngineFixture extends ClaudeCodeAdapter {
   override readonly workspace: MemoryWorkspace;
   readonly requests: RuntimeAgentRequest[] = [];
   private readonly respond: (req: RuntimeAgentRequest, files: Map<string, string>) => Partial<RuntimeAgentResult> | undefined;
 
   constructor(targetRoot: string, respond: (req: RuntimeAgentRequest, files: Map<string, string>) => Partial<RuntimeAgentResult> | undefined) {
-    super({ projectRoot: targetRoot, models: ["gpt-5.5"] });
-    this.workspace = new MemoryWorkspace();
+    super({ projectRoot: targetRoot });
+    // The hook wiring `sta init` materializes in a real workspace — what lets
+    // capability detection verify Claude Code's pre-tool guard.
+    this.workspace = new MemoryWorkspace({ ".claude/settings.json": FIXTURE_CLAUDE_SETTINGS });
     this.respond = respond;
   }
 
-  override async probe() { return { available: true, version: "fixture-codex" }; }
+  override async probe() { return { available: true, version: "fixture-claude-code" }; }
 
   override async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
     this.requests.push(req);
@@ -64,9 +67,16 @@ export class BoundedRunCodexFixture extends CodexAdapter {
         fs.writeFileSync(destination, text);
       }
     }
-    return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] }, ...over });
+    return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] }, raw: { session_id: `fixture-session-${this.requests.length}` }, ...over });
   }
 }
+
+const FIXTURE_CLAUDE_SETTINGS = JSON.stringify({
+  hooks: {
+    PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "node .claude/hooks/block-path-permissions.js" }] }],
+    Stop: [{ hooks: [{ type: "command", command: "node .claude/hooks/require-green-before-stop.js" }] }],
+  },
+});
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -291,7 +301,7 @@ export function threeRepoBoundedRunProject(
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-cli-"));
   installFrameworkWorkflows(root);
   fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
-  fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: 1\nexecution:\n  mode: single\n  runner: codex\n");
+  fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: 1\nexecution:\n  mode: single\n  runner: claude-code\n");
   rootsList.push(root);
 
   const knowledgeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-kn-"));

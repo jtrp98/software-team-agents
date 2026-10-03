@@ -81,21 +81,21 @@ function frozen(overrides: Partial<LedgerAttempt> = {}): LedgerAttempt {
 
 describe("TASK-016 — selection requires certification, capability and availability for a governed write", () => {
   it("names the governed-executor gap for a portless adapter and for one missing lifecycle capabilities", () => {
-    expect(governedExecutorGap(portless("claude-code"))).toMatch(/does not implement the executor lifecycle port/);
-    expect(governedExecutorGap(bareRunner("claude-code"))).toMatch(/attempt-resume, attempt-cancel, evidence-collection/);
-    expect(governedExecutorGap(new MockRuntimeAdapter({ id: "claude-code" }))).toBeNull();
+    expect(governedExecutorGap(portless("codex"))).toMatch(/does not implement the executor lifecycle port/);
+    expect(governedExecutorGap(bareRunner("codex"))).toMatch(/attempt-resume, attempt-cancel, evidence-collection/);
+    expect(governedExecutorGap(new MockRuntimeAdapter({ id: "codex" }))).toBeNull();
   });
 
   it("refuses a certified runtime whose adapter is not a governed executor", () => {
-    for (const weak of [bareRunner("codex"), portless("codex")]) {
+    for (const weak of [bareRunner("claude-code"), portless("claude-code")]) {
       const result = resolveRuntimeRoute({
         role: "backend-engineer",
         stage: AgentStage.BACKEND_ENGINEER,
         projectRoot: project(),
         registry: new RuntimeRegistry([weak]),
         config: null,
-        flags: { runtime: "codex" },
-        availability: { codex: { available: true } },
+        flags: { runtime: "claude-code" },
+        availability: { "claude-code": { available: true } },
         hasTargetWrite: true,
       });
       expect(result.selected).toBeUndefined();
@@ -116,20 +116,20 @@ describe("TASK-016 — selection requires certification, capability and availabi
     expect(result.selected?.runtime.id).toBe("claude-code");
   });
 
-  // V13 TASK-027 R14C (a1): codex is the only certified governed-write
+  // V13 TASK-027 R14C (a1): Claude Code is the only certified governed-write (owner decision 2026-10-03)
   // executor, so the walk passes an uncertified-but-capable one to reach it.
   it("routing.order walks past an uncertified executor to the next certified, capable one", () => {
     const result = resolveRuntimeRoute({
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "antigravity", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] })]),
-      config: { schema_version: 1, routing: { order: ["antigravity", "codex"] } },
-      availability: { antigravity: { available: true }, codex: { available: true } },
+      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "antigravity", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] })]),
+      config: { schema_version: 1, routing: { order: ["antigravity", "claude-code"] } },
+      availability: { antigravity: { available: true }, "claude-code": { available: true } },
       hasTargetWrite: true,
       modelPolicy: null,
     });
-    expect(result.selected?.runtime.id).toBe("codex");
+    expect(result.selected?.runtime.id).toBe("claude-code");
     expect(result.attempts[0]!.skipReason).toMatch(/runtime "antigravity" is not certified for unattended Target writes/);
   });
 
@@ -166,28 +166,28 @@ describe("TASK-016 — selection requires certification, capability and availabi
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] })]),
+      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] })]),
       config: null,
-      flags: { runtime: "codex" },
-      availability: { codex: { available: false, reason: "binary not found" } },
+      flags: { runtime: "claude-code" },
+      availability: { "claude-code": { available: false, reason: "binary not found" } },
       hasTargetWrite: true,
     });
     // The executor classifies a sole unavailable candidate as UNAVAILABLE with the probe's reason.
-    expect(single.diagnostics.join(" ")).toContain('runtime "codex" is unavailable: binary not found');
+    expect(single.diagnostics.join(" ")).toContain('runtime "claude-code" is unavailable: binary not found');
 
     const walked = resolveRuntimeRoute({
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] })]),
-      config: { schema_version: 1, routing: { order: ["codex", "claude-code"] } },
-      availability: { codex: { available: false, reason: "binary not found" }, "claude-code": { available: true } },
+      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] })]),
+      config: { schema_version: 1, routing: { order: ["claude-code", "codex"] } },
+      availability: { "claude-code": { available: false, reason: "binary not found" }, "codex": { available: true } },
       // An analysis route: the only certified governed-write executor is the unavailable one.
       hasTargetWrite: false,
       modelPolicy: null,
     });
-    expect(walked.selected?.runtime.id).toBe("claude-code");
-    expect(walked.attempts[0]).toMatchObject({ runtimeId: "codex", unavailable: true });
+    expect(walked.selected?.runtime.id).toBe("codex");
+    expect(walked.attempts[0]).toMatchObject({ runtimeId: "claude-code", unavailable: true });
   });
 
   it("every production executor implements the port and declares the lifecycle; only certified ones take governed writes", () => {
@@ -198,14 +198,14 @@ describe("TASK-016 — selection requires certification, capability and availabi
       for (const capability of EXECUTOR_LIFECYCLE_CAPABILITIES) expect(runtime.capabilities.has(capability), runtime.id).toBe(true);
     }
     // V13 TASK-031 added Claude Code (whole-process Codex sandbox + OS network lock, Windows).
-    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteCertified)).toEqual(["claude-code", "codex"]);
+    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteCertified)).toEqual(["claude-code"]);
   });
 });
 
 describe("TASK-016 — the executor gate and the per-attempt version pin", () => {
   it("refuses a frozen governed write on a certified runtime that is no governed executor", async () => {
     const root = project();
-    const weak = bareRunner("codex");
+    const weak = bareRunner("claude-code");
     const result = await createRuntimeExecutor({
       runtime: weak,
       projectRoot: root,
@@ -215,8 +215,8 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
       packetBaseRevision: async () => FIXTURE_REVISION,
       runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
       frozenAttempt: frozen({
-        requested: { runtime: "codex", model: "sonnet", effort: "high" },
-        observed: { runtime: "codex", model: "sonnet", effort: "high" },
+        requested: { runtime: "claude-code", model: "sonnet", effort: "high" },
+        observed: { runtime: "claude-code", model: "sonnet", effort: "high" },
         guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
       }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
@@ -264,7 +264,7 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
 
   it("records the selected executor's version on an unfrozen routed run", async () => {
     const root = project();
-    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: true, version: "9.9.9" }, respond: () => okResult() });
+    const runtime = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"], probe: { available: true, version: "9.9.9" }, respond: () => okResult() });
     const result = await createRuntimeExecutor({
       runtime,
       projectRoot: root,
@@ -279,39 +279,40 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
 
   it("replacing the executor between attempts keeps role, stage, contract and packet — only the executor changes", async () => {
     const root = project();
+    // Claude Code is the one certified governed-write runtime (owner decision
+    // 2026-10-03), so the replacement is a different executor build of it.
     const first = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: true, version: "2.1.0" }, respond: () => okResult() });
-    const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"], probe: { available: true, version: "0.155.1" }, respond: () => okResult() });
-    const registry = new RuntimeRegistry([first, second]);
-    const run = (attempt: LedgerAttempt) =>
+    const second = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: true, version: "2.2.0" }, respond: () => okResult() });
+    const run = (attempt: LedgerAttempt, executor: MockRuntimeAdapter) =>
       createRuntimeExecutor({
-        runtime: first,
+        runtime: executor,
         projectRoot: root,
         moduleName: () => "sales-crm",
         guards: () => NO_GUARDS,
-        registry,
+        registry: new RuntimeRegistry([executor]),
         packetBaseRevision: async () => FIXTURE_REVISION,
         runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
         frozenAttempt: attempt,
       })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
 
     const attemptOne = frozen({ runtime_version: "2.1.0" });
-    const one = await run(attemptOne);
+    const one = await run(attemptOne, first);
     // An explicit reroute: a new, linked attempt on another certified executor.
     const attemptTwo = frozen({
       attempt_id: `${RUN_ID}:BE-004:backend-engineer:2`,
       attempt: 2,
-      requested: { runtime: "codex", model: "sonnet", effort: "high" },
-      observed: { runtime: "codex", model: "sonnet", effort: "high" },
-      runtime_version: "0.155.1",
+      requested: { runtime: "claude-code", model: "sonnet", effort: "high" },
+      observed: { runtime: "claude-code", model: "sonnet", effort: "high" },
+      runtime_version: "2.2.0",
       reroute_of: attemptOne.attempt_id,
     });
-    const two = await run(attemptTwo);
+    const two = await run(attemptTwo, second);
 
     expect(one.outcome.result).toBe("PASS");
     expect(two.outcome.result).toBe("PASS");
     expect(one.outcome.runtime).toBe("claude-code");
-    expect(two.outcome.runtime).toBe("codex");
-    expect([one.outcome.runtime_version, two.outcome.runtime_version]).toEqual(["2.1.0", "0.155.1"]);
+    expect(two.outcome.runtime).toBe("claude-code");
+    expect([one.outcome.runtime_version, two.outcome.runtime_version]).toEqual(["2.1.0", "2.2.0"]);
     const [a] = first.requests;
     const [b] = second.requests;
     // Role, task/stage binding, contract and the packet body are the attempt's,

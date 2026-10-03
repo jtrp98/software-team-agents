@@ -7,6 +7,7 @@ import { zcodeCoverage } from "../targetcli/guardSettings.js";
 import { renderZcodeManagedHooks } from "./bindingGenerator.js";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { classifyProviderRefusal } from "./runtimeFailureClass.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
 import type {
   ExecutorAttemptRef,
@@ -420,7 +421,7 @@ export class ZcodeAdapter implements ExecutorPort {
     if (exitCode !== 0 && ZCODE_UNAVAILABLE_PATTERN.test(stderr)) {
       const cause = stderr.split("\n").find((line) => ZCODE_UNAVAILABLE_PATTERN.test(line))?.trim() ?? tail;
       diagnostics.push(`ZCode provider/auth failure: ${cause} | ${tail}`);
-      return { status: "UNAVAILABLE", exitCode, text: "", usage: {}, guards: baseGuards, diagnostics, raw: { stdout, stderr } };
+      return { status: "UNAVAILABLE", failureClass: classifyProviderRefusal(undefined, cause), exitCode, text: "", usage: {}, guards: baseGuards, diagnostics, raw: { stdout, stderr } };
     }
     if (exitCode !== 0) diagnostics.push(`\`zcode -p\` exited ${exitCode}: ${tail || "no stderr"}`);
 

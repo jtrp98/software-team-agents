@@ -159,9 +159,9 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(0);
   });
 
-  it("allows a certified codex Target-write attempt when pre-tool guard is confirmed", async () => {
+  it("allows a certified claude-code Target-write attempt when pre-tool guard is confirmed", async () => {
     const runtime = new MockRuntimeAdapter({
-      id: "codex",
+      id: "claude-code",
       models: ["gpt-5.5"],
       // V13 TASK-016 — certified AND a lifecycle executor: both gates must pass.
       capabilities: [RuntimeCapability.PRE_TOOL_GUARD, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
@@ -174,8 +174,8 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([runtime]),
       frozenAttempt: frozen({
-        requested: { runtime: "codex", model: "gpt-5.5", effort: "high" },
-        observed: { runtime: "codex", model: "gpt-5.5", effort: "high" },
+        requested: { runtime: "claude-code", model: "gpt-5.5", effort: "high" },
+        observed: { runtime: "claude-code", model: "gpt-5.5", effort: "high" },
         guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
       }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });

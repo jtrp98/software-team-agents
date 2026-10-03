@@ -105,7 +105,7 @@ describe("CodexAdapter.executeAgent", () => {
     await adapter.executeAgent(baseRequest({ cwd: projectRoot, model: "gpt-6-astra", modelExplicit: true, effort: "high" }));
     expect(capturedArgs[capturedArgs.indexOf("--model") + 1]).toBe("gpt-6-astra");
     const configValues = capturedArgs.flatMap((arg, index) => arg === "--config" ? [capturedArgs[index + 1]] : []);
-    expect(configValues).toContain('approval_policy="never"');
+    expect(capturedArgs).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(configValues).toContain('model_reasoning_effort="high"');
 
     const refused = await adapter.executeAgent(baseRequest({ cwd: projectRoot, model: "not-a-tier-model", modelExplicit: true }));
@@ -113,7 +113,7 @@ describe("CodexAdapter.executeAgent", () => {
     expect(refused.diagnostics.join(" ")).toContain("configured Codex tier catalogue");
   });
 
-  it("uses the native root-read profile and non-interactive policy for every autonomy", async () => {
+  it("runs without a sandbox or OS permission profile, non-interactively, for every autonomy (owner decision 2026-10-03)", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");
     const autonomies = ["read-only", "propose", "edit", "full"] as const;
@@ -129,9 +129,9 @@ describe("CodexAdapter.executeAgent", () => {
       expect(capturedArgs).toContain("--strict-config");
       expect(capturedArgs).not.toContain("--ask-for-approval");
       const configValues = capturedArgs.flatMap((arg, index) => arg === "--config" ? [capturedArgs[index + 1]] : []);
-      expect(configValues).toContain('approval_policy="never"');
-      expect(configValues).toContain('default_permissions="sta_run"');
-      expect(configValues.join("\n")).toContain('\":root\" = \"read\"');
+      expect(capturedArgs).toContain("--dangerously-bypass-approvals-and-sandbox");
+      expect(configValues.join("\n")).not.toContain("default_permissions");
+      expect(configValues.join("\n")).not.toContain("windows.sandbox");
     }
   });
 
@@ -268,7 +268,7 @@ describe("CodexAdapter.executeAgent", () => {
     expect(result.status).toBe("TIMEOUT");
   });
 
-  it("runs a guarded writable request with a native per-run permission profile", async () => {
+  it("runs a guarded writable request and reports that no pre-tool guard enforced it", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");
     let spawned = false;
@@ -282,7 +282,8 @@ describe("CodexAdapter.executeAgent", () => {
 
     expect(result.status).toBe("OK");
     expect(spawned).toBe(true);
-    expect(result.guards.enforced).toContain("pre-tool-guard");
+    expect(result.guards.enforced).not.toContain("pre-tool-guard");
+    expect(result.guards.unenforced).toContain("pre-tool-guard");
     expect(result.guards.unenforced).toContain("exit-guard");
   });
 
@@ -361,10 +362,10 @@ describe("CodexAdapter — declared shape stays conservative after real-install 
     expect(adapter.binding.guardConfigPath).toBeNull();
   });
 
-  it("claims the verified structured result and per-run pre-tool guard, but no named-agent, native exit, cost, or interactive-prompt capability", () => {
+  it("claims the verified structured result, but no pre-tool guard (no sandbox), named-agent, native exit, cost, or interactive-prompt capability", () => {
     const adapter = new CodexAdapter({ projectRoot: tmpProject() });
     expect(adapter.capabilities.has("structured-result" as never)).toBe(true);
-    expect(adapter.capabilities.has("pre-tool-guard" as never)).toBe(true);
+    expect(adapter.capabilities.has("pre-tool-guard" as never)).toBe(false);
     for (const cap of [
       "named-agents",
       "post-tool-guard",
@@ -502,7 +503,7 @@ describe("Codex work-root grants", () => {
     { targetId: "docs", path: "C:/repos/docs", access: "read" },
   ];
 
-  it("lands only writable roots as --add-dir pairs in the per-run profile; read roots rely on broad read access", async () => {
+  it("passes no sandbox write-root flags: without a sandbox every root is reachable, and writes are checked after the run", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");
     let capturedArgs: string[] = [];
@@ -515,15 +516,10 @@ describe("Codex work-root grants", () => {
     const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot, autonomy: "edit", workRoots: roots, guards: SOME_GUARDS }));
 
     expect(capturedArgs).not.toContain("--sandbox");
-    const added = capturedArgs.flatMap((arg, index) => arg === "--add-dir" ? [capturedArgs[index + 1]] : []);
-    expect(added.map((entry) => path.normalize(entry))).toEqual([
-      path.resolve("C:/repos/backend"),
-      path.resolve("C:/repos/frontend"),
-    ]);
-    expect(added).not.toContain("C:/repos/docs");
+    expect(capturedArgs).not.toContain("--add-dir");
     // Prompt stays last.
     expect(capturedArgs[capturedArgs.length - 1]).toContain("do the thing");
-    expect(result.guards.enforced).toContain("pre-tool-guard");
+    expect(result.guards.enforced).not.toContain("pre-tool-guard");
   });
 });
 
@@ -541,37 +537,21 @@ describe("Codex per-run permission profile", () => {
     ]);
   });
 
-  it("builds broad-read/narrow-write config, keeps protected paths read-only, and never maps guarded full to danger-full-access", () => {
+  it("runs codex exec without a sandbox or OS permission profile, and reports the missing pre-tool guard honestly (owner decision 2026-10-03)", () => {
     const root = tmpProject();
-    const protectedDir = path.join(root, "approval-channel");
     const invocation = codexPermissionInvocationFor({
       cwd: root,
       autonomy: "full",
       guards: { writeAllow: ["**"], writeDeny: [".git/**", "contracts/**"], forbidCommands: [], exitChecks: [] },
-    }, protectedDir);
+    });
     const configs = invocation.args.flatMap((arg, index) => arg === "--config" ? [invocation.args[index + 1]] : []);
 
+    expect(invocation.args).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(invocation.args).not.toContain("--dangerously-bypass-hook-trust");
-    expect(invocation.args).not.toContain("--ignore-user-config");
-    expect(invocation.args).not.toContain("--sandbox");
-    expect(invocation.args).not.toContain("danger-full-access");
-    if (process.platform === "win32") expect(configs).toContain('windows.sandbox="elevated"');
-    expect(configs.join("\n")).toContain('":root" = "read"');
-    expect(configs.join("\n")).toContain(`${JSON.stringify(protectedDir)} = "deny"`);
-    expect(configs.join("\n")).toContain('"." = "write"');
-    expect(configs.join("\n")).toContain('".git" = "read"');
-    expect(configs.join("\n")).toContain('"contracts" = "read"');
-    expect(invocation.guards.enforced).toContain("pre-tool-guard");
-  });
-
-  it("fails closed when cwd is a read-only Target", () => {
-    const root = tmpProject();
-    expect(() => codexPermissionInvocationFor({
-      cwd: root,
-      autonomy: "edit",
-      guards: SOME_GUARDS,
-      workRoots: [{ targetId: "docs", path: root, access: "read" }],
-    })).toThrow(/bound read-only/);
+    expect(configs.join("\n")).not.toContain("windows.sandbox");
+    expect(configs.join("\n")).not.toContain("default_permissions");
+    expect(invocation.guards.enforced).not.toContain("pre-tool-guard");
+    expect(invocation.guards.unenforced).toContain("pre-tool-guard");
   });
 
   it("compiles forbidden executable basenames into strict execpolicy rules", () => {

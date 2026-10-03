@@ -1,5 +1,6 @@
 import type { ReadLedgerSummary } from "../context/largeFile.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import type { RuntimeFailureClass } from "./runtimeFailureClass.js";
 import type { SpawnSyncReturns } from "node:child_process";
 
 /**
@@ -209,10 +210,10 @@ export interface RuntimeAgentRequest {
    */
   readonly maxTurns?: number;
   /**
-   * False = run the runtime directly, the way a person runs it, without the
-   * adapter's own OS isolation wrapper; the workspace's guard hooks still
-   * apply. Absent or true = the adapter's isolation, where it has one. A direct
-   * `sta execute` run sets false; orchestrated stages never do.
+   * True = wrap the runtime in the adapter's own OS isolation, where it has one
+   * (Claude Code's TASK-031 Codex-sandbox wrapper). Absent or false = run it
+   * directly, the way a person runs it; the workspace's guard hooks still
+   * apply. Owner decision 2026-10-03: STA no longer sets true anywhere.
    */
   readonly osIsolation?: boolean;
 }
@@ -285,6 +286,15 @@ export const NO_GUARDS_REPORT: RuntimeGuardReport = Object.freeze({ enforced: []
 
 export interface RuntimeAgentResult {
   readonly status: RuntimeRunStatus;
+  /**
+   * STA Core — the adapter's normalized reading of *why* a non-OK run ended
+   * (`runtime/runtimeFailureClass.ts`). Set only from the adapter's own
+   * structured refusal detection; undefined lets `classifyRuntimeResult` map
+   * by status. Routing and health read this, never vendor text.
+   */
+  readonly failureClass?: RuntimeFailureClass;
+  /** Epoch ms the provider itself said the refusal clears, when its envelope carries one. Health uses it as the cooldown end. */
+  readonly retryAt?: number;
   readonly exitCode: number | null;
   /** The agent's final message, whatever the runtime calls that field. */
   readonly text: string;

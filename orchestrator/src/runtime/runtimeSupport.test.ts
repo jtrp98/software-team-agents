@@ -84,17 +84,17 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
 
   it("certifies only runtimes with an independently verified unattended write path", () => {
     expect(isUnattendedTargetWriteCertified("claude-code")).toBe(true);
-    expect(isUnattendedTargetWriteCertified("codex")).toBe(true);
+    // Owner decision 2026-10-03: Codex runs without its OS sandbox, so it has no pre-tool write guard.
+    expect(isUnattendedTargetWriteCertified("codex")).toBe(false);
     expect(isUnattendedTargetWriteCertified("opencode")).toBe(false);
     expect(isUnattendedTargetWriteCertified("antigravity")).toBe(false);
     expect(isUnattendedTargetWriteCertified("zcode")).toBe(false);
     expect(isUnattendedTargetWriteCertified("unregistered-runtime")).toBe(false);
     for (const id of ["opencode", "zcode"] as const) {
-      expect(RUNTIME_SUPPORT[id].claim).toMatch(/production role dispatch is refused before spawn|Target-write stages stay refused/i);
+      expect(RUNTIME_SUPPORT[id].claim).toMatch(/Target-write stages stay refused/i);
     }
-    expect(RUNTIME_SUPPORT.codex.claim).toContain("certified for unattended Target writes");
-    // V13 TASK-031: the whole-process Codex-sandbox wrapper with the OS network lock.
-    expect(RUNTIME_SUPPORT["claude-code"].claim).toContain("certified for unattended Target writes on Windows only");
+    expect(RUNTIME_SUPPORT.codex.claim).toContain("unattended Target writes are not certified");
+    expect(RUNTIME_SUPPORT["claude-code"].claim).toContain("certified for unattended Target writes through its pre-tool hooks");
     expect(RUNTIME_SUPPORT.antigravity.claim).toContain("unattended Target writes are not certified");
   });
 
@@ -103,7 +103,7 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   // collapse could change who may write Targets without anyone earning it.
   it("T-V10 (TASK-004) the workspace-lane collapse does not move the unattended certification boundary", () => {
     for (const id of RUNTIME_IDS) {
-      expect(isUnattendedTargetWriteCertified(id), id).toBe(id === "codex" || id === "claude-code");
+      expect(isUnattendedTargetWriteCertified(id), id).toBe(id === "claude-code");
     }
   });
 

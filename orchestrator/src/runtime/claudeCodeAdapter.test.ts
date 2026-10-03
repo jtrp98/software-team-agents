@@ -561,7 +561,7 @@ describe("ClaudeCodeAdapter — TASK-031 egress through the loopback allowlist p
       },
     });
 
-    const result = await adapter.executeAgent(baseRequest());
+    const result = await adapter.executeAgent(baseRequest({ osIsolation: true }));
 
     expect(result.status).toBe("OK");
     expect(requestedHosts).toEqual(["api.anthropic.com"]);
@@ -584,7 +584,7 @@ describe("ClaudeCodeAdapter — TASK-031 egress through the loopback allowlist p
       startEgressProxy: async () => { throw new Error("no port"); },
     });
 
-    const result = await adapter.executeAgent(baseRequest());
+    const result = await adapter.executeAgent(baseRequest({ osIsolation: true }));
 
     expect(spawned).toBe(false);
     expect(result.status).toBe("ERROR");
@@ -622,7 +622,7 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
           : command === "claude" ? { file: "C:/npm/claude.exe", prefixArgs: [] } : null,
     });
 
-    const result = await adapter.executeAgent(baseRequest({ role: "qa-engineer", env: { FOO: "bar" } }));
+    const result = await adapter.executeAgent(baseRequest({ role: "qa-engineer", env: { FOO: "bar" }, osIsolation: true }));
 
     expect(calls).toHaveLength(2);
     expect(calls[0].cmd).toBe("codex");
@@ -647,7 +647,7 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
       resolveCommand: () => null,
     });
 
-    const result = await adapter.executeAgent(baseRequest());
+    const result = await adapter.executeAgent(baseRequest({ osIsolation: true }));
 
     expect(calls).toHaveLength(1);
     expect(result.status).toBe("UNAVAILABLE");
@@ -667,7 +667,7 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
       },
     });
 
-    const result = await adapter.executeAgent(baseRequest());
+    const result = await adapter.executeAgent(baseRequest({ osIsolation: true }));
 
     expect(resolverCalls).toBe(0);
     expect(calls).toHaveLength(0);

@@ -118,6 +118,24 @@ stale. ไม่มีคำตอบที่ผูกกับ request ถู�
 ในไฟล์ item ไม่ใช่ authority; `roles review`/`roles approve` ถูกปฏิเสธ. โมเดลเต็มอยู่ที่
 [`knowledge/README.md`](../knowledge/README.md) § Role workspaces
 
+### STA Core — service, Web UI, work runs — คู่มือ: [`core.md`](core.md)
+
+```bash
+sta setup-machine --root C:\src [--language th|en] [--intent-provider gemini|offline] [--intent-model <id>] [--intent-key-stdin]
+                  [--commander-order a,b,..] [--engineer-order ..] [--reviewer-order ..] [--qa-order ..]
+                  [--knowledge <name>=<path>]... [--no-detect]     # idempotent
+sta start [--port <n>] · sta stop · sta core status    # background service (127.0.0.1) + Web UI
+sta work <module> [--root <name>] [--phase <n> | --task <id,...>] [--until next-gate] [--autonomy edit|full] [--text "<คำสั่ง>"]
+sta work status [<module>|<run-id>] [--root <name>] [--json]   # อ่าน core.db ตรง ใช้ได้แม้ service ไม่เปิด
+sta work pause|resume|stop <module>|<run-id> [--root <name>] [--force]
+sta work approve <module>|<run-id> --by <name> [--note <text>] · sta work send-back … --by <name> --note <text>
+sta stop <module>                                      # = sta work stop <module>; `sta stop` ไม่มี argument = หยุด service
+sta knowledge add <name> <path> [--default] | list | validate [<name>] | default <name> | remove <name> | modules <name>
+```
+
+`sta status`/`sta pause`/`sta resume <task-id>` เดิมยังเป็นคำสั่งระดับ **task** ของ engine ตามเดิม — ระดับ
+**work run** (ทั้ง module) อยู่ใต้ `sta work …` เพื่อไม่ให้ความหมายเดิมเปลี่ยน
+
 ### Install / machine config / diagnostics
 
 ```bash

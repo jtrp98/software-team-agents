@@ -30,6 +30,13 @@ export interface ClassificationInput {
   isPlanTask?: boolean;
   /** An actual production deploy or DB migration. */
   isProductionDeployOrMigration?: boolean;
+  /**
+   * A plan task declares a human gate the risk facts above do not already
+   * cover (`breaking-contract`, `business`, `design-ambiguity`,
+   * `plan-approval`, ...). plan-task-v1: "Gate enforcement remains with the
+   * existing safety kernel" — so the task needs a person's approval before Done.
+   */
+  declaresHumanGate?: boolean;
   /** Touches auth, personal data, payments, file upload, or untrusted external input. */
   touchesSensitiveArea?: boolean;
   touchesBackend?: boolean;
@@ -67,6 +74,7 @@ export const ClassificationInputSchema = z
     isNewFeatureModuleOrProject: z.boolean().optional(),
     isPlanTask: z.boolean().optional(),
     isProductionDeployOrMigration: z.boolean().optional(),
+    declaresHumanGate: z.boolean().optional(),
     touchesSensitiveArea: z.boolean().optional(),
     touchesBackend: z.boolean().optional(),
     touchesFrontend: z.boolean().optional(),
@@ -225,9 +233,9 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       ...input,
       touchesSensitiveArea: input.touchesSensitiveArea || schemaAlso,
     });
-    const requiresHumanApproval = schemaAlso || Boolean(input.isProductionDeployOrMigration);
+    const requiresHumanApproval = schemaAlso || Boolean(input.isProductionDeployOrMigration) || Boolean(input.declaresHumanGate);
     if (requiresHumanApproval) {
-      reasons.push("authored schema/deployment/migration gate — a person approves before the task is Done");
+      reasons.push("authored human gate (schema/deployment/migration/breaking-contract/business/...) — a person approves before the task is Done");
     }
     return {
       level: TaskLevel.MEDIUM,

@@ -11,6 +11,7 @@ import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
 import { verifyTaskCompletion } from "./transitionGuard.js";
+import { isRuntimeUnavailableFailure } from "./failure.js";
 import type { StageEntryGuard } from "./stageGuards.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import {
@@ -229,6 +230,48 @@ export class TaskRegistry {
     if (!task) throw new TaskNotFoundError(taskId);
     this.store.saveTask({ ...task, updatedAt: this.now?.() ?? Date.now(), paused: true });
     this.refreshStateView();
+  }
+
+  /**
+   * STA Core — lifts a BLOCKED whose only cause is that no runtime could serve
+   * the stage (every candidate quota-exhausted/unavailable). Such a stop
+   * consumed no retry round and did not move the pipeline cursor, so putting
+   * the machine back where it was re-runs the same stage once a runtime is
+   * healthy again. Anything else — a gate, a spent repair budget, a security
+   * finding, an in-flight attempt, a cancel — is refused and stays a person's.
+   */
+  releaseRuntimeUnavailableBlock(taskId: string): { released: boolean; reason: string } {
+    const task = this.store.loadTask(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    if (task.machine.current !== TaskState.BLOCKED) return { released: false, reason: "task is not BLOCKED" };
+    if (task.cancelled) return { released: false, reason: "task is cancelled" };
+    if (task.inFlightAttempt) return { released: false, reason: `attempt ${task.inFlightAttempt.idempotencyKey} has an unresolved executor outcome` };
+    if (!isRuntimeUnavailableFailure(task.lastFailure)) {
+      return { released: false, reason: "the block is not a runtime-unavailability stop; a person decides it" };
+    }
+    const history = task.machine.history;
+    const previous = history.length >= 2 ? history[history.length - 2] : undefined;
+    if (!previous || previous === TaskState.BLOCKED) return { released: false, reason: "no state to return to before the block" };
+    const at = this.now?.() ?? Date.now();
+    this.store.saveTask({
+      ...task,
+      updatedAt: at,
+      machine: { ...task.machine, current: previous, history: [...history, previous] },
+      blockedReason: null,
+      lastFailure: null,
+      recoveryDecision: null,
+    });
+    this.store.appendEvent({
+      taskId,
+      at,
+      type: "RUNTIME_BLOCK_RELEASED",
+      payload: { restoredState: previous },
+      actor: "sta-core",
+      reason: "a runtime is healthy again; the stage that no runtime could serve runs again",
+      decision: "release_runtime_block",
+    });
+    this.refreshStateView();
+    return { released: true, reason: `restored ${previous}` };
   }
 
   /** Clears a pause without otherwise touching the task — what `resume`/`retry` call before stepping it. */

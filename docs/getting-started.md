@@ -117,6 +117,18 @@ software-team-agents open            # interactive session จาก Knowledge w
 `UP_TO_DATE` (ตรงกัน) · `OUTDATED` (minor/patch ต่าง — `sync` ได้เลย) ·
 `INCOMPATIBLE` (major ต่าง — ต้องตัดสินใจเองแล้ว `sync --force`; `open` preflight จะ fail จนกว่าจะ sync)
 
+## STA Core — สั่งงานผ่าน Web UI (ทางเลือกหลักสำหรับงานยาว)
+
+```powershell
+sta setup-machine --root C:\src --language th
+sta knowledge add timetable C:\src\timetable-knowledge --default
+sta start                     # แล้วเปิด URL ที่พิมพ์ออกมา เช่น http://127.0.0.1:4317/
+```
+
+เลือก Knowledge → Module → พิมพ์ "ทำงานที่พร้อมให้หมดจน QA ผ่าน แล้วหยุดให้ฉันตรวจ" → เริ่มงาน แล้วปิด browser
+ได้ งานเดินต่อใน background และหยุดรอให้คนตรวจตอนท้าย (ไม่มี push/merge/deploy อัตโนมัติ) — คู่มือเต็มที่
+[`core.md`](core.md)
+
 ## Session แรก
 
 `software-team-agents open` เปิด interactive session **จาก Knowledge workspace** เสมอ (V10 มี lane เดียว —

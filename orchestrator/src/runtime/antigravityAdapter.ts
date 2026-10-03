@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { AGY_HOOKS_PATH } from "./bindingGenerator.js";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { classifyProviderRefusal } from "./runtimeFailureClass.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
 import type {
   ExecutorAttemptRef,
@@ -347,7 +348,7 @@ export class AntigravityAdapter implements ExecutorPort {
     }
     const refusal = envelope.error && AGY_PROVIDER_REFUSAL_FINGERPRINTS.some((p) => p.test(envelope.error!));
     if (refusal) {
-      return { status: "UNAVAILABLE", exitCode, text: "", usage, guards, diagnostics: [...diagnostics, `provider refused to serve: ${envelope.error}`], raw: envelope };
+      return { status: "UNAVAILABLE", failureClass: classifyProviderRefusal(undefined, envelope.error ?? ""), exitCode, text: "", usage, guards, diagnostics: [...diagnostics, `provider refused to serve: ${envelope.error}`], raw: envelope };
     }
 
     // A large-prompt run can return `SUCCESS` with an empty response and every

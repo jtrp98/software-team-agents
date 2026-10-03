@@ -489,9 +489,9 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
   it("excludes and refuses a Target-write runtime missing PRE_TOOL_GUARD", () => {
     const projectRoot = tmpProject();
     writeRoleFrontmatter(projectRoot, "backend-engineer", "sonnet");
-    // The certified runtime (V13 TASK-027 R14C: codex only), so the refusal is the guard gap.
+    // The certified runtime (Claude Code, owner decision 2026-10-03), so the refusal is the guard gap.
     const weak = new MockRuntimeAdapter({
-      id: "codex",
+      id: "claude-code",
       models: ["sonnet"],
       capabilities: [RuntimeCapability.NAMED_AGENTS],
     });
@@ -501,13 +501,13 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
       projectRoot,
       registry: new RuntimeRegistry([weak]),
       config: null,
-      flags: { runtime: "codex" },
-      availability: { codex: { available: true } },
+      flags: { runtime: "claude-code" },
+      availability: { "claude-code": { available: true } },
       hasTargetWrite: true,
     });
     expect(result.candidates).toEqual([]);
     expect(result.selected).toBeUndefined();
-    expect(result.error).toContain('runtime "codex"');
+    expect(result.error).toContain('runtime "claude-code"');
     expect(result.error).toContain(RuntimeCapability.PRE_TOOL_GUARD);
   });
 

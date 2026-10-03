@@ -33,6 +33,20 @@ export function validateStructuredFailure(data: unknown): StructuredFailure {
   return StructuredFailureSchema.parse(data);
 }
 
+/**
+ * STA Core — true exactly for the failure `runtime/runtimeExecutor.ts`'s `unavailableFailure` builds:
+ * a stage that stopped because no runtime could serve it, before any work was
+ * judged. It is the only BLOCKED cause `TaskRegistry.releaseRuntimeUnavailableBlock`
+ * may lift; every other block stays a person's.
+ */
+export function isRuntimeUnavailableFailure(failure: StructuredFailure | null | undefined): boolean {
+  return !!failure &&
+    failure.category === "infrastructure" &&
+    failure.owner === AgentStage.HUMAN &&
+    failure.requiresHuman &&
+    /^runtime "[^"]+" is unavailable: /.test(failure.reason);
+}
+
 /** Where a structured failure sends the task next, as decided by the orchestrator. */
 export type FailureRoute =
   /** Re-run the stage that owns it — the failure is that stage's to fix. */
