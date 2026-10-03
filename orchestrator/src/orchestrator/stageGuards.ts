@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { LaneDecisionStore } from "../gates/laneApproval.js";
 import { laneItemRefs, laneWorkspaces, loadGovernedKnowledge, uxArtifactFile } from "../roles/laneDecisions.js";
+import { staleSourcesAt } from "../knowledge/freshness.js";
 import { roleWorkflowState, workflowFor } from "../roles/roleWorkflow.js";
 import { signoffVerdict } from "../roles/roleApproval.js";
 import type { RoleLane } from "../roles/roleLane.js";
@@ -177,7 +178,7 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
     }
   }
 
-  const state = roleWorkflowState(workflow, moduleName, knowledge, workspaces, refsOf);
+  const state = roleWorkflowState(workflow, moduleName, knowledge, workspaces, refsOf, staleSourcesAt(loaded.root, now));
   if (state.stage !== "ready" || state.handoff.blockers.length > 0) {
     const detail = state.handoff.blockers.length > 0 ? `: ${state.handoff.blockers.join("; ")}` : "";
     return {

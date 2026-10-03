@@ -17,6 +17,7 @@ import {
   validateKnowledge,
 } from "./knowledgeRegistry.js";
 import { MachineConfigError, POOL_RUNTIME_IDS, saveMachineConfig, type MachineConfigInput } from "./machineConfig.js";
+import { listRunDocs, readRunDoc } from "./runDocs.js";
 import { boundedRunIds, WorkRunError } from "./workRunService.js";
 import { SETTLED_STATUSES, type WorkRun } from "./workRunStore.js";
 import { t } from "./i18n.js";
@@ -317,6 +318,17 @@ export function createCoreServer(options: ServerOptions): http.Server {
             `git -C "${target.targetRoot}" merge --ff-only ${target.runBranch}`,
           ]),
         };
+      }
+      case "GET runs/:id/docs": {
+        const run = findRun(id!);
+        const ids = (url.searchParams.get("ids") ?? "").split(",").filter((x) => /^[A-Za-z0-9._-]+$/.test(x));
+        return { docs: listRunDocs(run.knowledge.path, run.module, ids) };
+      }
+      case "GET runs/:id/doc": {
+        const run = findRun(id!);
+        const doc = readRunDoc(run.knowledge.path, run.module, url.searchParams.get("path") ?? "");
+        if (!doc) throw new HttpError(404, "no such document for this run");
+        return doc;
       }
       case "GET runs/:id/log": {
         const run = findRun(id!);

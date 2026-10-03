@@ -351,6 +351,13 @@ export type WorkspaceLookup = (lane: RoleLane) => RoleWorkspace;
 export type LaneRefsOf = (items: KnowledgeItem[]) => LaneItemRef[];
 
 /**
+ * The source locators an item was captured from that no longer hold what was read
+ * (changed or gone). Passed in so the function stays pure; the default reports
+ * none, which is the behaviour before freshness was consulted here.
+ */
+export type StaleSourcesOf = (item: KnowledgeItem) => string[];
+
+/**
  * Where the lane stands right now, worked out from `knowledge/` and the
  * receiving lane's watermark. Pure: it reads, it never writes, and calling it
  * does not advance anything — in particular it must never advance a watermark,
@@ -362,9 +369,16 @@ export function roleWorkflowState(
   kb: KnowledgeBase,
   workspaces: WorkspaceLookup,
   refsOf: LaneRefsOf,
+  staleSourcesOf: StaleSourcesOf = () => [],
 ): RoleWorkflowState {
   const owned = itemsOwnedBy(spec.lane, module, kb);
   const draft = owned.filter((i) => i.status === "draft");
+  // A draft read from text that has since changed is not worth anybody's review:
+  // reviewing it would make binding what the source no longer says.
+  const staleDrafts = draft
+    .map((item) => ({ id: item.id, sources: staleSourcesOf(item) }))
+    .filter((entry) => entry.sources.length > 0)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const reviewed = owned.filter((i) => i.status === "reviewed");
   const approved = owned.filter((i) => i.status === "approved");
   // What a sign-off would cover now: everything past draft. Lane blockers are
@@ -427,6 +441,7 @@ export function roleWorkflowState(
     stage,
     nextAction: nextActionFor(spec, stage, {
       draft,
+      staleDrafts,
       reviewed,
       approved,
       blockers,
@@ -444,6 +459,7 @@ export function roleWorkflowState(
 
 interface StageFacts {
   draft: KnowledgeItem[];
+  staleDrafts: Array<{ id: string; sources: string[] }>;
   reviewed: KnowledgeItem[];
   approved: KnowledgeItem[];
   blockers: string[];
@@ -461,7 +477,20 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
         what: `no ${spec.primaryKind} exists for this module yet — ${spec.humanGate}`,
       };
 
-    case "drafting":
+    case "drafting": {
+      if (facts.staleDrafts.length > 0) {
+        const staleIds = facts.staleDrafts.map((entry) => entry.id);
+        const fresh = ids(facts.draft).filter((id) => !staleIds.includes(id));
+        const sources = [...new Set(facts.staleDrafts.flatMap((entry) => entry.sources))].sort();
+        return {
+          actor: "agent",
+          agent: spec.leadAgent,
+          what:
+            `${staleIds.join(", ")} were captured from source that changed since (${sources.join(", ")}) — the owner (${spec.leadAgent}) ` +
+            "re-captures them from the current source before anyone reviews; reviewing them now would make binding what the source no longer says" +
+            (fresh.length > 0 ? `; ${fresh.join(", ")} are draft and current — somebody other than the owner reviews them` : ""),
+        };
+      }
       return {
         actor: "agent",
         agent: null,
@@ -469,6 +498,7 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
           `${ids(facts.draft).join(", ")} are draft — somebody other than the owner reviews them before a person can ` +
           "approve (an owner marking its own work reviewed records that nothing happened)",
       };
+    }
 
     case "blocked":
       return { actor: "human", agent: null, what: facts.blockers.join("; ") };

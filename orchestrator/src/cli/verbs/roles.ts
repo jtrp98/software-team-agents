@@ -23,6 +23,7 @@ import { describeStage, roleWorkflowState, workflowFor } from "../../roles/roleW
 import { laneView } from "../../roles/roleWorkspace.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
+import { staleSourcesAt } from "../../knowledge/freshness.js";
 import { flagValue, positionalArgs } from "../support.js";
 import { APPROVE_EXIT_ANNOUNCED, APPROVE_EXIT_NO_TRUSTED_CHANNEL, APPROVE_EXIT_REFUSED, APPROVAL_PROMPT } from "./approve.js";
 
@@ -308,7 +309,7 @@ export async function runRolesVerb(rest: string[], defaultProjectRoot: string): 
       for (const lane of ROLE_LANES) {
         const view = laneView(workspaces(lane), kb);
         const spec = workflowFor(lane);
-        const state = spec ? roleWorkflowState(spec, module, kb, workspaces, refsOf) : null;
+        const state = spec ? roleWorkflowState(spec, module, kb, workspaces, refsOf, staleSourcesAt(governed.root, now)) : null;
 
         // Two different questions, both printed: `stage` is where the lane's own
         // work has got to, `deps` is whether what it depends on moved under it.

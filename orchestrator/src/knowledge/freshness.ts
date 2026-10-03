@@ -74,6 +74,20 @@ export interface FreshnessOptions {
   targetPaths?: ReadonlyMap<string, string>;
 }
 
+/**
+ * The source locators of an item that no longer hold what was read, judged the
+ * same way `freshnessOf` does. A Target source that is not mapped on this machine
+ * is "unavailable", not changed, and is not reported — that is not evidence of drift.
+ */
+export function staleSourcesAt(knowledgeRoot: string, now: string): (item: KnowledgeItem) => string[] {
+  return (item) => {
+    const freshness = freshnessOf(item, { now, projectRoot: knowledgeRoot, knowledgeRoot });
+    return freshness.verdict === "changed" || freshness.verdict === "source-changed" || freshness.verdict === "source-missing"
+      ? [...freshness.changedSources, ...freshness.missingSources]
+      : [];
+  };
+}
+
 export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Freshness {
   const policy = options.policy ?? DEFAULT_KNOWLEDGE_POLICY;
   const threshold = freshnessThresholdFor(item.kind, policy);

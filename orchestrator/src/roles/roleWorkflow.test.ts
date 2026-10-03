@@ -118,6 +118,19 @@ describe("the BA lane workflow (T100)", () => {
     expect(state.nextAction.what).toMatch(/somebody other than the owner reviews them/);
   });
 
+  it("sends a draft captured from since-changed source back to its owner instead of asking for a review", () => {
+    const kb = new KnowledgeBase(sampleKnowledge());
+    const stale = (item: KnowledgeItem) => (item.id === "RULE-007" ? ["_docs/module/sales-crm/requirement.md#L10-L20"] : []);
+    const state = roleWorkflowStateOf(BA_WORKFLOW, "sales-crm", kb, noWatermarks, refsOf, stale);
+    expect(state.stage).toBe("drafting");
+    expect(state.nextAction.actor).toBe("agent");
+    expect(state.nextAction.agent).toBe(AgentStage.BUSINESS_ANALYST);
+    expect(state.nextAction.what).toMatch(/RULE-007 were captured from source that changed since \(_docs\/module\/sales-crm\/requirement\.md#L10-L20\)/);
+    expect(state.nextAction.what).toMatch(/re-captures them from the current source before anyone reviews/);
+    // Freshness only redirects the next move; the item is still not approved, so the handoff stays blocked.
+    expect(state.handoff.blockers).toContain("RULE-007 is not approved — the next lane must not build on knowledge nobody accepted as binding");
+  });
+
   it("hands the next move to a person once everything is reviewed — the lane sign-off makes it binding", () => {
     const state = baState(withStatus({ "RULE-007": "reviewed" }));
     expect(state.stage).toBe("awaiting-signoff");

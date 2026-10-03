@@ -30,6 +30,7 @@ const I18N = {
     "run.chat.namePlaceholder": "ชื่อผู้ตอบ", "run.chat.sendResume": "ตอบ & ทำต่อ", "run.chat.approve": "อนุมัติ",
     "run.chat.sent": "ส่งคำตอบแล้ว", "run.chat.waitingHint": "STA Agent รอการตัดสินใจจากคุณ — คลิกเพื่อเปิดดูและตอบ",
     "run.chat.quickApprove": "ยืนยันอนุมัติ", "run.chat.quickProceed": "ดำเนินการต่อ",
+    "doc.open": "เปิดเอกสาร", "doc.hide": "ซ่อนเอกสาร", "doc.close": "ปิด", "doc.title": "เอกสารประกอบ", "doc.loading": "กำลังโหลด...", "doc.none": "ไม่พบเอกสารของ module นี้", "doc.items": "รายการที่รอตรวจ", "doc.files": "ไฟล์เอกสาร",
     "run.commanderNotes": "บันทึกของ Commander", "run.reviewPassed": "Review ผ่าน", "run.qaPassed": "QA ผ่าน", "run.securityPassed": "Security ผ่าน", "run.done": "เสร็จ",
     "review.title": "ตรวจงาน", "review.status": "สถานะ", "review.tasksCompleted": "งานที่เสร็จ", "review.build": "Build / deterministic gate",
     "review.reviewFindings": "Review", "review.qaFindings": "QA", "review.viewDiff": "ดู Diff", "review.approve": "อนุมัติ", "review.sendBack": "ส่งกลับ",
@@ -72,6 +73,7 @@ const I18N = {
     "run.chat.namePlaceholder": "Your name", "run.chat.sendResume": "Reply & Resume", "run.chat.approve": "Approve",
     "run.chat.sent": "Response sent", "run.chat.waitingHint": "STA Agent is waiting for your decision — click to view and reply",
     "run.chat.quickApprove": "Approve and proceed", "run.chat.quickProceed": "Proceed with current plan",
+    "doc.open": "Open documents", "doc.hide": "Hide documents", "doc.close": "Close", "doc.title": "Documents", "doc.loading": "Loading...", "doc.none": "No documents found for this module", "doc.items": "Items awaiting review", "doc.files": "Document files",
     "run.commanderNotes": "Commander notes", "run.reviewPassed": "Review passed", "run.qaPassed": "QA passed", "run.securityPassed": "Security passed", "run.done": "Done",
     "review.title": "Review", "review.status": "Status", "review.tasksCompleted": "Tasks completed", "review.build": "Build / deterministic gate",
     "review.reviewFindings": "Review", "review.qaFindings": "QA", "review.viewDiff": "View Diff", "review.approve": "Approve", "review.sendBack": "Send Back",
@@ -312,6 +314,210 @@ function historyItems(run) {
   }));
 }
 
+/**
+ * Turns the orchestrator's raw gate text (log lines, repeated per item) into what a person
+ * needs: what is stuck, why, and what to do. Pure string work — the raw text stays one click away.
+ */
+function explainGate(reason) {
+  const en = LANG !== "th";
+  const segments = [];
+  for (const part of String(reason || "").split(" · ")) {
+    const clean = part
+      .replace(/^Target \S+: /, "").replace(/^(งานรอคนตัดสินใจ|Work is waiting for a person): /, "")
+      .replace(/^GATE: /, "").replace(/^\[orchestrator\] /, "").replace(/^\[bounded-run\]\s*/, "").trim();
+    if (clean && !/^awaiting a human decision/i.test(clean) && !segments.includes(clean)) segments.push(clean);
+  }
+  const text = segments.join(" ");
+  const blocked = /task (\S+) BLOCKED: cannot start (\S+): (\w+) lane is (\w+)/.exec(text);
+  if (!blocked) return { headline: segments[0] ? segments[0].slice(0, 240) : (en ? "Waiting for a person" : "รอคนตัดสินใจ"), steps: [], raw: reason };
+  const [, task, stage, lane, laneStage] = blocked;
+  const items = [...new Set([...text.matchAll(/\b([A-Z]{2,}-\d+) is not approved/g)].map((m) => m[1]))];
+  const list = items.join(", ");
+  const base = { raw: reason, items };
+  const moduleName = /\(module ([A-Za-z0-9._-]+)\)/.exec(text)?.[1] ?? "<module>";
+  const signoffCommand = `sta roles signoff ${lane.toLowerCase()} --module ${moduleName}`;
+  const staleMatch = /((?:[A-Z]{2,}-\d+)(?:, [A-Z]{2,}-\d+)*) were captured from source that changed since \(([^)]*)\) — the owner \(([a-z-]+)\)/.exec(text);
+  if (laneStage === "drafting" && staleMatch) {
+    const [, staleList, sources, owner] = staleMatch;
+    const files = [...new Set(sources.split(", ").map((s) => s.replace(/#.*$/, "")))].join(", ");
+    return {
+      ...base,
+      headline: en ? `${task} can't start: the ${lane} documents are out of date` : `งาน ${task} เริ่มไม่ได้: เอกสารของสาย ${lane} ไม่ตรงกับต้นฉบับปัจจุบัน`,
+      why: en
+        ? `${staleList} were copied from ${files}, which has changed since. Approving them now would make the old text binding.`
+        : `${staleList} ถูกคัดลอกมาจาก ${files} แต่ต้นฉบับถูกแก้ไปแล้ว ถ้าอนุมัติตอนนี้ ข้อความเก่าจะกลายเป็นข้อผูกพัน`,
+      needsLaneWork: true,
+      steps: en
+        ? [`1. Have ${owner} re-capture ${staleList} from the current ${files}.`, "2. Someone other than the author reviews them, then you sign off the lane:", { command: signoffCommand }, `3. Press "Resume" here.`]
+        : [`1. ให้ ${owner} capture ${staleList} ใหม่จาก ${files} ฉบับปัจจุบัน`, "2. คนที่ไม่ใช่ผู้เขียนตรวจ แล้วคุณ sign-off lane:", { command: signoffCommand }, "3. กลับมากด \"ทำต่อ\" ที่หน้านี้"],
+      raw: reason,
+    };
+  }
+  if (laneStage === "drafting") {
+    return {
+      ...base,
+      headline: en ? `${task} can't start: the ${lane} design is still a draft` : `งาน ${task} เริ่มไม่ได้: เอกสารของสาย ${lane} ยังเป็นฉบับร่าง`,
+      why: en
+        ? `${stage} must build on approved design only. ${items.length} item(s) (${list}) were written but nobody has reviewed them yet.`
+        : `${stage} ต้องทำงานตามเอกสารที่อนุมัติแล้วเท่านั้น แต่ ${items.length} รายการ (${list}) เพิ่งถูกเขียนและยังไม่มีใครตรวจ`,
+      // The Approve / Resume buttons only release this run; they never change a document's status, so they are hidden for this gate.
+      needsLaneWork: true,
+      steps: en
+        ? [
+          `1. A person other than the author reviews ${list} and marks each item "reviewed" (there is no button or command for this yet — it is a manual status edit in the Knowledge repo).`,
+          "2. Then the lane sign-off, which also makes the items binding:",
+          { command: signoffCommand },
+          `3. Press "Resume" here. The Approve button on this page does not change any document.`,
+        ]
+        : [
+          `1. คนที่ไม่ใช่ผู้เขียนตรวจ ${list} แล้วเปลี่ยน status เป็น "reviewed" ทีละรายการ (ตอนนี้ยังไม่มีปุ่มหรือคำสั่งสำหรับขั้นนี้ ต้องแก้ status เองใน Knowledge repo)`,
+          "2. จากนั้น sign-off ของ lane (ทำให้เอกสารมีผลผูกพันด้วย):",
+          { command: signoffCommand },
+          `3. กลับมากด "ทำต่อ" ที่หน้านี้ — ปุ่ม "อนุมัติ" ของหน้านี้ไม่ได้เปลี่ยนสถานะเอกสารใด ๆ`,
+        ],
+      raw: reason,
+    };
+  }
+  if (laneStage === "awaiting-signoff") {
+    return {
+      ...base,
+      headline: en ? `${task} is waiting for your sign-off on the ${lane} design` : `งาน ${task} รอคุณ sign-off เอกสารของสาย ${lane}`,
+      why: en ? `The design${list ? ` (${list})` : ""} has been reviewed. It becomes binding only after a person approves.` : `เอกสาร${list ? ` (${list})` : ""} ตรวจแล้ว แต่จะมีผลผูกพันเมื่อคนอนุมัติเท่านั้น`,
+      needsLaneWork: true,
+      steps: en
+        ? ["Read the design, then sign off the lane (this is what makes it binding):", { command: signoffCommand }, "Then press \"Resume\" here."]
+        : ["อ่านเอกสาร แล้ว sign-off lane (ขั้นนี้ทำให้เอกสารมีผลผูกพัน):", { command: signoffCommand }, "จากนั้นกด \"ทำต่อ\" ที่หน้านี้"],
+      raw: reason,
+    };
+  }
+  return {
+    ...base,
+    headline: en ? `${task} can't start ${stage}: the ${lane} lane is "${laneStage}"` : `งาน ${task} เริ่ม ${stage} ไม่ได้: สาย ${lane} อยู่ในสถานะ "${laneStage}"`,
+    steps: [],
+  };
+}
+
+function renderGateText(reason) {
+  const info = explainGate(reason);
+  const en = LANG !== "th";
+  return h("div", { class: "chat-msg-text" },
+    h("div", { class: "gate-headline" }, info.headline),
+    info.why ? h("div", { class: "gate-why" }, info.why) : null,
+    info.steps.length ? h("div", { class: "gate-steps" },
+      h("div", { class: "small muted" }, en ? "What to do" : "ต้องทำอะไร"),
+      ...info.steps.map((s) => (typeof s === "string" ? h("div", {}, s) : h("code", { class: "gate-cmd" }, s.command)))) : null,
+    h("details", { class: "gate-raw" }, h("summary", { class: "small muted" }, en ? "Technical detail" : "รายละเอียดทางเทคนิค"), h("div", { class: "small muted" }, info.raw)),
+  );
+}
+
+/** Minimal markdown → DOM (no innerHTML, links shown as text): enough to read design/requirement docs. */
+function mdInline(text) {
+  const nodes = [];
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(\[[^\]]+\]\([^)]*\))/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    const tok = m[0];
+    if (m[1]) nodes.push(h("code", {}, tok.slice(1, -1)));
+    else if (m[2]) nodes.push(h("strong", {}, tok.slice(2, -2)));
+    else if (m[3]) nodes.push(h("em", {}, tok.slice(1, -1)));
+    else nodes.push(tok.slice(1, tok.indexOf("]")));
+    last = m.index + tok.length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+function renderMarkdown(md) {
+  const lines = String(md).replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+  const isTableSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l || "");
+  const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  const listItem = /^\s*([-*+]|\d+\.)\s+/;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++;
+      out.push(h("pre", { class: "md-code" }, buf.join("\n")));
+    } else if (/^#{1,6}\s/.test(line)) {
+      const level = Math.min(line.match(/^#+/)[0].length + 1, 6);
+      out.push(h(`h${level}`, { class: "md-h" }, ...mdInline(line.replace(/^#+\s*/, ""))));
+      i++;
+    } else if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      out.push(h("hr", {}));
+      i++;
+    } else if (line.includes("|") && isTableSep(lines[i + 1])) {
+      const head = cells(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) rows.push(cells(lines[i++]));
+      out.push(h("div", { class: "md-table" }, h("table", {},
+        h("thead", {}, h("tr", {}, ...head.map((c) => h("th", {}, ...mdInline(c))))),
+        h("tbody", {}, ...rows.map((r) => h("tr", {}, ...r.map((c) => h("td", {}, ...mdInline(c)))))))));
+    } else if (/^\s*>/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+      out.push(h("blockquote", {}, ...mdInline(buf.join(" "))));
+    } else if (listItem.test(line)) {
+      const ordered = /^\s*\d+\./.test(line);
+      const items = [];
+      while (i < lines.length && listItem.test(lines[i])) items.push(lines[i++].replace(listItem, ""));
+      out.push(h(ordered ? "ol" : "ul", {}, ...items.map((t) => h("li", {}, ...mdInline(t)))));
+    } else if (!line.trim()) {
+      i++;
+    } else {
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !/^(\s*```|#{1,6}\s|\s*>)/.test(lines[i]) && !listItem.test(lines[i]) && !(lines[i].includes("|") && isTableSep(lines[i + 1]))) buf.push(lines[i++]);
+      if (buf.length === 0) buf.push(lines[i++]);
+      out.push(h("p", {}, ...mdInline(buf.join(" "))));
+    }
+  }
+  return h("div", { class: "md" }, ...out);
+}
+
+/** Survives the 4s re-render of the run page, so a document being read is never closed or scrolled away under the reader. */
+const docPanel = { runId: null, open: false, path: null, docs: null, cache: new Map() };
+
+function renderDocPanel(run, ids, rerender) {
+  const body = h("div", { class: "doc-body muted small" }, tr("doc.loading"));
+  const picker = h("select", { class: "doc-picker" });
+  const close = h("button", { type: "button", class: "link", onclick: () => { docPanel.open = false; rerender(); } }, `✕ ${tr("doc.close")}`);
+  const show = async (docPath) => {
+    docPanel.path = docPath;
+    const key = `${run.runId}:${docPath}`;
+    try {
+      if (!docPanel.cache.has(key)) docPanel.cache.set(key, await api("GET", `runs/${encodeURIComponent(run.runId)}/doc?path=${encodeURIComponent(docPath)}`));
+      body.replaceChildren(renderMarkdown(docPanel.cache.get(key).markdown));
+      body.className = "doc-body";
+    } catch (e) {
+      body.className = "doc-body muted small";
+      body.replaceChildren(String(e && e.message ? e.message : e));
+    }
+  };
+  picker.addEventListener("change", () => show(picker.value));
+  (async () => {
+    try {
+      if (!docPanel.docs || docPanel.runId !== run.runId) {
+        docPanel.docs = (await api("GET", `runs/${encodeURIComponent(run.runId)}/docs?ids=${encodeURIComponent(ids.join(","))}`)).docs;
+        docPanel.runId = run.runId;
+      }
+      const docs = docPanel.docs;
+      if (docs.length === 0) { body.replaceChildren(tr("doc.none")); return; }
+      const group = (name, list) => (list.length ? h("optgroup", { label: name }, ...list.map((d) => h("option", { value: d.path }, d.status ? `${d.label} (${d.status})` : d.label))) : null);
+      picker.replaceChildren(...[group(tr("doc.items"), docs.filter((d) => d.group === "item")), group(tr("doc.files"), docs.filter((d) => d.group === "doc"))].filter(Boolean));
+      picker.value = docs.some((d) => d.path === docPanel.path) ? docPanel.path : docs[0].path;
+      await show(picker.value);
+    } catch (e) {
+      body.replaceChildren(String(e && e.message ? e.message : e));
+    }
+  })();
+  return h("aside", { class: "doc-panel" }, h("div", { class: "doc-head" }, h("strong", {}, `📄 ${tr("doc.title")}`), close), picker, body);
+}
+
 function renderChatCard(run, gates, render) {
   const gateItems = gates.length > 0 ? gates : [{ id: "waiting", kind: "decision", at: Date.now(), reason: run.statusReason || tr("runs.waiting") }];
   
@@ -370,8 +576,10 @@ function renderChatCard(run, gates, render) {
     onclick: () => { textarea.value = text; textarea.focus(); },
   }, `+ ${text}`);
 
+  // An approval of the run would not change any document, so it is not offered while the gate is about unapproved documents.
+  const laneBlocked = gateItems.some((g) => explainGate(g.reason).needsLaneWork);
   const chips = [
-    quickChip(tr("run.chat.quickApprove")),
+    laneBlocked ? null : quickChip(tr("run.chat.quickApprove")),
     quickChip(tr("run.chat.quickProceed")),
   ];
 
@@ -382,7 +590,16 @@ function renderChatCard(run, gates, render) {
         h("div", { class: "chat-title" }, tr("run.chat.title")),
         h("div", { class: "muted small" }, tr("run.chat.prompt")),
       ),
-      h("span", { class: "pill warn", style: "margin-left: auto;" }, tr("run.chat.badge")),
+      h("button", {
+        type: "button",
+        style: "margin-left: auto;",
+        onclick: () => {
+          if (docPanel.runId !== run.runId) { docPanel.docs = null; docPanel.path = null; docPanel.runId = run.runId; }
+          docPanel.open = !docPanel.open;
+          render();
+        },
+      }, `📄 ${tr(docPanel.open ? "doc.hide" : "doc.open")}`),
+      h("span", { class: "pill warn" }, tr("run.chat.badge")),
     ),
     h("div", { class: "chat-conversation" },
       gateItems.map((g) => h("div", { class: "chat-msg-row" },
@@ -391,7 +608,7 @@ function renderChatCard(run, gates, render) {
             pill(g.kind || "gate", "warn"),
             g.at ? h("time", { class: "small muted" }, fmtTime(g.at)) : null,
           ),
-          h("div", { class: "chat-msg-text" }, g.reason),
+          renderGateText(g.reason),
         ),
       )),
     ),
@@ -405,7 +622,7 @@ function renderChatCard(run, gates, render) {
       h("div", { class: "chat-actions" },
         h("span", { class: "small muted", style: "margin-right: auto;" }, "Ctrl+Enter = " + tr("run.chat.sendResume")),
         btnResume,
-        btnApprove,
+        laneBlocked ? null : btnApprove,
       ),
     ),
   );
@@ -426,19 +643,25 @@ async function pageRun(runId) {
 
     const controls = h("div", { class: "row" },
       ["RUNNING", "QUEUED"].includes(run.status) ? h("button", { onclick: () => act(() => api("POST", `runs/${runId}/pause`), tr("run.pause")).then(render) }, tr("run.pause")) : null,
-      isWaiting ? h("button", { class: "primary btn-approve", onclick: () => act(() => api("POST", `runs/${runId}/approve`, { by: reviewerName(), note: "Approved via Web UI" }), tr("review.approved")).then(render) }, `✓ ${tr("run.approve")}`) : null,
+      isWaiting && !gates.some((g) => explainGate(g.reason).needsLaneWork) ? h("button", { class: "primary btn-approve", onclick: () => act(() => api("POST", `runs/${runId}/approve`, { by: reviewerName(), note: "Approved via Web UI" }), tr("review.approved")).then(render) }, `✓ ${tr("run.approve")}`) : null,
       ["PAUSED", "PAUSED_RUNTIME_EXHAUSTED", "WAITING_FOR_HUMAN", "STOPPED"].includes(run.status) ? h("button", { class: isWaiting ? "" : "primary", onclick: () => act(() => api("POST", `runs/${runId}/resume`), tr("run.resume")).then(render) }, tr("run.resume")) : null,
       !["STOPPED", "APPROVED", "FAILED"].includes(run.status) ? h("button", { class: "danger", onclick: () => act(() => api("POST", `runs/${runId}/stop`, {}), tr("run.stop")).then(render) }, tr("run.stop")) : null,
       ["RUNNING", "STOPPING", "PAUSING"].includes(run.status) ? h("button", { class: "danger", onclick: () => { if (confirm(tr("run.forceStop") + "?")) act(() => api("POST", `runs/${runId}/stop`, { force: true })).then(render); } }, tr("run.forceStop")) : null,
       ["READY_FOR_REVIEW", "APPROVED"].includes(run.status) ? h("a", { href: `#/review/${runId}` }, h("button", { class: "primary" }, tr("run.review"))) : null,
     );
+    // While a document is open, a poll that changed nothing must not rebuild the page: it would reset the reader's scroll and typed reply.
+    const gateKey = `${run.status}|${gates.map((g) => g.id).join(",")}|${docPanel.open}`;
+    if (docPanel.open && isWaiting && render.lastKey === gateKey) return;
+    render.lastKey = gateKey;
+    const gateIds = [...new Set(gates.flatMap((g) => explainGate(g.reason).items || []))];
     const chatCard = isWaiting ? renderChatCard(run, gates, render) : null;
+    const gateArea = chatCard && docPanel.open && docPanel.runId === runId ? h("div", { class: "split" }, chatCard, renderDocPanel(run, gateIds, render)) : chatCard;
     mount(
       h("div", { class: "row space" }, h("h1", {}, `${run.knowledge.name} / ${run.module}`), statusPill(run.status)),
       run.statusReason ? h("div", { class: `banner ${STATUS_TONE[run.status] || ""}` }, run.statusReason) : null,
       h("p", { class: "muted small" }, `${run.runId} · ${fmtDate(run.createdAt)} · ${run.intentSource}`),
       controls,
-      chatCard,
+      gateArea,
       h("div", { class: "grid grid-2" },
         h("div", { class: "card" }, h("dl", { class: "kv" },
           h("dt", {}, tr("run.knowledge")), h("dd", {}, `${run.knowledge.name} — `, h("code", {}, run.knowledge.path)),
@@ -456,7 +679,7 @@ async function pageRun(runId) {
         )),
       ),
       gates.length ? h("div", { class: "section-title" }, h("h2", {}, tr("run.gates"))) : null,
-      ...gates.map((g) => h("div", { class: "banner warn" }, `⚑ ${g.reason}`)),
+      ...gates.map((g) => h("div", { class: "banner warn" }, `⚑ ${explainGate(g.reason).headline}`)),
       h("div", { class: "section-title" }, h("h2", {}, tr("run.tasks")), h("span", { class: "count" }, String(tasks.length))),
       tasks.length === 0 ? h("div", { class: "empty small" }, tr("runs.none")) : h("div", { class: "card table-wrap" }, h("table", {},
         h("thead", {}, h("tr", {}, ["Task", "Phase", "Status", "Stage", "Runtime", ""].map((x) => h("th", {}, x)))),
