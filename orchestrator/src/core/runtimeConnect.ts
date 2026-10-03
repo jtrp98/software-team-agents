@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { resolveNpmCliScript } from "../runtime/npmCliResolver.js";
-import { RUNTIME_SUPPORT, isUnattendedTargetWriteCertified, type RuntimeId } from "../runtime/runtimeSupport.js";
+import { RUNTIME_SUPPORT, isUnattendedTargetWriteAllowed, isUnattendedTargetWriteCertified, type RuntimeId } from "../runtime/runtimeSupport.js";
 import { POOL_RUNTIME_IDS, type PoolRuntimeId } from "./machineConfig.js";
 
 /**
@@ -90,9 +90,10 @@ function authFor(runtimeId: PoolRuntimeId, runner: CommandRunner, probeReason: s
 }
 
 export function securityRolesFor(runtimeId: string): RuntimeConnectStatus["securityRoles"] & { detail: string } {
-  const writes = isUnattendedTargetWriteCertified(runtimeId);
-  const detail = writes
+  const writes = isUnattendedTargetWriteAllowed(runtimeId);
+  const detail = isUnattendedTargetWriteCertified(runtimeId)
     ? "runs directly with your own login; pre-tool hooks guard Target writes — certified for unattended Target writes"
+    : writes ? "runs directly with your own login; engineer writes are checked after the run — violations reject the attempt but are not prevented or undone"
     : "runs directly with your own login; no pre-tool write guard — STA uses it for commander, review and QA, never to write a Target";
   return { commander: true, engineer: writes, reviewer: true, qa: true, detail };
 }

@@ -148,6 +148,7 @@ const DEEP_GUARD_CHECKERS: Record<string, DeepGuardChecker> = {
 
 const GUARD_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.PRE_TOOL_GUARD,
+  RuntimeCapability.POST_RUN_WRITE_GUARD,
   RuntimeCapability.POST_TOOL_GUARD,
   RuntimeCapability.EXIT_GUARD,
   RuntimeCapability.PER_AGENT_EXIT_GUARD,

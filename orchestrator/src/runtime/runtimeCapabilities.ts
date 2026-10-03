@@ -40,6 +40,8 @@ export enum RuntimeCapability {
   MODEL_SELECTION = "model-selection",
   /** Can inspect a tool call *before* it runs and refuse it. What `writeDeny`/`forbidCommands` need to be enforcement rather than instruction. */
   PRE_TOOL_GUARD = "pre-tool-guard",
+  /** Verifies changed files against the grant after a run; detects violations without preventing their effects. */
+  POST_RUN_WRITE_GUARD = "post-run-write-guard",
   /** Can inspect a tool call after it ran. Weaker than PRE_TOOL_GUARD — it catches, it does not prevent. */
   POST_TOOL_GUARD = "post-tool-guard",
   /** Can refuse to let a run *finish* — where `exitChecks` (typecheck green, no leaked secret) are enforced. */

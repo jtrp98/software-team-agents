@@ -50,7 +50,7 @@ import {
   type RuntimeRouteFlags,
 } from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
-import { isUnattendedTargetWriteCertified } from "./runtimeSupport.js";
+import { isUnattendedTargetWriteAllowed, targetWriteGuardCapability } from "./runtimeSupport.js";
 import { reportCoreRuntimeOutcome } from "./coreRouteOverlay.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
@@ -976,15 +976,16 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 
       // A guard gap refuses; it never hops. Landing the same Target-write stage
       // on the next camp would only move an unguarded run somewhere else.
-      if (hasTargetWrite && !isUnattendedTargetWriteCertified(activeRuntime.id)) {
+      if (hasTargetWrite && !isUnattendedTargetWriteAllowed(activeRuntime.id)) {
         return finish(failResult(
           `cannot start ${role}: runtime "${activeRuntime.id}" is not certified for unattended Target writes; ` +
           `this runtime may run analysis/proposal stages only until its headless write boundary passes complete UAT and is explicitly certified`,
           declared,
         ));
       }
-      if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
-        return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
+      const writeGuard = targetWriteGuardCapability(activeRuntime.id);
+      if (hasTargetWrite && !activeRuntime.capabilities.has(writeGuard)) {
+        return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce the required ${writeGuard} for Target write access`, declared));
       }
       // V13 TASK-016 — certification alone is not enough: a governed write
       // runs only on an executor STA can resume, cancel and collect evidence
@@ -1238,9 +1239,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // next stage instead of being rediscovered.
       reportCoreRuntimeOutcome(activeRuntime.id, role, result);
 
-      if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
+      if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(writeGuard)) {
         return finish(failResult(
-          `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
+          `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm ${writeGuard} enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
           metrics,
         ));
       }

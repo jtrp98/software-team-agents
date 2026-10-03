@@ -62,8 +62,8 @@ export interface RuntimeBinding {
   readonly guardConfigPath: string | null;
   /**
    * Where guard enforcement is assembled. Most runtimes load a committed
-   * binding file; a runtime may instead build an OS-enforced policy for every
-   * invocation. The latter has no project file for capability detection to
+   * binding file; a runtime may instead assemble native permissions or
+   * post-run write checks for every invocation. The latter has no project file for capability detection to
    * inspect, so it is verified again by `RuntimeAgentResult.guards` after the
    * process returns.
    */

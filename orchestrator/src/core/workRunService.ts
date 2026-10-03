@@ -14,9 +14,11 @@ import type { RuntimeConnectStatus } from "./runtimeConnect.js";
 import { knownUnavailable } from "./runtimeConnect.js";
 import type { RuntimeHealthStore } from "./runtimeHealth.js";
 import { overlayOrderFor, selectRuntime, type RouteDecision, type RouteInputs } from "./runtimeRouter.js";
+import type { TargetGroup } from "./targetGroups.js";
 import {
   ACTIVE_STATUSES,
   newRunId,
+  type TargetRun,
   type FallbackEntry,
   type Handoff,
   type HumanGate,
@@ -66,6 +68,10 @@ export interface WorkRunServiceDeps {
   resolveKnowledge: (name: string) => { name: string; path: string };
   listModules: (knowledgePath: string) => string[];
   listTargets: (knowledgePath: string) => string[];
+  /** The module's in-scope tasks grouped by Target, in dependency order (`core/targetGroups.ts`). */
+  targetGroups: (knowledgePath: string, module: string, scope: WorkRun["scope"]) => TargetGroup[];
+  /** A Target's local checkout path in this Knowledge root, for a group that spans several Targets. */
+  targetPath: (knowledgePath: string, targetId: string) => string | null;
   healthDbPath: string;
   home?: string;
   clock?: () => number;
@@ -198,7 +204,7 @@ export class WorkRunService {
       return this.setStatus(runId, "PAUSED", "paused by a person", { pauseRequested: false, autoResumeAt: null });
     }
     if (run.status !== "RUNNING") throw new WorkRunError(`cannot pause a run in status ${run.status}`, 409);
-    if (run.boundedRunId) this.deps.tasks.pause(run.knowledge.path, run.boundedRunId);
+    for (const id of boundedRunIds(run)) this.deps.tasks.pause(run.knowledge.path, id);
     this.deps.store.appendEvent(runId, "pause", "pause requested — the current stage finishes first");
     return this.deps.store.update(runId, (r) => { r.pauseRequested = true; r.status = "PAUSING"; r.statusReason = "pause requested"; });
   }
@@ -208,10 +214,12 @@ export class WorkRunService {
     if (!(["PAUSED", "PAUSED_RUNTIME_EXHAUSTED", "WAITING_FOR_HUMAN", "STOPPED"] as WorkRunStatus[]).includes(run.status)) {
       throw new WorkRunError(`cannot resume a run in status ${run.status}`, 409);
     }
-    if (run.boundedRunId) this.deps.tasks.unpause(run.knowledge.path, run.boundedRunId);
+    for (const id of boundedRunIds(run)) this.deps.tasks.unpause(run.knowledge.path, id);
     const now = this.clock();
     this.deps.store.appendEvent(runId, "resume", "resume requested");
     return this.deps.store.update(runId, (r) => {
+      // A Target group that stopped for a person runs again (its own frozen bounded run resumes).
+      for (const group of r.targetRuns ?? []) if (group.state === "waiting" || group.state === "halted") { group.state = "running"; group.reason = null; }
       r.pauseRequested = false;
       r.stopRequested = false;
       r.autoResumeAt = null;
@@ -225,7 +233,7 @@ export class WorkRunService {
   stop(runId: string, options: { force?: boolean } = {}): WorkRun {
     const run = this.require(runId);
     if (run.status === "STOPPED") return run;
-    if (run.boundedRunId) this.deps.tasks.pause(run.knowledge.path, run.boundedRunId);
+    for (const id of boundedRunIds(run)) this.deps.tasks.pause(run.knowledge.path, id);
     const segment = run.segments.at(-1);
     const running = segment && segment.endedAt === null && segment.pid !== null && this.deps.launcher.isAlive(segment.pid);
     if (running && options.force) {
@@ -348,7 +356,13 @@ export class WorkRunService {
       return;
     }
 
-    const kind: "start" | "resume" = run.boundedRunId ? "resume" : "start";
+    run = this.ensureTargetRuns(run);
+    const group = run.targetRuns!.find((item) => item.state === "running") ?? run.targetRuns!.find((item) => item.state === "pending");
+    if (!group) {
+      await this.finalize(run.runId, null, unavailable);
+      return;
+    }
+    const kind: "start" | "resume" = group.boundedRunId ? "resume" : "start";
     const index = run.segments.length + 1;
     const overlay: CoreRouteOverlay = {
       schema_version: 1,
@@ -364,18 +378,26 @@ export class WorkRunService {
     const overlayFile = runOverlayPath(run.runId, this.deps.home);
     fs.mkdirSync(path.dirname(overlayFile), { recursive: true });
     fs.writeFileSync(overlayFile, JSON.stringify(overlay, null, 2), "utf8");
+    const gitIdentityRoot = group.targetIds.length > 1 ? this.deps.targetPath(run.knowledge.path, group.targetIds[0]!) : null;
     const args = kind === "start"
-      ? ["bounded-run", "--module", run.module, ...scopeArgs(run.scope), "--until", run.boundary, "--autonomy", run.autonomy,
+      ? ["bounded-run", "--module", run.module,
+        ...(group.taskIds.length > 0 ? ["--task", group.taskIds.join(",")] : scopeArgs(run.scope)),
+        ...group.targetIds.flatMap((targetId) => ["--target-id", targetId]),
+        ...(gitIdentityRoot ? ["--target-root", gitIdentityRoot] : []),
+        "--until", run.boundary, "--autonomy", run.autonomy,
         "--root", run.knowledge.name, "--project-root", run.knowledge.path, "--core-run", overlayFile]
-      : ["bounded-run", "--resume", run.boundedRunId!, "--module", run.module, "--autonomy", run.autonomy,
+      : ["bounded-run", "--resume", group.boundedRunId!, "--module", run.module, "--autonomy", run.autonomy,
         "--root", run.knowledge.name, "--project-root", run.knowledge.path, "--core-run", overlayFile];
     const logPath = runLogPath(run.runId, index, this.deps.home);
     const { pid } = this.deps.launcher.launch({ args, cwd: run.knowledge.path, logPath });
     const now = this.clock();
     this.deps.store.appendEvent(run.runId, "segment_start", `segment ${index} (${kind}) started, pid ${pid}`, { args });
     this.deps.store.update(run.runId, (r) => {
+      const current = r.targetRuns!.find((item) => item.key === group.key)!;
+      current.state = "running";
+      r.boundedRunId = current.boundedRunId;
       r.status = "RUNNING";
-      r.statusReason = `segment ${index} (${kind})`;
+      r.statusReason = `segment ${index} (${kind})${group.targetIds.length ? ` · Target ${group.targetIds.join(" + ")}` : ""}`;
       r.segments.push({ index, kind, startedAt: now, endedAt: null, pid, exitCode: null, outcome: null, logPath });
       for (const decision of decisions) {
         if (decision.selected) {
@@ -391,7 +413,11 @@ export class WorkRunService {
     const log = readTail(segment.logPath);
     const boundedRunId = run.boundedRunId ?? parseBoundedRunId(log);
     if (boundedRunId && !run.boundedRunId) {
-      this.deps.store.update(run.runId, (r) => { r.boundedRunId = boundedRunId; });
+      this.deps.store.update(run.runId, (r) => {
+        r.boundedRunId = boundedRunId;
+        const current = r.targetRuns?.find((item) => item.state === "running");
+        if (current && !current.boundedRunId) current.boundedRunId = boundedRunId;
+      });
       // A pause/stop asked before the run id was known applies now.
       if (run.pauseRequested || run.stopRequested) this.deps.tasks.pause(run.knowledge.path, boundedRunId);
     }
@@ -434,6 +460,8 @@ export class WorkRunService {
       segment.exitCode = exitCode;
       segment.outcome = outcome;
       if (!r.boundedRunId) r.boundedRunId = parseBoundedRunId(log);
+      const current = r.targetRuns?.find((item) => item.state === "running");
+      if (current && !current.boundedRunId) current.boundedRunId = r.boundedRunId;
     });
     this.deps.store.appendEvent(runId, "segment_end", `segment ${run.segments.at(-1)!.index} ended: exit ${exitCode ?? "none (interrupted)"}${outcome ? ` — ${outcome}` : ""}`);
     this.syncRuntimeHistory(runId);
@@ -469,24 +497,77 @@ export class WorkRunService {
     }
 
     const awaiting = awaitingLines(log);
-    const engineWaiting = exitCode === 4;
-    const boundaryReached = exitCode === 0;
-    if (machine.commander.enabled) {
-      await this.consultCommander(runId, "assess", projection, unavailable, { boundaryReached, engineWaiting });
-    }
-    if (exitCode === 0) {
-      this.deps.store.update(runId, (r) => {
-        r.humanGates.push(this.gate("review", "work reached the QA boundary — a person reviews before anything else happens"));
-        r.status = "READY_FOR_REVIEW";
-        r.statusReason = outcome ?? "completed";
-        r.completedAt = this.clock();
+    const label = (group: TargetRun | undefined) => group && group.targetIds.length ? `Target ${group.targetIds.join(" + ")}: ` : "";
+    if (exitCode === 0 || exitCode === 4) {
+      // This Target group is settled for now: done, or parked at a gate a
+      // person answers. Independent groups carry on; the run ends — ready for
+      // review or waiting for a person — once no group is left to drive.
+      const reason = exitCode === 0 ? (outcome ?? "completed") : (awaiting || outcome || "see run log");
+      let settled: TargetRun | undefined;
+      const updated = this.deps.store.update(runId, (r) => {
+        settled = r.targetRuns?.find((item) => item.state === "running");
+        if (settled) { settled.state = exitCode === 0 ? "done" : "waiting"; settled.reason = reason; }
+        if (exitCode === 4) r.humanGates.push(this.gate("engine_waiting", `${label(settled)}${t(this.language, "gate.engine_waiting", { reason })}`));
       });
+      const next = updated.targetRuns?.find((item) => item.state === "pending");
+      if (next) {
+        this.deps.store.appendEvent(runId, "target_next", `${label(settled)}${exitCode === 0 ? "done" : "waiting for a person"} — continuing with Target ${next.targetIds.join(" + ") || "(none)"}`);
+        this.setStatus(runId, "QUEUED", `${label(settled)}${exitCode === 0 ? "done" : "waiting for a person"}; next: Target ${next.targetIds.join(" + ") || "(none)"}`);
+        return;
+      }
+      await this.finalize(runId, projection, unavailable);
       return;
     }
-    if (exitCode === 4) { this.openGate(runId, "engine_waiting", t(this.language, "gate.engine_waiting", { reason: awaiting || outcome || "see run log" })); return; }
-    if (exitCode === 1) { this.openGate(runId, "engine_halted", t(this.language, "gate.engine_halted", { reason: outcome || lastLines(log) })); return; }
-    if (exitCode === 2 || exitCode === 64) { this.openGate(runId, "engine_refused", t(this.language, "gate.engine_refused", { reason: lastLines(log) })); return; }
+    this.deps.store.update(runId, (r) => {
+      const current = r.targetRuns?.find((item) => item.state === "running");
+      if (current) { current.state = "halted"; current.reason = outcome || lastLines(log); }
+    });
+    const group = this.require(runId).targetRuns?.find((item) => item.state === "halted");
+    if (exitCode === 1) { this.openGate(runId, "engine_halted", `${label(group)}${t(this.language, "gate.engine_halted", { reason: outcome || lastLines(log) })}`); return; }
+    if (exitCode === 2 || exitCode === 64) { this.openGate(runId, "engine_refused", `${label(group)}${t(this.language, "gate.engine_refused", { reason: lastLines(log) })}`); return; }
     this.setStatus(runId, "FAILED", `segment exited ${exitCode}: ${lastLines(log)}`);
+  }
+
+  /** Every Target group is settled: ask the Commander once, then stop for a person. */
+  private async finalize(runId: string, projection: BoundedRunProjection | null, unavailable: Record<string, string>): Promise<void> {
+    const run = this.require(runId);
+    const groups = run.targetRuns ?? [];
+    const waiting = groups.filter((group) => group.state === "waiting");
+    if (this.deps.machine().commander.enabled) {
+      await this.consultCommander(runId, "assess", projection, unavailable, { boundaryReached: waiting.length === 0, engineWaiting: waiting.length > 0 });
+    }
+    if (waiting.length > 0) {
+      const reason = waiting.map((group) => `Target ${group.targetIds.join(" + ") || "(none)"}: ${group.reason ?? "waiting"}`).join(" · ");
+      this.deps.store.appendEvent(runId, "human_gate", reason, { kind: "engine_waiting" });
+      this.deps.store.update(runId, (r) => { r.status = "WAITING_FOR_HUMAN"; r.statusReason = t(this.language, "gate.engine_waiting", { reason }); });
+      return;
+    }
+    this.deps.store.update(runId, (r) => {
+      r.humanGates.push(this.gate("review", "work reached the QA boundary — a person reviews before anything else happens"));
+      r.status = "READY_FOR_REVIEW";
+      r.statusReason = groups.length > 1 ? `every Target done (${groups.map((group) => group.targetIds.join(" + ") || "(none)").join(", ")})` : (groups[0]?.reason ?? "completed");
+      r.completedAt = this.clock();
+    });
+  }
+
+  /** Splits the run into Target groups on first launch; a run that started before the split keeps its one bounded run. */
+  private ensureTargetRuns(run: WorkRun): WorkRun {
+    if (run.targetRuns && run.targetRuns.length > 0) return run;
+    let groups: TargetGroup[] = [];
+    if (!run.boundedRunId) {
+      try {
+        groups = this.deps.targetGroups(run.knowledge.path, run.module, run.scope);
+      } catch {
+        groups = [];
+      }
+    }
+    const targetRuns: TargetRun[] = groups.length > 0
+      ? groups.map((group) => ({ key: group.key, targetIds: group.targetIds, taskIds: group.taskIds, boundedRunId: null, state: "pending", reason: null }))
+      : [{ key: "", targetIds: [], taskIds: [], boundedRunId: run.boundedRunId, state: run.boundedRunId ? "running" : "pending", reason: null }];
+    if (groups.length > 1) {
+      this.deps.store.appendEvent(run.runId, "target_split", `split into ${groups.length} bounded runs by Target: ${groups.map((group) => `${group.targetIds.join(" + ") || "(none)"} [${group.taskIds.join(",")}]`).join(" → ")}`);
+    }
+    return this.deps.store.update(run.runId, (r) => { r.targetRuns = targetRuns; });
   }
 
   /** Commander turn with failover. Returns false when the run must not proceed now. */
@@ -548,25 +629,51 @@ export class WorkRunService {
 
   async refreshSnapshot(runId: string, force: boolean): Promise<BoundedRunProjection | null> {
     const run = this.require(runId);
-    if (!run.boundedRunId) return null;
+    const ids = boundedRunIds(run);
+    if (ids.length === 0) return null;
     const last = this.lastSnapshotAt.get(runId) ?? 0;
     if (!force && this.clock() - last < 15_000) return null;
     this.lastSnapshotAt.set(runId, this.clock());
-    let projection: BoundedRunProjection | null = null;
-    try {
-      projection = this.deps.project(run.knowledge.path, run.boundedRunId);
-    } catch {
-      return null; // the engine holds the database right now; next tick reads it
+    const projections: BoundedRunProjection[] = [];
+    for (const id of ids) {
+      try {
+        const projection = this.deps.project(run.knowledge.path, id);
+        if (projection) projections.push(projection);
+      } catch {
+        return null; // the engine holds the database right now; next tick reads it
+      }
     }
-    if (!projection) return null;
-    let changed: ChangedFile[] = [];
-    try {
-      changed = await this.deps.changedFiles(projection);
-    } catch { /* no branch yet */ }
+    if (projections.length === 0) return null;
+    const current = projections.find((projection) => projection.runId === run.boundedRunId) ?? projections.at(-1)!;
+    const prefix = projections.length > 1;
+    const changed: ChangedFile[] = [];
+    for (const projection of projections) {
+      try {
+        for (const file of await this.deps.changedFiles(projection)) changed.push(prefix ? { ...file, path: `${projection.targetId}: ${file.path}` } : file);
+      } catch { /* no branch yet */ }
+    }
+    const verification = projections.reduce((sum, projection) => ({
+      reviewPassed: sum.reviewPassed + projection.verification.reviewPassed,
+      qaPassed: sum.qaPassed + projection.verification.qaPassed,
+      securityPassed: sum.securityPassed + projection.verification.securityPassed,
+      checkpointed: sum.checkpointed + projection.verification.checkpointed,
+      done: sum.done + projection.verification.done,
+      total: sum.total + projection.verification.total,
+    }), { reviewPassed: 0, qaPassed: 0, securityPassed: 0, checkpointed: 0, done: 0, total: 0 });
     this.deps.store.update(runId, (r) => {
-      r.snapshot = { ...projection, changedFiles: changed, at: this.clock() } as unknown as Record<string, unknown>;
+      r.snapshot = {
+        ...current,
+        tasks: projections.flatMap((projection) => projection.tasks),
+        verification,
+        targets: projections.map((projection) => ({
+          boundedRunId: projection.runId, status: projection.status, targetId: projection.targetId, targetRoot: projection.targetRoot,
+          baseBranch: projection.baseBranch, baseSha: projection.baseSha, runBranch: projection.runBranch,
+        })),
+        changedFiles: changed,
+        at: this.clock(),
+      } as unknown as Record<string, unknown>;
     });
-    return projection;
+    return current;
   }
 
   /** Folds the children's health events for this run into runtime history, workers and fallbacks. */
@@ -702,6 +809,12 @@ function canonical(p: string): string {
 
 function safeProject(project: WorkRunServiceDeps["project"], knowledgePath: string, boundedRunId: string): BoundedRunProjection | null {
   try { return project(knowledgePath, boundedRunId); } catch { return null; }
+}
+
+/** Every bounded run this work run drives (one per Target group), current first. */
+export function boundedRunIds(run: Pick<WorkRun, "boundedRunId" | "targetRuns">): string[] {
+  const ids = [run.boundedRunId, ...(run.targetRuns ?? []).map((group) => group.boundedRunId)].filter((id): id is string => typeof id === "string");
+  return [...new Set(ids)];
 }
 
 export function scopeArgs(scope: WorkRun["scope"]): string[] {

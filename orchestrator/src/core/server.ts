@@ -17,7 +17,7 @@ import {
   validateKnowledge,
 } from "./knowledgeRegistry.js";
 import { MachineConfigError, POOL_RUNTIME_IDS, saveMachineConfig, type MachineConfigInput } from "./machineConfig.js";
-import { WorkRunError } from "./workRunService.js";
+import { boundedRunIds, WorkRunError } from "./workRunService.js";
 import { SETTLED_STATUSES, type WorkRun } from "./workRunStore.js";
 import { t } from "./i18n.js";
 
@@ -284,22 +284,35 @@ export function createCoreServer(options: ServerOptions): http.Server {
       }
       case "GET runs/:id/diff": {
         const run = findRun(id!);
-        if (!run.boundedRunId) return { diff: "", truncated: false, note: "no work has been frozen yet" };
-        const projection = projectBoundedRun(run.knowledge.path, run.boundedRunId);
-        if (!projection) return { diff: "", truncated: false, note: "the bounded run is not readable yet" };
-        return diffOfRun(projection);
+        const ids = boundedRunIds(run);
+        if (ids.length === 0) return { diff: "", truncated: false, note: "no work has been frozen yet" };
+        const parts: string[] = [];
+        let truncated = false;
+        for (const boundedRunId of ids) {
+          const projection = projectBoundedRun(run.knowledge.path, boundedRunId);
+          if (!projection) continue;
+          const one = await diffOfRun(projection);
+          truncated ||= one.truncated;
+          parts.push(ids.length > 1 ? `### Target ${projection.targetId} (${projection.baseBranch}..${projection.runBranch})\n${one.diff}` : one.diff);
+        }
+        if (parts.length === 0) return { diff: "", truncated: false, note: "the bounded run is not readable yet" };
+        return { diff: parts.join("\n"), truncated };
       }
       case "GET runs/:id/prepare-commit": {
         const run = findRun(id!);
-        const snapshot = run.snapshot as { baseBranch?: string; runBranch?: string; targetRoot?: string } | null;
+        const snapshot = run.snapshot as { targets?: Array<{ targetId: string; baseBranch?: string; runBranch?: string; targetRoot?: string }> } | null;
+        const targets = snapshot?.targets ?? [];
         return {
           note: language === "th"
             ? "STA ไม่ push / merge / deploy เอง — คำสั่งด้านล่างให้คนรันเองหลังตรวจแล้ว (checkpoint commits อยู่บน run branch แล้ว)"
             : "STA never pushes, merges or deploys — a person runs these after review (the checkpoint commits are already on the run branch)",
-          targetRoot: snapshot?.targetRoot ?? null,
-          commands: snapshot?.runBranch && snapshot.baseBranch
-            ? [`git -C "${snapshot.targetRoot}" log --oneline ${snapshot.baseBranch}..${snapshot.runBranch}`, `git -C "${snapshot.targetRoot}" switch ${snapshot.baseBranch}`, `git -C "${snapshot.targetRoot}" merge --ff-only ${snapshot.runBranch}`]
-            : [],
+          targetRoots: targets.map((target) => target.targetRoot ?? null),
+          commands: targets.filter((target) => target.runBranch && target.baseBranch).flatMap((target) => [
+            `# Target ${target.targetId}`,
+            `git -C "${target.targetRoot}" log --oneline ${target.baseBranch}..${target.runBranch}`,
+            `git -C "${target.targetRoot}" switch ${target.baseBranch}`,
+            `git -C "${target.targetRoot}" merge --ff-only ${target.runBranch}`,
+          ]),
         };
       }
       case "GET runs/:id/log": {

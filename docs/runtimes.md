@@ -31,7 +31,7 @@ Guard coverage per runtime คือ verdict เดียวกับที่ `
 | Runtime | สถานะ | Guard coverage |
 |---|---|---|
 | **Claude Code** | ✅ **Supported** — headless run รัน `claude` ตรง ๆ แบบที่คนรัน (login ของผู้ใช้เอง ไม่มี Codex-sandbox wrapper — owner decision 2026-10-03); hooks ใน `.claude/settings.json` บังคับ universal floor, ห้าม git และ path permissions ของ contract ก่อนทุก tool call; certified for unattended Target writes ผ่าน pre-tool hooks; wrapper TASK-031 เหลือไว้เฉพาะ caller ที่ขอ `osIsolation: true` เอง | **headless enforced (hooks)** — PreToolUse hooks + write-scope check หลัง run; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
-| **Codex** | ✅ **Supported** — interactive และ headless adapter verify บน Codex 0.154.0/0.155.1/0.160.0; headless `codex exec` รัน**ไม่มี** Windows elevated sandbox และไม่มี OS permission profile (`--dangerously-bypass-approvals-and-sandbox` — owner decision 2026-10-03) อ่าน/เขียนไฟล์ปกติ; git ถูก execpolicy ปฏิเสธ, เขียนนอก grant ถูกจับหลัง run; **unattended Target writes ไม่ certified** — ใช้กับ analysis / review / QA, routing ข้ามสำหรับ stage ที่เขียน Target | **post-run** — ไม่มี pre-tool write guard ฝั่ง headless; `.codex/hooks.json` เป็น compatibility payload ของ interactive เท่านั้น; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
+| **Codex** | ✅ **Supported** — interactive และ headless adapter verify บน Codex 0.154.0/0.155.1/0.160.0; headless `codex exec` รัน**ไม่มี** Windows elevated sandbox และไม่มี OS permission profile (`--dangerously-bypass-approvals-and-sandbox` — owner decision 2026-10-03) อ่าน/เขียนไฟล์ปกติ; git ถูก execpolicy ปฏิเสธ; รองรับ backend/frontend engineer ผ่าน **post-run write guard** แยกจาก pre-tool certification — ถ้า snapshot ไม่มีหรือเขียนผิด grant จะคืน ERROR | **post-run** — ไม่มี pre-tool write guard ฝั่ง headless; `.codex/hooks.json` เป็น compatibility payload ของ interactive เท่านั้น; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
 | **OpenCode** | 🧪 **Experimental** — plugin/adapter เคย verify แล้ว; unattended Target writes ไม่ certified (Target-write stage refuse); automatic routing ต้อง opt-in `routing.allow_below_supported` | **partial** — plugin บังคับ guard บางส่วน |
 | **Antigravity** | ✅ **Supported** — ติดตั้ง PreToolUse hook ระดับเครื่องด้วย `software-team-agents install-antigravity-hook` (ชี้ `~/.gemini/config/hooks.json` ไป `.agents/hooks/sta-guard.js` ของ workspace แบบ absolute path); ใน interactive session (`software-team-agents open --runtime antigravity`) บังคับ universal floor, บล็อกเขียนนอก workspace และ contract path permissions แบบ fail-closed deny; owner decision 2026-10-03 ยกเลิก a1 OS approval-isolation preflight — production dispatch ของ analysis / review / QA ทำได้; unattended Target writes ไม่ certified | **partial (machine hook)** — PreToolUse deny บังคับ path permissions ใน-band |
 | **ZCode Desktop** | 🧪 **Experimental** — desktop role-play และ headless adapter เคย verify แล้ว; unattended Target writes ยัง refuse; automatic routing ต้อง opt-in `routing.allow_below_supported` | **partial** — project hooks และ post-run check |
@@ -48,13 +48,17 @@ interactive ไม่ certified**: tool calls ใน Desktop/CLI อาจไม
 `.codex/hooks.json` เป็น compatibility payload เท่านั้น การ trust hooks หรือออก
 `sta grant issue` ไม่เปลี่ยน Codex interactive ให้เป็น path ที่ enforced
 
-งานเขียนจาก Codex controller ส่งผ่าน executor ที่บังคับ per-run native permission profile จริง:
+งานเขียนจาก Codex controller ส่งผ่าน headless executor ที่ตรวจ scope หลังรัน:
 
 ```powershell
-sta execute --runtime codex --task "<bounded task>" --workspace "<resolved Target root>" --write --role <role>
+sta execute --runtime codex --task "<bounded task>" --workspace "<Knowledge root>" --role <role> --writable-target <target-id>
 ```
 
 สิทธิ์มาจาก packet และ role contract ต่อ run; human gates/refusal ยังมีผลตามเดิม
+Codex engineer ใช้ snapshot ก่อน/หลังรันตรวจไฟล์ใน Target และตรวจ Knowledge workspace ว่ายัง read-only;
+attempt ledger บันทึก `pre_tool_guard: false` และ capability `post-run-write-guard` ตามจริง
+การตรวจนี้ไม่ป้องกันหรือย้อนการเขียน และตรวจได้เฉพาะไฟล์ที่ Git-based snapshot เห็นใน repository ที่กำหนด
+(ไฟล์ ignored และไฟล์นอก roots ตรวจไม่ครอบคลุม) interactive ยัง unguarded เช่นเดิม
 ใช้ `sta run --runtime codex --task-id <id> --module <module>` เมื่อเป็นงาน pipeline
 ดู [Execution model](execution.md) สำหรับผลลัพธ์/approval ของ executor
 `software-team-agents open --runtime codex` ที่ preflight ปฏิเสธยังต้องรายงานตามจริง;
@@ -115,8 +119,8 @@ Copy-Item -LiteralPath $staPromptSource -Destination $staPromptDestination
 ## Unattended runs
 
 การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` — default (`propose`) ติด permission prompt
-ที่ไม่มีคนกดใน headless run สิทธิ์เขียน Target แบบ unattended เป็นของ runtime ที่ได้รับ certification
-(ดูตาราง — หลัง V13 TASK-027 a1 และ TASK-031 เหลือ Codex headless adapter และ Claude Code headless ภายใต้ Codex sandbox บน Windows; runtime อื่นหยุด production role dispatch)
+ที่ไม่มีคนกดใน headless run งานเขียน Target ใช้ Claude Code ที่มี pre-tool certification
+หรือ Codex ที่มี post-run write guard ตามตาราง; runtime อื่นยังใช้กับ analysis/review/QA ตามสถานะของแต่ละตัว
 
 ### ตรวจสถานะ login ก่อน run ยาว
 
@@ -164,7 +168,8 @@ Tier/requested values/winner basis ใน route log — รายละเอี
 [`tier-and-effort-run.md`](tier-and-effort-run.md)
 
 candidate ต้อง registered + available + มี capability ที่ stage ต้องใช้ (Target-write stage ต้องมี
-`PRE_TOOL_GUARD`; `business-analyst` ต้องมี `INTERACTIVE_PROMPTS`) — ขาด capability ถูกตัดออกเสมอ;
+`PRE_TOOL_GUARD` หรือ `POST_RUN_WRITE_GUARD` สำหรับ Codex ที่อนุญาตไว้ชัดเจน;
+`business-analyst` ต้องมี `INTERACTIVE_PROMPTS`) — ขาด capability ถูกตัดออกเสมอ;
 ถ้าเป็น candidate เดียวจะ **refuse** พร้อมเหตุผล
 
 ### Fallback semantics

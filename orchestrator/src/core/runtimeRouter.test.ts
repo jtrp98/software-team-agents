@@ -50,18 +50,28 @@ describe("STA Core runtime router", () => {
     expect(none.recoverAt).not.toBeNull();
   });
 
-  it("an uncertified runtime is skipped for the engineer — fallback never downgrades the write boundary", () => {
+  it("Claude quota falls back to Codex engineer with its admitted post-run write guard", () => {
     health.recordFailure({ runtimeId: "claude-code", failureClass: "QUOTA_EXHAUSTED", reason: "q" });
     const decision = selectRuntime("engineer", { config, health: snapshot() });
-    expect(decision.selected).toBeUndefined();
-    expect(decision.attempts.filter((a) => a.reason.startsWith("SECURITY")).map((a) => a.runtimeId)).toEqual(["codex", "antigravity", "zcode"]);
+    expect(decision.selected).toBe("codex");
+    expect(decision.attempts.map((a) => a.runtimeId)).toEqual(["codex"]);
     // Exhausted by quota, not by security alone: the run pauses and comes back.
     expect(decision.recoverable).toBe(true);
-    expect(securityEligibility("codex", "engineer").eligible).toBe(false);
+    expect(securityEligibility("codex", "engineer").eligible).toBe(true);
     expect(securityEligibility("claude-code", "engineer").eligible).toBe(true);
     // Non-writing roles have no certification requirement.
     expect(securityEligibility("antigravity", "qa").eligible).toBe(true);
     expect(securityEligibility("zcode", "commander").eligible).toBe(true);
+  });
+
+  it("Codex quota falls back to Claude engineer; when both are down the run pauses", () => {
+    health.recordFailure({ runtimeId: "codex", failureClass: "QUOTA_EXHAUSTED", reason: "q" });
+    expect(selectRuntime("engineer", { config, health: snapshot() }).selected).toBe("claude-code");
+    health.recordFailure({ runtimeId: "claude-code", failureClass: "QUOTA_EXHAUSTED", reason: "q" });
+    const decision = selectRuntime("engineer", { config, health: snapshot() });
+    expect(decision.selected).toBeUndefined();
+    expect(decision.recoverable).toBe(true);
+    expect(decision.attempts.filter((a) => a.reason.startsWith("SECURITY")).map((a) => a.runtimeId)).toEqual(["antigravity", "zcode"]);
   });
 
   it("a pool with only uncertified runtimes for the engineer is not recoverable by waiting", () => {

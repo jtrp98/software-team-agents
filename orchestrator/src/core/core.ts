@@ -8,6 +8,7 @@ import { openCoreDb } from "./coreDb.js";
 import { corePaths, type CorePaths } from "./corePaths.js";
 import { changedFilesOfRun, projectBoundedRun } from "./engineProjection.js";
 import { listKnowledge, listModules, resolveKnowledge } from "./knowledgeRegistry.js";
+import { planTargetGroups } from "./targetGroups.js";
 import { loadMachineConfig, type MachineConfig } from "./machineConfig.js";
 import { childEnvironment, childProcessCommanderInvoker, productionSegmentLauncher, staCliEntry, type SegmentLauncher } from "./processes.js";
 import type { CommanderInvoker } from "./commander.js";
@@ -15,7 +16,7 @@ import type { RuntimeConnectStatus } from "./runtimeConnect.js";
 import { RuntimeHealthStore } from "./runtimeHealth.js";
 import { classifyRuntimeResult } from "../runtime/runtimeFailureClass.js";
 import { SecretStore } from "./secretStore.js";
-import { WorkRunService, type TaskControl } from "./workRunService.js";
+import { WorkRunService, type TaskControl, type WorkRunServiceDeps } from "./workRunService.js";
 import { WorkRunStore } from "./workRunStore.js";
 
 /**
@@ -52,6 +53,8 @@ export interface OpenCoreOptions {
   commander?: CommanderInvoker;
   tasks?: TaskControl;
   clock?: () => number;
+  /** Test seam for Target grouping; production reads the module's plan.md. */
+  targetGroups?: WorkRunServiceDeps["targetGroups"];
   /** Test seam for runtime detection; production spawns `sta core detect-runtimes`. */
   detectRuntimes?: () => Promise<RuntimeConnectStatus[]>;
   secrets?: SecretStore;
@@ -141,6 +144,11 @@ export function openCore(options: OpenCoreOptions = {}): StaCore {
     listTargets: (knowledgePath) => {
       const found = listKnowledge({ configPath: paths.installationConfig }).find((entry) => path.resolve(entry.path) === path.resolve(knowledgePath));
       return found?.targets.map((target) => target.targetId) ?? [];
+    },
+    targetGroups: options.targetGroups ?? planTargetGroups,
+    targetPath: (knowledgePath, targetId) => {
+      const found = listKnowledge({ configPath: paths.installationConfig }).find((entry) => path.resolve(entry.path) === path.resolve(knowledgePath));
+      return found?.targets.find((target) => target.targetId === targetId)?.localPath ?? null;
     },
     healthDbPath: paths.database,
     home: paths.home,

@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isUnattendedTargetWriteCertified, RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
+import { isUnattendedTargetWriteAllowed, isUnattendedTargetWriteCertified, targetWriteGuardCapability, RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
+import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { antigravityCoverageWithHooks, codexCoverageWithHooks, opencodeCoverageWithPlugin, zcodeCoverageWithSyncedPayload } from "../targetcli/guardSettings.js";
 
 /**
@@ -36,6 +37,13 @@ function runtimeDocRow(id: keyof typeof RUNTIME_SUPPORT): string | undefined {
 }
 
 describe("runtimeSupport — the single source of truth for support claims (T-V1-04)", () => {
+  it("admits only Codex's post-run write path without raising its pre-tool certification", () => {
+    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteAllowed)).toEqual(["claude-code", "codex"]);
+    expect(isUnattendedTargetWriteCertified("codex")).toBe(false);
+    expect(targetWriteGuardCapability("codex")).toBe(RuntimeCapability.POST_RUN_WRITE_GUARD);
+    expect(targetWriteGuardCapability("claude-code")).toBe(RuntimeCapability.PRE_TOOL_GUARD);
+    for (const id of ["unknown", "constructor", "toString", "__proto__"]) expect(isUnattendedTargetWriteAllowed(id)).toBe(false);
+  });
   it("covers exactly the runtimes `--runtime` accepts, so CLI and claims cannot name different sets", () => {
     expect(RUNTIME_IDS).toEqual(["claude-code", "codex", "opencode", "antigravity", "zcode"]);
     expect(Object.keys(RUNTIME_SUPPORT).sort()).toEqual([...RUNTIME_IDS].sort());

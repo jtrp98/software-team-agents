@@ -1,6 +1,6 @@
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import type { RuntimeCapabilityReport } from "../runtime/runtimeCapabilityDetection.js";
-import { isUnattendedTargetWriteCertified, RUNTIME_SUPPORT, type RuntimeId } from "../runtime/runtimeSupport.js";
+import { isUnattendedTargetWriteAllowed, targetWriteGuardCapability, RUNTIME_SUPPORT, type RuntimeId } from "../runtime/runtimeSupport.js";
 import type { RuntimeAgentRequest } from "../runtime/runtimeAdapter.js";
 import type { AgentStage } from "../types.js";
 import {
@@ -108,7 +108,7 @@ export function freezeAttempt(input: FreezeAttemptInput): LedgerAttempt {
   }
   // V13 TASK-016 — the certification record is its own gate: a supported
   // label never implies certified governed writes.
-  if (support && input.targetWrite && !isUnattendedTargetWriteCertified(input.observed.runtime)) {
+  if (support && input.targetWrite && !isUnattendedTargetWriteAllowed(input.observed.runtime)) {
     reasons.push(`runtime "${input.observed.runtime}" is not certified for unattended Target writes`);
   }
   if (!input.availability) {
@@ -128,8 +128,10 @@ export function freezeAttempt(input: FreezeAttemptInput): LedgerAttempt {
     );
   }
   if (input.targetWrite) {
-    if (!verified.has(RuntimeCapability.PRE_TOOL_GUARD)) {
-      reasons.push(`a Target-writing attempt requires a verified pre-tool guard; "${input.observed.runtime}" has none`);
+    const writeGuard = targetWriteGuardCapability(input.observed.runtime);
+    if (!verified.has(writeGuard)) {
+      const name = writeGuard === RuntimeCapability.PRE_TOOL_GUARD ? "pre-tool guard" : "post-run write guard";
+      reasons.push(`a Target-writing attempt requires a verified ${name}; "${input.observed.runtime}" has none`);
     }
     if (input.writableRoots.length !== 1) {
       reasons.push(`a Target-writing attempt requires exactly one writable root, resolved ${input.writableRoots.length}`);

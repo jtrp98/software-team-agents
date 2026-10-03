@@ -4,6 +4,8 @@ import type { LedgerAttempt, LedgerRun, RunLedger } from "../ledger/runLedger.js
 import { TERMINAL_RUN_STATUSES } from "../ledger/vocabulary.js";
 import type { DeterministicVerification } from "../qa/deterministic.js";
 import type { RuntimeAgentResult } from "../runtime/runtimeAdapter.js";
+import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import { usesPostRunTargetWriteGuard } from "../runtime/runtimeSupport.js";
 import {
   acquireWorkspaceRunLock,
   releaseWorkspaceRunLock,
@@ -69,7 +71,9 @@ function assertTargetAttempt(run: LedgerRun, attempt: LedgerAttempt, ledger: Run
   if (attempt.run_id !== run.run_id) failures.push(`attempt belongs to run ${attempt.run_id}`);
   if (!TARGET_WRITERS.has(attempt.stage)) failures.push(`stage ${attempt.stage} is analysis/proposal-only and may not open a Git mutation boundary`);
   if (!attempt.guard_evidence.target_write) failures.push("attempt was frozen as analysis/proposal-only");
-  if (!attempt.guard_evidence.pre_tool_guard) failures.push("attempt has no verified pre-tool guard");
+  if (usesPostRunTargetWriteGuard(attempt.observed.runtime)) {
+    if (!attempt.capability_evidence.some((check) => check.capability === RuntimeCapability.POST_RUN_WRITE_GUARD && check.verified)) failures.push("attempt has no verified post-run write guard");
+  } else if (!attempt.guard_evidence.pre_tool_guard) failures.push("attempt has no verified pre-tool guard");
   if (attempt.guard_evidence.writable_roots.length !== 1) failures.push(`attempt resolved ${attempt.guard_evidence.writable_roots.length} writable roots`);
   if (attempt.guard_evidence.writable_roots.length === 1 && canonical(attempt.guard_evidence.writable_roots[0]!) !== canonical(run.target_root)) {
     failures.push(`attempt writable root does not equal frozen Target root ${run.target_root}`);

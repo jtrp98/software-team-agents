@@ -6,8 +6,10 @@ import { roleEnv } from "../runtime/runtimeAdapter.js";
 import { serializeGuardTargetWorkRoots, targetStackPathRules } from "../agents/pathPermissions.js";
 import { resolveWritableTargetWorkRoots, WritableTargetRequestError } from "../targetcli/roleWorkspace.js";
 import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
-import { executorPortFor } from "../runtime/executorPort.js";
-import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import { executorPortFor, isExecutorPort } from "../runtime/executorPort.js";
+import { EXECUTOR_LIFECYCLE_CAPABILITIES, RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import { usesPostRunTargetWriteGuard } from "../runtime/runtimeSupport.js";
+import { captureExitCheckBaseline, runExitChecks } from "../runtime/exitCheckRunner.js";
 import {
   guardsFor,
   PolicyRefusal,
@@ -378,6 +380,10 @@ export function createSta(options: StaOptions): Sta {
     run.updatedAt = now();
     store.save(run);
 
+    let guards = guardsFor(run.permissions);
+    if (run.permissions.write && usesPostRunTargetWriteGuard(adapter.id) && ["backend-engineer", "frontend-engineer"].includes(run.role ?? "")) {
+      guards = { ...guards, exitChecks: ["code-green", "no-hardcoded-secret"] };
+    }
     const request: RuntimeAgentRequest = {
       // The attempt identity is the run and attempt number, so two runs of the
       // same task — or a resumed one — are never the same executor attempt.
@@ -392,7 +398,7 @@ export function createSta(options: StaOptions): Sta {
       ...(run.model ? { model: run.model, modelExplicit: true } : {}),
       ...(run.effort ? { effort: run.effort } : {}),
       autonomy: run.permissions.autonomy,
-      guards: guardsFor(run.permissions),
+      guards,
       env: runEnv(run, store),
       ...(run.limits.timeoutMs ? { timeoutMs: run.limits.timeoutMs } : {}),
       // Same runaway-turn ceiling as an orchestrated stage (runtime/turnLimits.ts).
@@ -401,8 +407,28 @@ export function createSta(options: StaOptions): Sta {
 
     let result: RuntimeAgentResult;
     try {
+      const postRunWrites = run.permissions.write && usesPostRunTargetWriteGuard(adapter.id) && !adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD);
+      const baseline = postRunWrites && request.guards.exitChecks.length > 0
+        ? await captureExitCheckBaseline(run.workRoots?.length ? run.workRoots.map((root) => root.path) : [run.workspace])
+        : undefined;
       const port = executorPortFor(adapter);
       result = await port.execute(await port.prepare(request));
+      if (postRunWrites && result.status === "OK" && !result.guards.enforced.includes(RuntimeCapability.POST_RUN_WRITE_GUARD)) {
+        result = { ...result, status: "ERROR", diagnostics: [...result.diagnostics, "required post-run write guard was not confirmed"] };
+      }
+      if (baseline && result.status === "OK") {
+        const checks = await runExitChecks(baseline, request.guards.exitChecks);
+        result = {
+          ...result,
+          status: checks.ok ? "OK" : "ERROR",
+          diagnostics: [...result.diagnostics, ...checks.results.map((check) => `${check.check}: ${check.status} — ${check.diagnostic}`)],
+          guards: checks.ok ? {
+            ...result.guards,
+            enforced: [...new Set([...result.guards.enforced, RuntimeCapability.EXIT_GUARD])],
+            unenforced: result.guards.unenforced.filter((capability) => capability !== RuntimeCapability.EXIT_GUARD),
+          } : result.guards,
+        };
+      }
     } catch (e) {
       // Adapters are contracted not to throw; one that does still fails only this run.
       run.status = "failed";
@@ -512,7 +538,10 @@ export function createSta(options: StaOptions): Sta {
       return refused(request, parent, "max_depth_exceeded", `run depth ${depth} exceeds max_depth ${limits.maxDepth}`);
     }
     if (permissions.write && !adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
-      return refused(request, parent, "write_guard_unavailable", `runtime "${adapter.id}" cannot enforce write bounds before a tool runs; grant it read-only or pick a runtime that can`);
+      const postRunExecutor = usesPostRunTargetWriteGuard(adapter.id) &&
+        adapter.capabilities.has(RuntimeCapability.POST_RUN_WRITE_GUARD) && isExecutorPort(adapter) &&
+        EXECUTOR_LIFECYCLE_CAPABILITIES.every((capability) => adapter.capabilities.has(capability));
+      if (!postRunExecutor) return refused(request, parent, "write_guard_unavailable", `runtime "${adapter.id}" cannot enforce write bounds before a tool runs and has no admitted post-run write guard; grant it read-only or pick a runtime that can`);
     }
 
     const at = now();

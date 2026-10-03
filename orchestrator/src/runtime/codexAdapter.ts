@@ -9,6 +9,8 @@ import { classifyProviderRefusal, type RuntimeFailureClass } from "./runtimeFail
 import { resolveNpmCliScript as resolveNpmCliScriptImpl, type CommandResolver } from "./npmCliResolver.js";
 import { canonicalPath, permissionPathsFor, tomlString } from "./permissionPaths.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
+import { verifyPostRunWrites } from "./postRunWriteGuard.js";
+import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 import type {
   ExecutorAttemptRef,
   ExecutorCancelOutcome,
@@ -107,23 +109,17 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  * designed against, written to prove the interface is not Claude-Code-shaped
  * in disguise.
  *
- * **HEADLESS WRITES USE A PER-RUN NATIVE POLICY — INTERACTIVE CODEX DOES NOT.**
- *
- * V12 UAT exercised the invocation surfaces against real Codex CLI 0.154.0 and
- * 0.155.1 installs. The adapter now compiles every guarded headless run into a
- * custom native permission profile: broad read access except an OS-enforced
- * approval-channel deny, packet-scoped writes, protected framework metadata,
- * no network, an isolated execpolicy, and OS
- * deny rules for resolved forbidden executables such as Git. This is
- * intentionally the same host-native
- * security posture as the Claude adapter, not a container boundary.
+ * Headless runs have no OS sandbox or pre-tool write enforcement. The executor
+ * lifecycle checks changed files against the grant and rejects unknown or
+ * out-of-scope writes after the run. This detects violations inside the
+ * snapshotted repositories; it cannot prevent or undo writes, inspect arbitrary
+ * external paths, or detect files ignored by the Git-based snapshots.
  *
  * WHAT IS REASONABLY CONFIDENT
  * - `codex exec "<prompt>"` runs one non-interactive turn and exits — the shape
  *   `executeAgent` needs (a single request in, a single result out).
- * - Guarded writes use a custom permission profile rather than the legacy
- *   `--sandbox` modes. `codex exec` is non-interactive, so the adapter passes
- *   `approval_policy="never"` through `--config`.
+ * - Runs use `--dangerously-bypass-approvals-and-sandbox` and an isolated
+ *   execpolicy that refuses git. Scope and exit checks are evaluated after the run.
  * - `AGENTS.md` (and a project `.codex/config.toml`) are Codex's project-level,
  *   committed configuration — the `PROJECT_LEVEL_BINDING` capability is claimed
  *   on that basis alone, not on any guard mechanism.
@@ -140,8 +136,7 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  * - `POST_TOOL_GUARD` / `EXIT_GUARD` / `PER_AGENT_EXIT_GUARD` — V12 UAT proved
  *   project hooks need a trust bypass, a crashing hook fails open, and Stop did
  *   not fire under `codex exec`. The adapter does not trust those hooks. It
- *   claims `PRE_TOOL_GUARD` only for the native permission/execpolicy boundary
- *   assembled by this adapter for the exact run; provider-neutral exit checks
+ *   does not claim `PRE_TOOL_GUARD`; provider-neutral exit checks
  *   remain the runner's responsibility.
  * - `STRUCTURED_RESULT` — real-install UAT pinned the JSONL + output-schema
  *   round trip, so the normalised structured result is now a declared
@@ -167,6 +162,7 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  */
 
 const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
+  RuntimeCapability.POST_RUN_WRITE_GUARD,
   RuntimeCapability.MODEL_SELECTION,
   RuntimeCapability.PROJECT_LEVEL_BINDING,
   RuntimeCapability.STRUCTURED_RESULT,
@@ -343,8 +339,8 @@ function prepareCodexRunHome(
  * person runs it — no Windows elevated sandbox, no per-run OS permission
  * profile — so it reads and writes files normally. Without that OS boundary
  * nothing enforces a write scope *before* a tool runs, so the guard report says
- * so honestly (PRE_TOOL_GUARD unenforced): routing keeps Codex off
- * Target-writing stages, the provider-neutral post-run write-scope check still
+ * so honestly (PRE_TOOL_GUARD unenforced): engineer stages use the
+ * post-run write guard, and the provider-neutral post-run write-scope check still
  * turns any write outside the grant into ERROR, and the isolated execpolicy
  * still refuses git.
  */
@@ -414,11 +410,10 @@ export class CodexAdapter implements ExecutorPort {
     // selector is documented (see header).
     dir: ".codex",
     definitionPath: (role) => `.codex/agents/${role}.toml`,
-    // Project hooks remain intentionally untrusted, and since the owner
-    // decision of 2026-10-03 no per-run OS profile is compiled either: `null`
-    // with no per-run enforcement says honestly that nothing guards a write
-    // before the tool runs (writes are checked after the run instead).
+    // Project hooks remain untrusted. The lifecycle assembles post-run write
+    // checks per request; PRE_TOOL_GUARD remains unclaimed.
     guardConfigPath: null,
+    guardEnforcement: "per-run",
   };
   readonly capabilities: ReadonlySet<RuntimeCapability> = new Set(CODEX_CAPABILITIES);
   readonly models: ReadonlySet<string>;
@@ -447,7 +442,28 @@ export class CodexAdapter implements ExecutorPort {
     this.inheritCodexAuth = opts.spawnSync === undefined;
     // No `sessionRefFrom`: no session id has been verified in the `codex exec
     // --json` event stream, so evidence records none rather than inventing one.
-    this.lifecycle = new SingleShotLifecycle(this.id, { run: (req) => this.executeAgent(req), journalRoot: opts.journalRoot });
+    this.lifecycle = new SingleShotLifecycle(this.id, {
+      run: (req) => this.runWithKnowledgeCheck(req),
+      verifyRun: verifyPostRunWrites,
+      postRunWriteGuard: true,
+      journalRoot: opts.journalRoot,
+    });
+  }
+
+  /** Target runs also snapshot their separate, read-only Knowledge workspace. */
+  private async runWithKnowledgeCheck(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
+    const knowledgeRoot = req.knowledgeRoot ?? req.cwd;
+    if (!req.workRoots?.length || req.workRoots.some((root) => path.resolve(root.path) === path.resolve(knowledgeRoot))) return this.executeAgent(req);
+    try {
+      const before = await captureChangeSetFingerprint(knowledgeRoot);
+      const result = await this.executeAgent(req);
+      const after = await captureChangeSetFingerprint(knowledgeRoot);
+      const changed = [...new Set([...Object.keys(before.files), ...Object.keys(after.files)])].filter((file) => before.files[file] !== after.files[file]);
+      const violations = verifyPostRunWrites({ ...req, cwd: knowledgeRoot, workRoots: undefined, autonomy: "read-only" }, changed);
+      return violations.length > 0 ? { ...result, status: "ERROR", diagnostics: [...result.diagnostics, ...violations] } : result;
+    } catch (error) {
+      return { status: "ERROR", exitCode: null, text: "", usage: {}, guards: guardReport(false, req.guards.exitChecks.length > 0, true), diagnostics: [`Knowledge workspace snapshot unavailable: ${String(error)}`] };
+    }
   }
 
   // V13 TASK-014 — the lifecycle port, delegating to the shared single-shot

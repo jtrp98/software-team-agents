@@ -14,6 +14,8 @@ import type { SegmentLauncher, SegmentLaunchSpec } from "./processes.js";
 import { RuntimeHealthStore } from "./runtimeHealth.js";
 import { WorkRunError, WorkRunService, type TaskControl } from "./workRunService.js";
 import { WorkRunStore, type WorkRun } from "./workRunStore.js";
+import { groupTasksByTarget, type TargetGroup } from "./targetGroups.js";
+import type { PlanTask } from "../docs/planTask.js";
 
 type CommanderReply = Pick<RuntimeAgentResult, "status" | "text" | "failureClass" | "retryAt" | "diagnostics">;
 
@@ -63,6 +65,7 @@ interface Harness {
   knowledge: Map<string, string>;
   modules: Map<string, string[]>;
   projections: Map<string, BoundedRunProjection>;
+  groups: { value: TargetGroup[] };
   home: string;
   db: SqliteDatabase;
   now: { value: number };
@@ -102,6 +105,7 @@ function makeHarness(base: string, eligibility?: () => { eligible: boolean }, ho
   const knowledge = new Map<string, string>();
   const modules = new Map<string, string[]>();
   const projections = new Map<string, BoundedRunProjection>();
+  const groups = { value: [] as TargetGroup[] };
   const build = () => new WorkRunService({
     store, health, launcher, commander,
     machine: () => config.value,
@@ -116,12 +120,14 @@ function makeHarness(base: string, eligibility?: () => { eligible: boolean }, ho
     },
     listModules: (p) => modules.get(p) ?? [],
     listTargets: () => ["timetable-api"],
+    targetGroups: () => groups.value,
+    targetPath: (_k, targetId) => `C:/src/${targetId}`,
     healthDbPath: path.join(home, "core", "core.db"),
     home,
     clock,
     ...(eligibility ? { eligibility } : {}),
   });
-  const harness: Harness = { service: build(), store, health, launcher, commander, tasks, knowledge, modules, projections, home, db, now, config, rebuild: () => build() };
+  const harness: Harness = { service: build(), store, health, launcher, commander, tasks, knowledge, modules, projections, groups, home, db, now, config, rebuild: () => build() };
   return harness;
 }
 
@@ -187,8 +193,8 @@ describe("STA Core work runs", () => {
     const stored = h.store.get(run.runId)!;
     expect(stored.status).toBe("RUNNING");
     expect(stored.commander.current).toBe("claude-code");
-    // Engineer: the only certified Target writer. QA: first in its configured order.
-    expect(stored.workers).toEqual({ engineer: "claude-code", reviewer: "claude-code", qa: "antigravity" });
+    // Engineer and QA follow their configured orders; Codex checks writes after the run.
+    expect(stored.workers).toEqual({ engineer: "codex", reviewer: "claude-code", qa: "antigravity" });
   });
 
   it("a completed segment stops for human review — never past it", async () => {
@@ -253,13 +259,11 @@ describe("STA Core work runs", () => {
     expect(stored.fallbacks[0]).toMatchObject({ role: "commander", from: "claude-code", to: "codex", failureClass: "QUOTA_EXHAUSTED" });
     expect(stored.handoffs[0]).toMatchObject({ knowledge_root: "timetable", knowledge_path: timetable, module: "timetableai", role: "commander", previous_runtime: "claude-code", next_runtime: "codex", failure: { class: "QUOTA_EXHAUSTED" } });
     expect(h.health.isUsable("claude-code")).toBe(false);
-    // Claude Code is the only certified Target writer: with its quota spent the
-    // engineer has no runtime, so the run pauses (recoverable), never fails.
-    expect(stored.status).toBe("PAUSED_RUNTIME_EXHAUSTED");
-    expect(stored.humanGates.at(-1)!.reason).toMatch(/engineer/);
-    expect(h.launcher.launches).toHaveLength(0);
-    // When the cooldown ends the commander turn is not repeated; the run launches.
-    h.now.value = stored.autoResumeAt! + 1;
+    // Codex can also engineer, so Claude's cooldown does not pause the worker route.
+    expect(stored.status).toBe("RUNNING");
+    expect(stored.workers.engineer).toBe("codex");
+    expect(h.launcher.launches).toHaveLength(1);
+    // Another tick does not repeat the commander turn.
     await h.service.tick();
     expect(h.store.get(run.runId)!.status).toBe("RUNNING");
     expect(h.commander.calls.map((c) => c.runtimeId)).toEqual(["claude-code", "codex"]);
@@ -418,5 +422,112 @@ describe("segment log parsing", () => {
     expect(parseBoundedRunId("[bounded-run] resuming run r-9: status=HALTED")).toBe("r-9");
     expect(parseOutcome(log)).toMatch(/^GATE: schema approval/);
     expect(parseLiveProgress(log)).toEqual({ stage: "reviewer", task: "T-1" });
+  });
+});
+
+describe("one bounded run per Target", () => {
+  const plan = (rows: Array<[string, string[], string[]]>, extra: Partial<PlanTask> = {}) =>
+    rows.map(([id, targets, dependsOn], index) => ({ id, targets, dependsOn, phase: 1, ...extra, order: index }) as unknown as PlanTask);
+
+  it("groups tasks by Target and orders a group after the groups it depends on", () => {
+    const groups = groupTasksByTarget(plan([
+      ["FE-1", ["web"], ["BE-1"]],
+      ["BE-1", ["api"], []],
+      ["BE-2", ["api"], []],
+      ["FE-2", ["web"], []],
+    ]), { kind: "all" });
+    expect(groups.map((group) => [group.key, group.taskIds])).toEqual([["api", ["BE-1", "BE-2"]], ["web", ["FE-1", "FE-2"]]]);
+  });
+
+  it("respects the run scope and keeps a multi-Target task in its own group", () => {
+    const groups = groupTasksByTarget(plan([
+      ["BE-1", ["api"], []],
+      ["X-1", ["web", "api"], []],
+      ["BE-9", ["api"], []],
+    ]), { kind: "tasks", taskIds: ["BE-1", "X-1"] });
+    expect(groups.map((group) => group.key)).toEqual(["api", "api+web"]);
+  });
+});
+
+describe("STA Core work runs across two Targets", () => {
+  let base: string;
+  let h: Harness;
+  let knowledgePath: string;
+  beforeEach(() => {
+    base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "sta-targets-")));
+    knowledgePath = path.join(base, "schoolbright-knowledge");
+    fs.mkdirSync(knowledgePath);
+    h = makeHarness(base);
+    h.knowledge.set("schoolbright", knowledgePath);
+    h.modules.set(knowledgePath, ["timetableai"]);
+    h.config.value = parseMachineConfig({ workspace: { allowed_roots: [base] }, commander: { enabled: false } });
+    h.groups.value = [
+      { key: "sb-api", targetIds: ["sb-api"], taskIds: ["BE-008", "BE-009"] },
+      { key: "sb-web", targetIds: ["sb-web"], taskIds: ["FE-019", "FE-020"] },
+    ];
+  });
+  afterEach(() => {
+    h.db.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+  const create = () => h.service.create({ knowledge: "schoolbright", module: "timetableai", commandText: "ทำงาน", intent: intent("schoolbright", "timetableai"), intentSource: "cli", overrides: [] });
+  const finishWith = async (runId: string, boundedRunId: string, exitCode: number, verdict: string) => {
+    fs.appendFileSync(h.launcher.launches.at(-1)!.logPath, `[bounded-run] froze run ${boundedRunId}: x
+[bounded-run] ${verdict}
+`);
+    h.launcher.finish(h.home, runId, exitCode, "");
+    await h.service.tick();
+  };
+
+  it("never asks for --target-root: it runs one bounded run per Target, backend first, then stops for review", async () => {
+    const run = create();
+    await h.service.tick();
+    expect(h.launcher.launches[0]!.args).toEqual(expect.arrayContaining(["--task", "BE-008,BE-009", "--target-id", "sb-api"]));
+    expect(h.launcher.launches[0]!.args).not.toContain("--target-root");
+    expect(h.launcher.launches[0]!.args).not.toContain("--all");
+    await finishWith(run.runId, "run-api", 0, "COMPLETED: done");
+    expect(h.store.get(run.runId)!.status).toBe("QUEUED");
+    await h.service.tick();
+    expect(h.launcher.launches[1]!.args).toEqual(expect.arrayContaining(["--task", "FE-019,FE-020", "--target-id", "sb-web"]));
+    await finishWith(run.runId, "run-web", 0, "COMPLETED: done");
+    const done = h.store.get(run.runId)!;
+    expect(done.status).toBe("READY_FOR_REVIEW");
+    expect(done.targetRuns!.map((group) => [group.key, group.boundedRunId, group.state])).toEqual([["sb-api", "run-api", "done"], ["sb-web", "run-web", "done"]]);
+  });
+
+  it("a Target parked at a human gate does not hold the other Target back; resume picks the parked one up", async () => {
+    const run = create();
+    await h.service.tick();
+    await finishWith(run.runId, "run-api", 4, "GATE: breaking-contract approval");
+    await h.service.tick();
+    await finishWith(run.runId, "run-web", 0, "COMPLETED: done");
+    let stored = h.store.get(run.runId)!;
+    expect(stored.status).toBe("WAITING_FOR_HUMAN");
+    expect(stored.statusReason).toMatch(/sb-api/);
+    h.service.resume(run.runId);
+    expect(h.tasks.unpaused).toEqual(expect.arrayContaining(["run-api", "run-web"]));
+    await h.service.tick();
+    expect(h.launcher.launches.at(-1)!.args.slice(0, 3)).toEqual(["bounded-run", "--resume", "run-api"]);
+    await finishWith(run.runId, "run-api", 0, "COMPLETED: done");
+    stored = h.store.get(run.runId)!;
+    expect(stored.status).toBe("READY_FOR_REVIEW");
+  });
+
+  it("a multi-Target group names its git-identity root itself", async () => {
+    h.groups.value = [{ key: "sb-api+sb-web", targetIds: ["sb-api", "sb-web"], taskIds: ["X-1"] }];
+    create();
+    await h.service.tick();
+    expect(h.launcher.launches[0]!.args).toEqual(expect.arrayContaining(["--target-id", "sb-api", "--target-id", "sb-web", "--target-root", "C:/src/sb-api"]));
+  });
+
+  it("pause reaches every Target's bounded run", async () => {
+    const run = create();
+    await h.service.tick();
+    await finishWith(run.runId, "run-api", 0, "COMPLETED: done");
+    await h.service.tick();
+    fs.appendFileSync(h.launcher.launches.at(-1)!.logPath, "[bounded-run] froze run run-web: x\n");
+    await h.service.tick();
+    h.service.pause(run.runId);
+    expect(h.tasks.paused).toEqual(expect.arrayContaining(["run-api", "run-web"]));
   });
 });

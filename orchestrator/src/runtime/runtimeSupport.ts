@@ -22,6 +22,7 @@
  */
 
 import { antigravityCoverageWithHooks, codexCoverageWithHooks, opencodeCoverageWithPlugin, zcodeCoverageWithSyncedPayload } from "../targetcli/guardSettings.js";
+import { RuntimeCapability } from "./runtimeCapabilities.js";
 
 export type RuntimeSupportLevel = "supported" | "preview" | "experimental" | "unsupported";
 
@@ -40,6 +41,8 @@ export interface RuntimeSupport {
   level: RuntimeSupportLevel;
   /** Independently certified headless write path; deliberately not inferred from the broader support label. */
   unattendedTargetWrites: boolean;
+  /** Explicitly admitted weaker write path; never implies pre-tool certification. */
+  postRunTargetWrites?: boolean;
   /** What the level means for a user of this runtime, in one line. */
   claim: string;
 }
@@ -59,11 +62,12 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   codex: {
     level: "supported",
     unattendedTargetWrites: false,
+    postRunTargetWrites: true,
     claim:
       `interactive sessions and the headless adapter are verified on real Codex 0.154.0/0.155.1/0.160.0 installs, including JSONL, output-schema and cached-token normalisation. ` +
       `Interactive guard coverage (once synced): ${codexCoverageWithHooks().detail}. ` +
       `Owner decision 2026-10-03: headless \`codex exec\` runs without the Windows elevated sandbox or any per-run OS permission profile (\`--dangerously-bypass-approvals-and-sandbox\`), so it reads and writes files normally; git stays refused by the isolated execpolicy, writes outside the grant are refused after the run by the provider-neutral write-scope check, and exit checks run through the provider-neutral ExitCheckRunner. ` +
-      `With no pre-tool write guard, unattended Target writes are not certified: Codex serves analysis, review and QA stages and routing skips it for Target-writing stages. ` +
+      `With no pre-tool write guard, unattended Target writes are not certified. Codex may serve engineer stages through its post-run write guard: missing snapshots or out-of-scope writes reject the attempt, but this check cannot prevent or undo the writes. ` +
       `V10 does not change this status`,
   },
   opencode: {
@@ -104,7 +108,20 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
  * its interactive surface remains preview (Codex), or vice versa.
  */
 export function isUnattendedTargetWriteCertified(runtimeId: string): boolean {
-  return runtimeId in RUNTIME_SUPPORT && RUNTIME_SUPPORT[runtimeId as RuntimeId].unattendedTargetWrites;
+  return Object.prototype.hasOwnProperty.call(RUNTIME_SUPPORT, runtimeId) && RUNTIME_SUPPORT[runtimeId as RuntimeId].unattendedTargetWrites;
+}
+
+/** Write eligibility is distinct from pre-tool certification. Unknown runtimes stay refused. */
+export function isUnattendedTargetWriteAllowed(runtimeId: string): boolean {
+  return isUnattendedTargetWriteCertified(runtimeId) || usesPostRunTargetWriteGuard(runtimeId);
+}
+
+export function usesPostRunTargetWriteGuard(runtimeId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(RUNTIME_SUPPORT, runtimeId) && RUNTIME_SUPPORT[runtimeId as RuntimeId].postRunTargetWrites === true;
+}
+
+export function targetWriteGuardCapability(runtimeId: string): RuntimeCapability {
+  return usesPostRunTargetWriteGuard(runtimeId) ? RuntimeCapability.POST_RUN_WRITE_GUARD : RuntimeCapability.PRE_TOOL_GUARD;
 }
 
 /** One line per runtime, registry order preserved — the shape both `sta runtimes` and the README table render. */

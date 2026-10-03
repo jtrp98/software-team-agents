@@ -203,6 +203,20 @@ describe("TASK-016 — selection requires certification, capability and availabi
 });
 
 describe("TASK-016 — the executor gate and the per-attempt version pin", () => {
+  it.each([true, false])("dispatches Codex Target writes only when the result confirms the post-run guard: %s", async (confirmed) => {
+    const root = project();
+    const runtime = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"], respond: () => okResult({ guards: { enforced: confirmed ? [RuntimeCapability.POST_RUN_WRITE_GUARD] : [], unenforced: [RuntimeCapability.PRE_TOOL_GUARD] } }) });
+    const result = await createRuntimeExecutor({
+      runtime, projectRoot: root, moduleName: () => "sales-crm", guards: () => ({ ...NO_GUARDS, writeAllow: ["src/**"] }),
+      registry: new RuntimeRegistry([runtime]), packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: ["src/**"], moduleName: "sales-crm" }),
+      frozenAttempt: frozen({ requested: { runtime: "codex", model: "sonnet", effort: "high" }, observed: { runtime: "codex", model: "sonnet", effort: "high" }, guard_evidence: { target_write: true, pre_tool_guard: false, writable_roots: [root] } }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe(confirmed ? "PASS" : "FAIL");
+    expect(runtime.requests).toHaveLength(1);
+    if (confirmed) expect(result.postflightGuard?.ok).toBe(true);
+    else expect(result.outcome.failure_reason).toMatch(/did not confirm post-run-write-guard/);
+  });
   it("refuses a frozen governed write on a certified runtime that is no governed executor", async () => {
     const root = project();
     const weak = bareRunner("claude-code");

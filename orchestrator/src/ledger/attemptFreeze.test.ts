@@ -96,6 +96,18 @@ afterEach(() => {
 });
 
 describe("T-V8-018 — an attempt cannot start without a complete, supported, evidenced route", () => {
+  it("freezes a Codex engineer with verified post-run scope evidence and records pre-tool guard as false", () => {
+    const report = capabilityReport({ runtimeId: "codex", checks: [
+      { capability: RuntimeCapability.MODEL_SELECTION, claimed: true, verified: true },
+      { capability: RuntimeCapability.POST_RUN_WRITE_GUARD, claimed: true, verified: true },
+      { capability: RuntimeCapability.PRE_TOOL_GUARD, claimed: false, verified: false },
+    ] });
+    const input = freezeInput({ observed: { runtime: "codex", model: "gpt-5.5" }, capabilityReport: report });
+    const attempt = freezeAttempt(input);
+    expect(attempt.guard_evidence.pre_tool_guard).toBe(false);
+    expect(attempt.capability_evidence).toContainEqual({ capability: RuntimeCapability.POST_RUN_WRITE_GUARD, verified: true, detail: null });
+    expect(() => freezeAttempt({ ...input, attempt: 2, capabilityReport: { ...report, checks: report.checks.filter((check) => check.capability !== RuntimeCapability.POST_RUN_WRITE_GUARD) } })).toThrow(/requires a verified post-run write guard/);
+  });
   it("persists requested and observed route, Tier basis, adapter/config version, capability and guard evidence, and the packet", () => {
     const attempt = freezeAttempt(freezeInput());
     expect(attempt.attempt_id).toBe(attemptId(runId, "BE-004", AgentStage.BACKEND_ENGINEER, 1));

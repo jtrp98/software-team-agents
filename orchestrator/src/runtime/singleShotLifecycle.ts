@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
+import { RuntimeCapability } from "./runtimeCapabilities.js";
 import {
   deterministicAttemptId,
   ExecutorPortRefusalError,
@@ -118,6 +119,8 @@ export interface SingleShotLifecycleOptions {
    * own report can never be the reason an attempt counts as a success.
    */
   readonly verifyRun?: (req: RuntimeAgentRequest, changedFiles: readonly string[] | undefined) => readonly string[];
+  /** Only an adapter with a real verifyRun may confirm the post-run write guard. */
+  readonly postRunWriteGuard?: boolean;
 }
 
 export class SingleShotLifecycle {
@@ -125,11 +128,13 @@ export class SingleShotLifecycle {
   private readonly sessionRefFrom?: (result: RuntimeAgentResult) => string | undefined;
   private readonly journalDir: string;
   private readonly verifyRun?: (req: RuntimeAgentRequest, changedFiles: readonly string[] | undefined) => readonly string[];
+  private readonly postRunWriteGuard: boolean;
 
   constructor(readonly runtimeId: string, options: SingleShotLifecycleOptions) {
     this.run = options.run;
     this.sessionRefFrom = options.sessionRefFrom;
     this.verifyRun = options.verifyRun;
+    this.postRunWriteGuard = options.postRunWriteGuard === true;
     this.journalDir = options.journalRoot ?? path.join(os.tmpdir(), "sta-executor-attempts", runtimeId);
   }
 
@@ -263,7 +268,9 @@ export class SingleShotLifecycle {
     const before = await this.snapshot(roots, record, `before ${verb}`);
     let result: RuntimeAgentResult;
     try {
-      result = await this.run(record.request);
+      result = this.postRunWriteGuard && record.request.autonomy !== "read-only" && before === null
+        ? { status: "ERROR", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [RuntimeCapability.POST_RUN_WRITE_GUARD] }, diagnostics: ["post-run write guard baseline unavailable; no process started"] }
+        : await this.run(record.request);
     } catch (error) {
       // The adapter's run is contracted never to throw; if it does anyway the
       // attempt still gets a durable, honest record instead of vanishing.
@@ -291,6 +298,16 @@ export class SingleShotLifecycle {
     if (violations.length > 0) {
       record.logs.push(...violations.map((violation) => `post-run verification failed: ${violation}`));
       if (result.status === "OK") result = { ...result, status: "ERROR", diagnostics: [...result.diagnostics, ...violations] };
+    }
+    if (this.postRunWriteGuard && this.verifyRun && record.changed_files !== undefined) {
+      result = {
+        ...result,
+        guards: {
+          ...result.guards,
+          enforced: [...new Set([...result.guards.enforced, RuntimeCapability.POST_RUN_WRITE_GUARD])],
+          unenforced: result.guards.unenforced.filter((capability) => capability !== RuntimeCapability.POST_RUN_WRITE_GUARD),
+        },
+      };
     }
     record.result = result;
     record.logs.push(`run ${verb}: status ${result.status}, exit ${result.exitCode ?? "unknown"}`);

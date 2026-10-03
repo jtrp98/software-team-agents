@@ -139,13 +139,13 @@ profile) กฎ a1 ที่บังคับ OS sandbox ถูกยกเล�
 | runtime | pre-tool write guard | unattended Target write | บทบาทที่ STA ใช้ |
 |---|---|---|---|
 | Claude Code | ✅ hooks ใน `.claude/settings.json` | ✅ | Commander · Engineer · Reviewer · QA |
-| Codex | ❌ (ไม่มี sandbox) | ❌ | Commander · Reviewer · QA |
+| Codex | ❌ (ไม่มี sandbox) | ✅ ตรวจขอบเขตหลัง run | Commander · Engineer · Reviewer · QA |
 | AGY | partial (machine hook) | ❌ | Commander · Reviewer · QA |
 | ZCode | partial (project hooks) | ❌ | Commander · Reviewer · QA (experimental — automatic routing ต้อง opt-in `routing.allow_below_supported`) |
 
-Engineer จึงเป็น Claude Code เท่านั้น: ถ้า Claude Code quota หมด งานเขียนโค้ดจะ `PAUSED_RUNTIME_EXHAUSTED`
-จนกว่าจะกลับมา (ส่วน Commander/Reviewer/QA ยังสลับไปตัวอื่นได้) runtime ที่ไม่ certified ถูกข้ามสำหรับ
-Engineer พร้อมเหตุผล `SECURITY: ... is not certified for unattended Target writes` — ไม่ถูกรันโดยลดการป้องกัน
+Engineer เลือก Codex หรือ Claude Code ตามลำดับใน `roles.engineer.order`: Codex ตรวจ scope หลังรัน
+ส่วน Claude Code มี hooks ก่อนเรียก tool ถ้าทั้งคู่ใช้ไม่ได้ งานจะ `PAUSED_RUNTIME_EXHAUSTED`
+AGY/ZCode ยังถูกข้ามสำหรับ Engineer พร้อมเหตุผล `SECURITY: ... is not certified for unattended Target writes`
 
 ## 7. Intent API
 
@@ -262,7 +262,7 @@ Core ใช้เป็นบันทึกและเป็น context ขอ
 
 ```text
 Claude Commander ── QUOTA_EXHAUSTED ──► Codex Commander
-Claude Code Engineer (Codex/AGY/ZCode ถูกข้ามสำหรับ Engineer — ไม่ certified เขียน Target)
+Codex Engineer ── QUOTA_EXHAUSTED ──► Claude Code Engineer (AGY/ZCode ยังถูกข้ามสำหรับ Engineer)
 Claude Code Reviewer
 AGY QA ── QUOTA_EXHAUSTED ──► ZCode QA
 ทุก task QA ผ่าน ─► READY FOR HUMAN REVIEW   (push/merge/deploy: ยังไม่ทำ)

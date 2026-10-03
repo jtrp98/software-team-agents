@@ -101,6 +101,16 @@ export interface CommanderNote {
   policyNote?: string;
 }
 
+/** One Target group of a work run, driven as its own bounded run (`core/targetGroups.ts`). */
+export interface TargetRun {
+  key: string;
+  targetIds: string[];
+  taskIds: string[];
+  boundedRunId: string | null;
+  state: "pending" | "running" | "done" | "waiting" | "halted";
+  reason: string | null;
+}
+
 export interface WorkRun {
   runId: string;
   /** Pinned at creation; never changed for the life of the run. */
@@ -117,7 +127,10 @@ export interface WorkRun {
   autonomy: "edit" | "full";
   status: WorkRunStatus;
   statusReason: string | null;
+  /** The bounded run of the Target group being driven now (see `targetRuns`). */
   boundedRunId: string | null;
+  /** One entry per Target group, in dependency order. Absent on runs created before per-Target splitting. */
+  targetRuns?: TargetRun[];
   segments: Segment[];
   commander: { current: string | null; notes: CommanderNote[] };
   workers: Record<WorkerRole, string | null>;

@@ -465,7 +465,7 @@ describe("V13 TASK-014 — the single-shot lifecycle on the real adapters", () =
         }) as unknown as SpawnSync;
 
         const port = makePort(binary, spawn, root);
-        const prepared = await port.prepare(requestFor(port, { taskId: "T-EVIDE", stage: "qa-engineer" }));
+        const prepared = await port.prepare(requestFor(port, { taskId: "T-EVIDE", stage: "qa-engineer", ...(binary === "codex" ? { autonomy: "edit" as const, guards: { ...NO_GUARDS, writeAllow: ["src/**"] } } : {}) }));
         const result = await port.execute(prepared);
         expect(result.status).toBe("OK");
         expect(result.exitCode).toBe(0);

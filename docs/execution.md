@@ -64,7 +64,8 @@ Executor ได้รับ `STA_RUN_ID` และ `STA_RUN_STORE` ใน enviro
 - ลูกขอสิทธิ์เกิน parent (write, autonomy หรือ path) หรือ delegate ในขณะที่ parent ห้าม
 - run เกิน `maxDepth`, `maxChildren` หรือ `maxTotalRuns` ระบบนับหลัง create แบบ exclusive
   sibling ที่แข่งกันจึงถูกปฏิเสธ ไม่ใช่หลุดผ่านทั้งคู่
-- run ที่เขียนไฟล์บน runtime ที่ไม่มี `PRE_TOOL_GUARD`
+- run ที่เขียนไฟล์บน runtime ที่ไม่มี `PRE_TOOL_GUARD` หรือ post-run write path ที่อนุญาตไว้ชัดเจน
+  (Codex ต้องมี `POST_RUN_WRITE_GUARD` และ executor lifecycle; การตรวจหลังรันไม่ป้องกันหรือย้อนการเขียน)
 - floor ที่ทุก run มีเสมอ:
   - ห้าม git ที่เปลี่ยน state
   - ห้ามเขียน `.git/**`, `.workflow/**`, `knowledge/_roles/**` และ framework payload
@@ -98,6 +99,8 @@ sta execute --runtime claude-code --role backend-engineer --workspace <knowledge
 - ตัว workspace จะอ่านได้อย่างเดียว เว้นแต่ใส่ `--write-path` เพิ่มเอง STA ตั้ง `STA_KNOWLEDGE_ROOT` เป็น workspace engineer จึงเขียน
   `_docs/`, `knowledge/` ฯลฯ ไม่ได้ เหมือน stage ที่ orchestrator คุม
 - Claude Code ได้ `--add-dir=<target>` และ prompt บอก path ของแต่ละ Target แบบ absolute
+- Codex รับ Target paths ใน prompt และตรวจไฟล์ที่เปลี่ยนตาม role/stack ของแต่ละ Target หลังรัน;
+  Knowledge workspace ต้องไม่เปลี่ยน, snapshot ที่ไม่มีและ write ผิด scope ทำให้ attempt ล้มเหลว
 - stack rules อ่าน `stacks/<profile>/stack.yaml` จาก workspace (Target ไม่มี `stacks/`) และอ่าน `type` ของ Target จาก
   `targets.yaml` ของ workspace เดียวกัน Target แบบ `frontend`/`backend` ให้ engineer ของ type นั้นเขียนได้ทั้ง Target
   (หัก deny) ส่วน `fullstack` ใช้ layout ของ profile บวก `path_overrides` และตัด `**` จาก source root `.` ทิ้ง

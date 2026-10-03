@@ -12,7 +12,7 @@ import { isExecutorPort } from "./executorPort.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
 import { applyCoreRuntimeHealth, coreOverlayOrderFor } from "./coreRouteOverlay.js";
 import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
-import { isUnattendedTargetWriteCertified, RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
+import { isUnattendedTargetWriteAllowed, targetWriteGuardCapability, RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
 import {
   loadModelTierPolicy,
   type ModelTierId,
@@ -162,6 +162,7 @@ export function requiredCapabilitiesFor(
   stage: AgentStage,
   hasTargetWrite = false,
   businessInput?: BusinessInputEvidence,
+  runtimeId?: string,
 ): RuntimeCapability[] {
   const required: RuntimeCapability[] = [];
   const confirmedBaRun =
@@ -171,7 +172,7 @@ export function requiredCapabilitiesFor(
   if (stage === AgentStage.BUSINESS_ANALYST && !confirmedBaRun) {
     required.push(RuntimeCapability.INTERACTIVE_PROMPTS);
   }
-  if (hasTargetWrite) required.push(RuntimeCapability.PRE_TOOL_GUARD);
+  if (hasTargetWrite) required.push(targetWriteGuardCapability(runtimeId ?? ""));
   return required;
 }
 
@@ -376,11 +377,6 @@ export function resolveRuntimeRoute(input: ResolveRuntimeRouteOptions): RuntimeR
 
   const attempts: RuntimeRouteAttempt[] = [];
   const supportOptIns = new Set(config?.routing?.allow_below_supported ?? []);
-  const required = requiredCapabilitiesFor(
-    opts.stage,
-    opts.hasTargetWrite ?? false,
-    opts.businessInput,
-  );
   // With nowhere to walk to, a probe-unavailable candidate stays selected so the
   // executor still classifies it `UNAVAILABLE` and escalates with the probe's
   // own reason. Skipping it here would downgrade that to a plain route error.
@@ -406,7 +402,7 @@ export function resolveRuntimeRoute(input: ResolveRuntimeRouteOptions): RuntimeR
       : undefined;
     if (unavailable) diagnostics.push(unavailable);
     const level = supportLevel(runtime.id);
-    const targetWriteUncertified = (opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteCertified(runtime.id);
+    const targetWriteUncertified = (opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteAllowed(runtime.id);
     if (targetWriteUncertified) {
       diagnostics.push(
         `runtime "${runtime.id}" is not certified for unattended Target writes at support level "${level}"; ` +
@@ -414,7 +410,8 @@ export function resolveRuntimeRoute(input: ResolveRuntimeRouteOptions): RuntimeR
       );
     }
     const declaredOrVerified = opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities;
-    const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
+    const candidateRequired = requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite, opts.businessInput, runtime.id);
+    const unmet = candidateRequired.filter((capability) => !declaredOrVerified.has(capability));
     const evidence = opts.verifiedCapabilities?.[runtime.id] ? "verified" : "declared";
     if (unmet.length > 0) {
       diagnostics.push(`runtime "${runtime.id}" lacks ${evidence} capabilities required by this stage: ${unmet.join(", ")}`);
@@ -498,17 +495,17 @@ export function resolveRuntimeRoute(input: ResolveRuntimeRouteOptions): RuntimeR
       }`;
     } else if (probe?.available === false) {
       error = `runtime "${head.runtimeId}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`;
-    } else if ((opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteCertified(head.runtimeId)) {
+    } else if ((opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteAllowed(head.runtimeId)) {
       error =
         `runtime "${head.runtimeId}" is not certified for unattended Target writes at support level "${level}"; ` +
         `routing.allow_below_supported applies only to analysis/proposal routes`;
     } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(head.runtimeId)) {
       error = `refusing to auto-route to runtime "${head.runtimeId}" at support level "${level}" without per-runtime opt-in`;
-    } else if (required.length > 0 && required.some((capability) => !(runtime ? (opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities) : new Set<RuntimeCapability>()).has(capability))) {
+    } else if (requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite, opts.businessInput, head.runtimeId).some((capability) => !(runtime ? (opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities) : new Set<RuntimeCapability>()).has(capability))) {
       const declaredOrVerified = runtime
         ? (opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities)
         : new Set<RuntimeCapability>();
-      const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
+      const unmet = requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite, opts.businessInput, head.runtimeId).filter((capability) => !declaredOrVerified.has(capability));
       // Two capabilities land here today and are worded differently on purpose,
       // mirroring runtimeExecutor.ts's Target-write gate: a missing PRE_TOOL_GUARD
       // is a guard gap (unsafe to run at all), a missing INTERACTIVE_PROMPTS is not

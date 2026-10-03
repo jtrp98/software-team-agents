@@ -1,4 +1,4 @@
-import { isUnattendedTargetWriteCertified } from "../runtime/runtimeSupport.js";
+import { isUnattendedTargetWriteAllowed } from "../runtime/runtimeSupport.js";
 import type { RuntimeProbe } from "../runtime/runtimeAdapter.js";
 import type { MachineConfig, PoolRuntimeId, RouteRole } from "./machineConfig.js";
 import type { RuntimeHealthView } from "./runtimeHealth.js";
@@ -25,13 +25,13 @@ export interface SecurityEligibility {
 /**
  * What a role needs from a runtime's security boundary, from the declared
  * support record — the same fact the dispatch gate enforces later: the
- * engineer writes a Target unattended, so it needs that certification. A
- * runtime lacking it is skipped, never run with less protection. Analysis,
+ * engineer needs an admitted Target-write path. Codex uses post-run scope
+ * verification; other runtimes still require pre-tool certification. Analysis,
  * review and QA roles need no certification (owner decision 2026-10-03
  * retired the OS approval-isolation requirement along with the Codex sandbox).
  */
 export function securityEligibility(runtimeId: string, role: RouteRole): SecurityEligibility {
-  if (role === "engineer" && !isUnattendedTargetWriteCertified(runtimeId)) {
+  if (role === "engineer" && !isUnattendedTargetWriteAllowed(runtimeId)) {
     return { eligible: false, reason: `SECURITY: runtime "${runtimeId}" is not certified for unattended Target writes; skipped for engineer` };
   }
   return { eligible: true };

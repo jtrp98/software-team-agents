@@ -96,6 +96,24 @@ afterEach(() => {
 });
 
 describe("T-V8-019 — guarded one-writer RunLedger checkpoint boundary", () => {
+  it("opens a Codex attempt with verified post-run evidence, without fabricating a pre-tool guard", async () => {
+    const f = seed();
+    const a = attempt(f, "BE-1", {
+      observed: { runtime: "codex", model: "opus", effort: "high" },
+      capability_evidence: [{ capability: "post-run-write-guard", verified: true, detail: null }],
+      guard_evidence: { target_write: true, pre_tool_guard: false, writable_roots: [f.target] },
+    });
+    const session = await GuardedRunSession.open({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, firstAttempt: a });
+    session.close();
+    expect(f.ledger.readAttempt(a.attempt_id)?.guard_evidence.pre_tool_guard).toBe(false);
+  });
+
+  it("refuses a Codex attempt without verified post-run evidence even if pre-tool guard is claimed", async () => {
+    const f = seed();
+    const a = attempt(f, "BE-1", { observed: { runtime: "codex", model: "opus", effort: "high" } });
+    await expect(GuardedRunSession.open({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, firstAttempt: a })).rejects.toThrow(/no verified post-run write guard/);
+    expect(git(f.target, "branch", "--show-current")).toBe("main");
+  });
   it("never opens Git mutation for an analysis/proposal attempt", async () => {
     const f = seed({ tasks: [{ id: "SA-1", owner: AgentStage.SYSTEM_ANALYST }] });
     const a = attempt(f, "SA-1", { guard_evidence: { target_write: false, pre_tool_guard: false, writable_roots: [] } });
