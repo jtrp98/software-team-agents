@@ -209,14 +209,16 @@ export class WorkRunService {
     return this.deps.store.update(runId, (r) => { r.pauseRequested = true; r.status = "PAUSING"; r.statusReason = "pause requested"; });
   }
 
-  resume(runId: string): WorkRun {
+  resume(runId: string, options: { by?: string; note?: string } = {}): WorkRun {
     const run = this.require(runId);
     if (!(["PAUSED", "PAUSED_RUNTIME_EXHAUSTED", "WAITING_FOR_HUMAN", "STOPPED"] as WorkRunStatus[]).includes(run.status)) {
       throw new WorkRunError(`cannot resume a run in status ${run.status}`, 409);
     }
     for (const id of boundedRunIds(run)) this.deps.tasks.unpause(run.knowledge.path, id);
     const now = this.clock();
-    this.deps.store.appendEvent(runId, "resume", "resume requested");
+    const by = options.by ? ` by ${options.by}` : "";
+    const note = options.note ? `: ${options.note}` : "";
+    this.deps.store.appendEvent(runId, "resume", `resume requested${by}${note}`, { by: options.by ?? null, note: options.note ?? null });
     return this.deps.store.update(runId, (r) => {
       // A Target group that stopped for a person runs again (its own frozen bounded run resumes).
       for (const group of r.targetRuns ?? []) if (group.state === "waiting" || group.state === "halted") { group.state = "running"; group.reason = null; }
@@ -225,7 +227,7 @@ export class WorkRunService {
       r.autoResumeAt = null;
       for (const gate of r.humanGates) if (gate.resolvedAt === null && gate.kind !== "review") gate.resolvedAt = now;
       r.status = "QUEUED";
-      r.statusReason = "resumed";
+      r.statusReason = options.note ? `resumed: ${options.note}` : "resumed";
     });
   }
 
@@ -247,18 +249,25 @@ export class WorkRunService {
     return this.setStatus(runId, "STOPPED", options.force ? "force-stopped by a person" : "stopped by a person", { stopRequested: false, autoResumeAt: null });
   }
 
-  /** A person's review approval. Records it — and does nothing else: no push, no merge, no deploy. */
+  /** A person's approval — either review approval when READY_FOR_REVIEW, or human-gate approval when WAITING_FOR_HUMAN. */
   approve(runId: string, by: string, note?: string): WorkRun {
     const run = this.require(runId);
-    if (run.status !== "READY_FOR_REVIEW") throw new WorkRunError(`only a run that is ready for review can be approved (status ${run.status})`, 409);
-    const now = this.clock();
-    this.deps.store.appendEvent(runId, "approve", `approved by ${by}`, { by, note: note ?? null });
-    return this.deps.store.update(runId, (r) => {
-      for (const gate of r.humanGates) if (gate.kind === "review" && gate.resolvedAt === null) gate.resolvedAt = now;
-      r.status = "APPROVED";
-      r.statusReason = `approved by ${by}${note ? `: ${note}` : ""} — push/merge/deploy remain a person's own action`;
-      r.completedAt = now;
-    });
+    if (run.status === "READY_FOR_REVIEW") {
+      const now = this.clock();
+      this.deps.store.appendEvent(runId, "approve", `approved by ${by}`, { by, note: note ?? null });
+      return this.deps.store.update(runId, (r) => {
+        for (const gate of r.humanGates) if (gate.kind === "review" && gate.resolvedAt === null) gate.resolvedAt = now;
+        r.status = "APPROVED";
+        r.statusReason = `approved by ${by}${note ? `: ${note}` : ""} — push/merge/deploy remain a person's own action`;
+        r.completedAt = now;
+      });
+    }
+    if (run.status === "WAITING_FOR_HUMAN") {
+      const now = this.clock();
+      this.deps.store.appendEvent(runId, "gate_approved", `gate approved by ${by}${note ? `: ${note}` : ""}`, { by, note: note ?? null });
+      return this.resume(runId, { by, note });
+    }
+    throw new WorkRunError(`cannot approve a run in status ${run.status}`, 409);
   }
 
   /** A person sends the work back; it waits until they amend the plan/requirements and resume. */

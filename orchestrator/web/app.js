@@ -24,6 +24,12 @@ const I18N = {
     "run.tasks": "งาน", "run.verification": "ผลตรวจ", "run.changed": "ไฟล์ที่เปลี่ยน", "run.history": "ประวัติ Runtime",
     "run.fallbacks": "Fallback timeline", "run.gates": "Human gates", "run.handoffs": "Structured handoff", "run.events": "เหตุการณ์", "run.log": "Log ของ segment",
     "run.pause": "พัก", "run.resume": "ทำต่อ", "run.stop": "หยุด", "run.forceStop": "หยุดทันที", "run.review": "ไปหน้าตรวจงาน",
+    "run.approve": "อนุมัติ", "run.chat.title": "STA Agent ต้องการคำตอบหรือการตัดสินใจ", "run.chat.badge": "รอคนตัดสินใจ",
+    "run.chat.prompt": "Agent กำลังรองานและต้องการให้คุณตัดสินใจหรือตอบคำถามในประเด็นนี้:",
+    "run.chat.placeholder": "พิมพ์คำตอบ หมายเหตุ หรือคำสั่งเพิ่มเติม... (เช่น 'อนุมัติผ่านได้', 'ดำเนินการต่อ')",
+    "run.chat.namePlaceholder": "ชื่อผู้ตอบ", "run.chat.sendResume": "ตอบ & ทำต่อ", "run.chat.approve": "อนุมัติ",
+    "run.chat.sent": "ส่งคำตอบแล้ว", "run.chat.waitingHint": "STA Agent รอการตัดสินใจจากคุณ — คลิกเพื่อเปิดดูและตอบ",
+    "run.chat.quickApprove": "ยืนยันอนุมัติ", "run.chat.quickProceed": "ดำเนินการต่อ",
     "run.commanderNotes": "บันทึกของ Commander", "run.reviewPassed": "Review ผ่าน", "run.qaPassed": "QA ผ่าน", "run.securityPassed": "Security ผ่าน", "run.done": "เสร็จ",
     "review.title": "ตรวจงาน", "review.status": "สถานะ", "review.tasksCompleted": "งานที่เสร็จ", "review.build": "Build / deterministic gate",
     "review.reviewFindings": "Review", "review.qaFindings": "QA", "review.viewDiff": "ดู Diff", "review.approve": "อนุมัติ", "review.sendBack": "ส่งกลับ",
@@ -60,6 +66,12 @@ const I18N = {
     "run.tasks": "Tasks", "run.verification": "Verification", "run.changed": "Changed files", "run.history": "Runtime history",
     "run.fallbacks": "Fallback timeline", "run.gates": "Human gates", "run.handoffs": "Structured handoffs", "run.events": "Events", "run.log": "Segment log",
     "run.pause": "Pause", "run.resume": "Resume", "run.stop": "Stop", "run.forceStop": "Force stop", "run.review": "Open review",
+    "run.approve": "Approve", "run.chat.title": "STA Agent needs your decision", "run.chat.badge": "Waiting for Human",
+    "run.chat.prompt": "The agent is paused and needs your decision or answer on this issue:",
+    "run.chat.placeholder": "Type your answer, note, or extra instructions... (e.g. 'Approved', 'Proceed')",
+    "run.chat.namePlaceholder": "Your name", "run.chat.sendResume": "Reply & Resume", "run.chat.approve": "Approve",
+    "run.chat.sent": "Response sent", "run.chat.waitingHint": "STA Agent is waiting for your decision — click to view and reply",
+    "run.chat.quickApprove": "Approve and proceed", "run.chat.quickProceed": "Proceed with current plan",
     "run.commanderNotes": "Commander notes", "run.reviewPassed": "Review passed", "run.qaPassed": "QA passed", "run.securityPassed": "Security passed", "run.done": "Done",
     "review.title": "Review", "review.status": "Status", "review.tasksCompleted": "Tasks completed", "review.build": "Build / deterministic gate",
     "review.reviewFindings": "Review", "review.qaFindings": "QA", "review.viewDiff": "View Diff", "review.approve": "Approve", "review.sendBack": "Send Back",
@@ -248,9 +260,11 @@ async function pageWork() {
 }
 
 function runCard(run) {
-  return h("div", { class: "card clickable", onclick: () => { location.hash = `#/runs/${run.runId}`; } },
+  const isWaiting = run.status === "WAITING_FOR_HUMAN";
+  return h("div", { class: `card clickable ${isWaiting ? "waiting-card" : ""}`, onclick: () => { location.hash = `#/runs/${run.runId}`; } },
     h("div", { class: "row space" }, h("strong", {}, `${run.knowledge} / ${run.module}`), statusPill(run.status)),
     h("div", { class: "muted small" }, `${run.runId} · ${fmtDate(run.createdAt)}`),
+    isWaiting ? h("div", { class: "banner warn small", style: "font-weight: 600;" }, `💬 ${tr("run.chat.waitingHint")}`) : null,
     run.statusReason ? h("div", { class: "small" }, run.statusReason) : null,
     h("div", { class: "small muted" },
       `${tr("run.commander")}: ${rtName(run.commander)} · ${tr("run.engineer")}: ${rtName(run.workers.engineer)} · ${tr("run.reviewer")}: ${rtName(run.workers.reviewer)} · ${tr("run.qa")}: ${rtName(run.workers.qa)}`,
@@ -298,6 +312,105 @@ function historyItems(run) {
   }));
 }
 
+function renderChatCard(run, gates, render) {
+  const gateItems = gates.length > 0 ? gates : [{ id: "waiting", kind: "decision", at: Date.now(), reason: run.statusReason || tr("runs.waiting") }];
+  
+  const reviewerInput = h("input", {
+    type: "text",
+    class: "chat-name-input",
+    placeholder: tr("run.chat.namePlaceholder"),
+    value: recalled("sta-reviewer") || "",
+  });
+  reviewerInput.addEventListener("input", () => {
+    try { localStorage.setItem("sta-reviewer", reviewerInput.value.trim()); } catch { /* ignore */ }
+  });
+
+  const textarea = h("textarea", {
+    class: "chat-textarea",
+    placeholder: tr("run.chat.placeholder"),
+  });
+
+  const getReviewer = () => reviewerInput.value.trim() || recalled("sta-reviewer") || "human";
+
+  const btnApprove = h("button", {
+    type: "button",
+    class: "primary btn-approve",
+    onclick: async () => {
+      const by = getReviewer();
+      try { localStorage.setItem("sta-reviewer", by); } catch { /* ignore */ }
+      const note = textarea.value.trim() || "Approved via Web UI";
+      const done = await act(() => api("POST", `runs/${run.runId}/approve`, { by, note }), tr("review.approved"));
+      if (done) render();
+    },
+  }, `✓ ${tr("run.chat.approve")}`);
+
+  const btnResume = h("button", {
+    type: "button",
+    class: "primary",
+    onclick: async () => {
+      const by = getReviewer();
+      try { localStorage.setItem("sta-reviewer", by); } catch { /* ignore */ }
+      const note = textarea.value.trim() || undefined;
+      const done = await act(() => api("POST", `runs/${run.runId}/resume`, { by, note }), tr("run.chat.sent"));
+      if (done) render();
+    },
+  }, `▶ ${tr("run.chat.sendResume")}`);
+
+  textarea.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      btnResume.click();
+    }
+  });
+
+  const quickChip = (text) => h("button", {
+    type: "button",
+    class: "link small",
+    style: "border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; background: var(--surface); text-decoration: none;",
+    onclick: () => { textarea.value = text; textarea.focus(); },
+  }, `+ ${text}`);
+
+  const chips = [
+    quickChip(tr("run.chat.quickApprove")),
+    quickChip(tr("run.chat.quickProceed")),
+  ];
+
+  return h("div", { class: "chat-card" },
+    h("div", { class: "chat-card-header" },
+      h("div", { class: "chat-avatar" }, "🤖"),
+      h("div", { class: "chat-header-info" },
+        h("div", { class: "chat-title" }, tr("run.chat.title")),
+        h("div", { class: "muted small" }, tr("run.chat.prompt")),
+      ),
+      h("span", { class: "pill warn", style: "margin-left: auto;" }, tr("run.chat.badge")),
+    ),
+    h("div", { class: "chat-conversation" },
+      gateItems.map((g) => h("div", { class: "chat-msg-row" },
+        h("div", { class: "chat-bubble agent" },
+          h("div", { class: "chat-msg-meta" },
+            pill(g.kind || "gate", "warn"),
+            g.at ? h("time", { class: "small muted" }, fmtTime(g.at)) : null,
+          ),
+          h("div", { class: "chat-msg-text" }, g.reason),
+        ),
+      )),
+    ),
+    h("div", { class: "chat-reply-box" },
+      h("div", { class: "chat-input-row" },
+        h("label", { class: "small muted", style: "margin: 0; white-space: nowrap;" }, `${tr("review.name")}:`),
+        reviewerInput,
+        h("div", { class: "row", style: "gap: 6px; margin-left: auto;" }, ...chips),
+      ),
+      textarea,
+      h("div", { class: "chat-actions" },
+        h("span", { class: "small muted", style: "margin-right: auto;" }, "Ctrl+Enter = " + tr("run.chat.sendResume")),
+        btnResume,
+        btnApprove,
+      ),
+    ),
+  );
+}
+
 async function pageRun(runId) {
   let segmentShown = null;
   const logPre = h("pre", { class: "log" }, "");
@@ -307,19 +420,25 @@ async function pageRun(runId) {
     const snap = run.snapshot || {};
     const tasks = snap.tasks || [];
     const v = snap.verification || {};
+    const gates = run.humanGates.filter((g) => g.resolvedAt === null);
+    const isWaiting = run.status === "WAITING_FOR_HUMAN" || gates.length > 0;
+    const reviewerName = () => recalled("sta-reviewer") || "human";
+
     const controls = h("div", { class: "row" },
       ["RUNNING", "QUEUED"].includes(run.status) ? h("button", { onclick: () => act(() => api("POST", `runs/${runId}/pause`), tr("run.pause")).then(render) }, tr("run.pause")) : null,
-      ["PAUSED", "PAUSED_RUNTIME_EXHAUSTED", "WAITING_FOR_HUMAN", "STOPPED"].includes(run.status) ? h("button", { class: "primary", onclick: () => act(() => api("POST", `runs/${runId}/resume`), tr("run.resume")).then(render) }, tr("run.resume")) : null,
+      isWaiting ? h("button", { class: "primary btn-approve", onclick: () => act(() => api("POST", `runs/${runId}/approve`, { by: reviewerName(), note: "Approved via Web UI" }), tr("review.approved")).then(render) }, `✓ ${tr("run.approve")}`) : null,
+      ["PAUSED", "PAUSED_RUNTIME_EXHAUSTED", "WAITING_FOR_HUMAN", "STOPPED"].includes(run.status) ? h("button", { class: isWaiting ? "" : "primary", onclick: () => act(() => api("POST", `runs/${runId}/resume`), tr("run.resume")).then(render) }, tr("run.resume")) : null,
       !["STOPPED", "APPROVED", "FAILED"].includes(run.status) ? h("button", { class: "danger", onclick: () => act(() => api("POST", `runs/${runId}/stop`, {}), tr("run.stop")).then(render) }, tr("run.stop")) : null,
       ["RUNNING", "STOPPING", "PAUSING"].includes(run.status) ? h("button", { class: "danger", onclick: () => { if (confirm(tr("run.forceStop") + "?")) act(() => api("POST", `runs/${runId}/stop`, { force: true })).then(render); } }, tr("run.forceStop")) : null,
       ["READY_FOR_REVIEW", "APPROVED"].includes(run.status) ? h("a", { href: `#/review/${runId}` }, h("button", { class: "primary" }, tr("run.review"))) : null,
     );
-    const gates = run.humanGates.filter((g) => g.resolvedAt === null);
+    const chatCard = isWaiting ? renderChatCard(run, gates, render) : null;
     mount(
       h("div", { class: "row space" }, h("h1", {}, `${run.knowledge.name} / ${run.module}`), statusPill(run.status)),
       run.statusReason ? h("div", { class: `banner ${STATUS_TONE[run.status] || ""}` }, run.statusReason) : null,
       h("p", { class: "muted small" }, `${run.runId} · ${fmtDate(run.createdAt)} · ${run.intentSource}`),
       controls,
+      chatCard,
       h("div", { class: "grid grid-2" },
         h("div", { class: "card" }, h("dl", { class: "kv" },
           h("dt", {}, tr("run.knowledge")), h("dd", {}, `${run.knowledge.name} — `, h("code", {}, run.knowledge.path)),
@@ -420,7 +539,7 @@ async function pageReview(runId) {
           const diff = await act(() => api("GET", `runs/${runId}/diff`));
           if (diff) diffBox.replaceChildren(diff.note ? h("p", { class: "muted" }, diff.note) : renderDiff(diff.diff || "(empty)"), diff.truncated ? h("p", { class: "muted small" }, "…truncated") : null);
         } }, tr("review.viewDiff")),
-        run.status === "READY_FOR_REVIEW" ? h("button", { class: "primary", onclick: async () => {
+        ["READY_FOR_REVIEW", "WAITING_FOR_HUMAN"].includes(run.status) ? h("button", { class: "primary btn-approve", onclick: async () => {
           if (!reviewer()) { toast(tr("review.name"), true); return; }
           const done = await act(() => api("POST", `runs/${runId}/approve`, { by: reviewer(), note: noteInput.value || undefined }), tr("review.approved"));
           if (done) pageReview(runId);

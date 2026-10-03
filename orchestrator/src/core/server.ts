@@ -268,14 +268,17 @@ export function createCoreServer(options: ServerOptions): http.Server {
       case "POST runs/:id/pause":
         return core.runs.pause(id!);
       case "POST runs/:id/resume": {
-        const run = core.runs.resume(id!);
+        const run = core.runs.resume(id!, { by: str(body, "by", false), note: str(body, "note", false) });
         setImmediate(() => void core.runs.tick());
         return run;
       }
       case "POST runs/:id/stop":
         return core.runs.stop(id!, { force: body.force === true });
-      case "POST runs/:id/approve":
-        return core.runs.approve(id!, str(body, "by")!, str(body, "note", false));
+      case "POST runs/:id/approve": {
+        const run = core.runs.approve(id!, str(body, "by", false) ?? "human", str(body, "note", false));
+        setImmediate(() => void core.runs.tick());
+        return run;
+      }
       case "POST runs/:id/send-back":
         return core.runs.sendBack(id!, str(body, "by")!, str(body, "note")!);
       case "POST runs/:id/refresh": {
